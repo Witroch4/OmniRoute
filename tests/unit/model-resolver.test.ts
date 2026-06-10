@@ -4,16 +4,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+const previousDataDir = process.env.DATA_DIR;
+const modelResolverDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-resolver-"));
+process.env.DATA_DIR = modelResolverDataDir;
+
 const model = await import("../../open-sse/services/model.ts");
 
 function withEnv(name: string, value: string | undefined, fn: () => Promise<void>) {
   return async () => {
+    const { invalidateDbCache } = await import("../../src/lib/db/readCache.ts");
     const previous = process.env[name];
     if (value === undefined) {
       delete process.env[name];
     } else {
       process.env[name] = value;
     }
+    invalidateDbCache("settings");
     try {
       await fn();
     } finally {
@@ -22,9 +28,23 @@ function withEnv(name: string, value: string | undefined, fn: () => Promise<void
       } else {
         process.env[name] = previous;
       }
+      invalidateDbCache("settings");
     }
   };
 }
+
+test.after(async () => {
+  const core = await import("../../src/lib/db/core.ts");
+  const { invalidateDbCache } = await import("../../src/lib/db/readCache.ts");
+  core.resetDbInstance();
+  invalidateDbCache();
+  fs.rmSync(modelResolverDataDir, { recursive: true, force: true });
+  if (previousDataDir === undefined) {
+    delete process.env.DATA_DIR;
+  } else {
+    process.env.DATA_DIR = previousDataDir;
+  }
+});
 
 test("resolveProviderAlias returns null for null/undefined", () => {
   assert.equal(model.resolveProviderAlias(null), null);
@@ -165,17 +185,12 @@ test(
 );
 
 test("getModelInfoCore routes unprefixed Claude models to Claude Code from settings toggle", async () => {
-  const previousDataDir = process.env.DATA_DIR;
   const previousEnvFlag =
     process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-settings-"));
-  process.env.DATA_DIR = dataDir;
   delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
 
   try {
-    const core = await import("../../src/lib/db/core.ts");
     const { updateSettings } = await import("../../src/lib/db/settings.ts");
-    core.resetDbInstance();
     await updateSettings({ preferClaudeCodeForUnprefixedClaudeModels: true });
 
     const result = await model.getModelInfoCore("claude-fable-5", {});
@@ -184,15 +199,14 @@ test("getModelInfoCore routes unprefixed Claude models to Claude Code from setti
       model: "claude-fable-5",
       extendedContext: false,
     });
+
+    const extendedResult = await model.getModelInfoCore("claude-fable-5[1m]", {});
+    assert.deepEqual(extendedResult, {
+      provider: "claude",
+      model: "claude-fable-5",
+      extendedContext: true,
+    });
   } finally {
-    const core = await import("../../src/lib/db/core.ts");
-    core.resetDbInstance();
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    if (previousDataDir === undefined) {
-      delete process.env.DATA_DIR;
-    } else {
-      process.env.DATA_DIR = previousDataDir;
-    }
     if (previousEnvFlag === undefined) {
       delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
     } else {
@@ -202,30 +216,17 @@ test("getModelInfoCore routes unprefixed Claude models to Claude Code from setti
 });
 
 test("getModelInfoCore lets settings toggle disable Claude Code preference", async () => {
-  const previousDataDir = process.env.DATA_DIR;
   const previousEnvFlag =
     process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-settings-"));
-  process.env.DATA_DIR = dataDir;
   process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS = "true";
 
   try {
-    const core = await import("../../src/lib/db/core.ts");
     const { updateSettings } = await import("../../src/lib/db/settings.ts");
-    core.resetDbInstance();
     await updateSettings({ preferClaudeCodeForUnprefixedClaudeModels: false });
 
     const result = await model.getModelInfoCore("claude-fable-5", {});
     assert.equal(result.provider, "anthropic");
   } finally {
-    const core = await import("../../src/lib/db/core.ts");
-    core.resetDbInstance();
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    if (previousDataDir === undefined) {
-      delete process.env.DATA_DIR;
-    } else {
-      process.env.DATA_DIR = previousDataDir;
-    }
     if (previousEnvFlag === undefined) {
       delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
     } else {
