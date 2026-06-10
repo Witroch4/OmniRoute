@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const model = await import("../../open-sse/services/model.ts");
 
@@ -160,3 +163,73 @@ test(
     });
   })
 );
+
+test("getModelInfoCore routes unprefixed Claude models to Claude Code from settings toggle", async () => {
+  const previousDataDir = process.env.DATA_DIR;
+  const previousEnvFlag =
+    process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-settings-"));
+  process.env.DATA_DIR = dataDir;
+  delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+
+  try {
+    const core = await import("../../src/lib/db/core.ts");
+    const { updateSettings } = await import("../../src/lib/db/settings.ts");
+    core.resetDbInstance();
+    await updateSettings({ preferClaudeCodeForUnprefixedClaudeModels: true });
+
+    const result = await model.getModelInfoCore("claude-fable-5", {});
+    assert.deepEqual(result, {
+      provider: "claude",
+      model: "claude-fable-5",
+      extendedContext: false,
+    });
+  } finally {
+    const core = await import("../../src/lib/db/core.ts");
+    core.resetDbInstance();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    if (previousDataDir === undefined) {
+      delete process.env.DATA_DIR;
+    } else {
+      process.env.DATA_DIR = previousDataDir;
+    }
+    if (previousEnvFlag === undefined) {
+      delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+    } else {
+      process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS = previousEnvFlag;
+    }
+  }
+});
+
+test("getModelInfoCore lets settings toggle disable Claude Code preference", async () => {
+  const previousDataDir = process.env.DATA_DIR;
+  const previousEnvFlag =
+    process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-model-settings-"));
+  process.env.DATA_DIR = dataDir;
+  process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS = "true";
+
+  try {
+    const core = await import("../../src/lib/db/core.ts");
+    const { updateSettings } = await import("../../src/lib/db/settings.ts");
+    core.resetDbInstance();
+    await updateSettings({ preferClaudeCodeForUnprefixedClaudeModels: false });
+
+    const result = await model.getModelInfoCore("claude-fable-5", {});
+    assert.equal(result.provider, "anthropic");
+  } finally {
+    const core = await import("../../src/lib/db/core.ts");
+    core.resetDbInstance();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    if (previousDataDir === undefined) {
+      delete process.env.DATA_DIR;
+    } else {
+      process.env.DATA_DIR = previousDataDir;
+    }
+    if (previousEnvFlag === undefined) {
+      delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+    } else {
+      process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS = previousEnvFlag;
+    }
+  }
+});

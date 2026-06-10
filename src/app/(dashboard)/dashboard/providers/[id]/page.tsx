@@ -1505,6 +1505,15 @@ export default function ProviderDetailPage() {
   const [codexSettingsLoaded, setCodexSettingsLoaded] = useState(false);
   const [codexSettingsLoadError, setCodexSettingsLoadError] = useState<string | null>(null);
   const [savingCodexGlobalServiceMode, setSavingCodexGlobalServiceMode] = useState(false);
+  const [
+    preferClaudeCodeForUnprefixedClaudeModels,
+    setPreferClaudeCodeForUnprefixedClaudeModels,
+  ] = useState(false);
+  const [claudeRoutingSettingsLoaded, setClaudeRoutingSettingsLoaded] = useState(false);
+  const [claudeRoutingSettingsLoadError, setClaudeRoutingSettingsLoadError] = useState<
+    string | null
+  >(null);
+  const [savingClaudeRoutingPreference, setSavingClaudeRoutingPreference] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [batchUpdating, setBatchUpdating] = useState<"activate" | "deactivate" | null>(null);
@@ -1913,6 +1922,41 @@ export default function ProviderDetailPage() {
   useEffect(() => {
     void loadCodexSettings();
   }, [loadCodexSettings]);
+
+  const loadClaudeRoutingSettings = useCallback(async () => {
+    if (providerId !== "claude") {
+      setClaudeRoutingSettingsLoaded(false);
+      setClaudeRoutingSettingsLoadError(null);
+      return;
+    }
+
+    setClaudeRoutingSettingsLoaded(false);
+    setClaudeRoutingSettingsLoadError(null);
+
+    try {
+      const response = await fetch("/api/settings", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Settings request failed with HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      if (!data || typeof data !== "object") {
+        throw new Error("Settings response was empty");
+      }
+      setPreferClaudeCodeForUnprefixedClaudeModels(
+        data.preferClaudeCodeForUnprefixedClaudeModels === true
+      );
+      setClaudeRoutingSettingsLoaded(true);
+    } catch (error) {
+      setClaudeRoutingSettingsLoaded(false);
+      setClaudeRoutingSettingsLoadError(
+        error instanceof Error ? error.message : "Failed to load settings"
+      );
+    }
+  }, [providerId]);
+
+  useEffect(() => {
+    void loadClaudeRoutingSettings();
+  }, [loadClaudeRoutingSettings]);
 
   const loadConnProxies = useCallback(async (conns: { id?: string }[]) => {
     if (!conns.length) return;
@@ -3002,6 +3046,48 @@ export default function ProviderDetailPage() {
       notify.error("Failed to update Codex service mode");
     } finally {
       setSavingCodexGlobalServiceMode(false);
+    }
+  };
+
+  const handleToggleClaudeRoutingPreference = async (enabled: boolean) => {
+    if (savingClaudeRoutingPreference || !claudeRoutingSettingsLoaded) return;
+    setSavingClaudeRoutingPreference(true);
+    const previous = preferClaudeCodeForUnprefixedClaudeModels;
+    setPreferClaudeCodeForUnprefixedClaudeModels(enabled);
+
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          preferClaudeCodeForUnprefixedClaudeModels: enabled,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPreferClaudeCodeForUnprefixedClaudeModels(previous);
+        notify.error(data.error || "Failed to update Claude Code routing preference");
+        return;
+      }
+
+      const data = await res.json().catch(() => null);
+      if (data && typeof data === "object") {
+        setPreferClaudeCodeForUnprefixedClaudeModels(
+          data.preferClaudeCodeForUnprefixedClaudeModels === true
+        );
+      }
+      notify.success(
+        enabled
+          ? "Unprefixed Claude models now prefer Claude Code"
+          : "Unprefixed Claude models no longer prefer Claude Code"
+      );
+    } catch (error) {
+      setPreferClaudeCodeForUnprefixedClaudeModels(previous);
+      console.error("Error updating Claude Code routing preference:", error);
+      notify.error("Failed to update Claude Code routing preference");
+    } finally {
+      setSavingClaudeRoutingPreference(false);
     }
   };
 
@@ -4434,6 +4520,66 @@ export default function ProviderDetailPage() {
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold">{t("connections")}</h2>
+              {providerId === "claude" && (
+                <div
+                  className="inline-flex items-center gap-2 rounded-lg border border-orange-500/20 bg-orange-500/5 px-2 py-1 text-xs font-medium text-text-muted"
+                  title={providerText(
+                    t,
+                    "preferClaudeCodeForUnprefixedClaudeModelsTooltip",
+                    "Route bare claude-* model IDs from Claude Code clients through the Claude Code account instead of asking for a provider prefix."
+                  )}
+                >
+                  <span className="material-symbols-outlined text-[14px] text-orange-500">
+                    alt_route
+                  </span>
+                  <span>
+                    {providerText(
+                      t,
+                      "preferClaudeCodeForUnprefixedClaudeModelsLabel",
+                      "Claude Code default"
+                    )}
+                  </span>
+                  <Toggle
+                    size="sm"
+                    checked={preferClaudeCodeForUnprefixedClaudeModels}
+                    onChange={handleToggleClaudeRoutingPreference}
+                    disabled={savingClaudeRoutingPreference || !claudeRoutingSettingsLoaded}
+                    ariaLabel={providerText(
+                      t,
+                      "preferClaudeCodeForUnprefixedClaudeModelsAria",
+                      "Prefer Claude Code for unprefixed Claude models"
+                    )}
+                    title={
+                      preferClaudeCodeForUnprefixedClaudeModels
+                        ? providerText(
+                            t,
+                            "preferClaudeCodeForUnprefixedClaudeModelsDisable",
+                            "Disable Claude Code preference for bare claude-* model IDs"
+                          )
+                        : providerText(
+                            t,
+                            "preferClaudeCodeForUnprefixedClaudeModelsEnable",
+                            "Enable Claude Code preference for bare claude-* model IDs"
+                          )
+                    }
+                  />
+                  <span className="text-[11px] text-text-muted/70">
+                    {preferClaudeCodeForUnprefixedClaudeModels
+                      ? providerText(t, "toggleOnShort", "On")
+                      : providerText(t, "toggleOffShort", "Off")}
+                  </span>
+                  {claudeRoutingSettingsLoadError ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadClaudeRoutingSettings()}
+                      className="rounded border border-orange-500/30 px-2 py-0.5 text-[11px] font-medium text-orange-600 hover:bg-orange-500/10 dark:text-orange-300"
+                      title={claudeRoutingSettingsLoadError}
+                    >
+                      {providerText(t, "retry", "Retry")}
+                    </button>
+                  ) : null}
+                </div>
+              )}
               {providerId === "codex" && (
                 <div
                   className="inline-flex items-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-xs font-medium text-text-muted"

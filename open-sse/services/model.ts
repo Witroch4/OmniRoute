@@ -272,14 +272,26 @@ function isTruthyEnv(value: string | undefined) {
   return typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim());
 }
 
+async function getPreferClaudeCodeForUnprefixedClaudeModels() {
+  try {
+    const { getCachedSettings } = await import("@/lib/localDb");
+    const settings = (await getCachedSettings()) as Record<string, unknown>;
+    if (typeof settings.preferClaudeCodeForUnprefixedClaudeModels === "boolean") {
+      return settings.preferClaudeCodeForUnprefixedClaudeModels;
+    }
+  } catch {
+    // Standalone open-sse usage may not have the app DB layer available.
+  }
+
+  return isTruthyEnv(process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS);
+}
+
 function shouldPreferClaudeCodeForUnprefixedClaudeModel(
   modelId: string,
-  activeProviders: Set<string> | null
+  activeProviders: Set<string> | null,
+  preferClaudeCode: boolean
 ) {
-  if (
-    !isTruthyEnv(process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS) ||
-    !/^claude-/i.test(modelId)
-  ) {
+  if (!preferClaudeCode || !/^claude-/i.test(modelId)) {
     return false;
   }
 
@@ -466,7 +478,10 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     };
   }
 
-  const activeProviders = await getActiveProviderSet();
+  const [activeProviders, preferClaudeCodeForUnprefixedClaudeModels] = await Promise.all([
+    getActiveProviderSet(),
+    getPreferClaudeCodeForUnprefixedClaudeModels(),
+  ]);
 
   // Preserve historical behavior: OpenAI stays default when model exists there.
   // Connection availability must not make unprefixed OpenAI models resolve to a
@@ -505,7 +520,11 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
 
   if (
     candidatesToUse.includes("claude") &&
-    shouldPreferClaudeCodeForUnprefixedClaudeModel(modelId, activeProviders)
+    shouldPreferClaudeCodeForUnprefixedClaudeModel(
+      modelId,
+      activeProviders,
+      preferClaudeCodeForUnprefixedClaudeModels
+    )
   ) {
     return {
       provider: "claude",
@@ -539,7 +558,13 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
   // FIX #73: Models like claude-haiku-4-5-20251001 sent without provider prefix
   // would incorrectly route to OpenAI. Use heuristic prefix detection first.
   if (/^claude-/i.test(modelId)) {
-    if (shouldPreferClaudeCodeForUnprefixedClaudeModel(modelId, activeProviders)) {
+    if (
+      shouldPreferClaudeCodeForUnprefixedClaudeModel(
+        modelId,
+        activeProviders,
+        preferClaudeCodeForUnprefixedClaudeModels
+      )
+    ) {
       return { provider: "claude", model: modelId, extendedContext };
     }
     // Claude models → Anthropic provider (canonical source for Claude models)
