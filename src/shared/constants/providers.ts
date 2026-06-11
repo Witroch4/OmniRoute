@@ -106,9 +106,28 @@ export const NOAUTH_PROVIDERS = {
     freeNote: "Free video generation — VEO 3.1, Seedance. 6 requests/hour.",
     authHint: "No auth required. Rate limited to 6 requests/hour per IP.",
   },
+  mimocode: {
+    id: "mimocode",
+    alias: "mcode",
+    name: "MiMoCode (Free)",
+    icon: "devices",
+    color: "#FF6B35",
+    textIcon: "MC",
+    website: "https://mimo.mi.com",
+    noAuth: true,
+    hasFree: true,
+    serviceKinds: ["llm"],
+    freeNote:
+      "Free — Xiaomi MiMo models via bootstrap JWT auth. No API key required. Supports streaming.",
+    authHint:
+      "No API key required. The executor auto-generates JWT tokens via device fingerprint bootstrap.",
+    notice: {
+      text: "MiMoCode uses Xiaomi's public free AI endpoint with bootstrap-based JWT authentication. No signup needed. Rate limits apply.",
+    },
+  },
 };
 
-export const FREE_APIKEY_PROVIDER_IDS = new Set(["qoder"]);
+export const FREE_APIKEY_PROVIDER_IDS = new Set(["qoder", "mimocode", "opencode"]);
 
 export function supportsApiKeyOnFreeProvider(providerId: unknown): boolean {
   return typeof providerId === "string" && FREE_APIKEY_PROVIDER_IDS.has(providerId);
@@ -1434,8 +1453,10 @@ export const APIKEY_PROVIDERS = {
     color: "#059669",
     textIcon: "PA",
     website: "https://publicai.co",
-    hasFree: true,
-    freeNote: "Free community inference tier for testing",
+    // #3558: PublicAI requires an API key (registry authType:"apikey"); signup grants a
+    // one-time credit, then it bills per-model. It is NOT a keyless/free tier.
+    hasFree: false,
+    freeNote: "Requires an API key — one-time signup credit, then paid",
   },
   moonshot: {
     id: "moonshot",
@@ -2851,6 +2872,8 @@ export function providerAllowsOptionalApiKey(providerId: unknown): boolean {
     providerId === "huggingchat" ||
     providerId === "gitlawb" ||
     providerId === "gitlawb-gmi" ||
+    providerId === "mimocode" ||
+    providerId === "opencode" ||
     isLocalProvider(providerId) ||
     isSelfHostedChatProvider(providerId) ||
     isOpenAICompatibleProvider(providerId) ||
