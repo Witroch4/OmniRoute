@@ -384,7 +384,6 @@ export async function executeChatWithBreaker({
           isCombo,
           comboStepId,
           comboExecutionKey,
-          disableEmergencyFallback: isCombo,
           cachedSettings,
           skipUpstreamRetry,
           trafficType: normalizedTrafficType,
@@ -587,7 +586,12 @@ export async function safeResolveProxy(connectionId: string, apiKeyId?: string) 
   try {
     return await resolveProxyForConnection(connectionId, apiKeyId);
   } catch (proxyErr: any) {
-    log.debug("PROXY", `Failed to resolve proxy: ${proxyErr.message}`);
+    // Falling back to a DIRECT connection silently defeats proxy-based traffic
+    // isolation — keep the request alive, but make the bypass visible.
+    log.warn(
+      "PROXY",
+      `Proxy resolution failed for connection ${String(connectionId).slice(0, 8)} — falling back to DIRECT connection: ${proxyErr.message}`
+    );
     return null;
   }
 }

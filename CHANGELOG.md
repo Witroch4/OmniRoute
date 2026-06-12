@@ -29,6 +29,17 @@
 ## [3.8.22] — TBD
 ## [3.8.23] — TBD
 
+### 🐛 Bug Fixes
+
+- **Emergency budget fallback no longer leaks the failing provider's API key to the emergency provider** (combo/resilience audit): the executor-level emergency hop in `chatCore` re-sent the FAILING provider's credentials to the emergency provider's endpoint (e.g. the OpenAI key in the `Authorization` header of a request to `integrate.api.nvidia.com`) on every quota/billing error of a non-stream request — a cross-provider credential leak that also never succeeded upstream (the foreign key is always rejected). The hop is now orchestrated exclusively by the routing layer (`src/sse/handlers/chat.ts`), which resolves credentials FOR the emergency provider via account selection, and it no longer fires inside combo targets (the combo is the operator's fallback policy; the global fallback #689 still runs after it). Restores the five `#1731` fast-skip integration tests that had been `test.skip`-ed since v3.8.2, plus a new credential-leak guard test.
+- **`/v1/messages/count_tokens` now honors the connection's proxy assignment**: the provider-side token count was issued with no proxy context at all — every count call went DIRECT to the provider regardless of configured account/provider/global proxies, leaking the host IP for proxy-isolated setups. The route now resolves the connection proxy (`safeResolveProxy`) and wraps the executor call in `runWithProxyContext`, exactly like chat execution. Validated by a new integration test that also pins per-target proxy independence inside combos.
+- **Proxy resolution failures are no longer silent**: `safeResolveProxy` downgraded any resolution error (DB error, corrupt registry row) to a `debug` log and fell back to a DIRECT connection — invisible proxy bypass for traffic-isolation setups. Now logged at `warn` with the connection id.
+
+### ✅ Tests
+
+- **Combo strategy fallback coverage** (`tests/unit/combo-strategy-fallbacks.test.ts`, 11 tests): fill-first / p2c / random / cost-optimized / strict-random fallback paths (previously happy-path only), price-tie stability, stale strict-random deck degradation, unknown-strategy normalization to priority, and circuit-breaker HALF_OPEN recovery inside the combo loop + `preScreenTargets` (lazy-recovery contract).
+- **`#1731` fast-skip suite restored** (`tests/integration/combo-provider-exhaustion.test.ts`): the five skipped tests were rewritten against the current routing policy (quota-exhausted 429 marks the provider for the request; transient 429 retries other connections; connection errors skip per-connection; nothing persists across requests) and re-enabled — 8/8 green.
+- **Proxy context passthrough** (`tests/integration/proxy-context-passthrough.test.ts`): combo targets each execute under their own connection's proxy; `count_tokens` runs inside the connection's proxy context.
 ### 🐛 Fixed
 
 - chore(quality-gate): reconcile check-file-size baseline — freeze 27 inherited/this-round grown files at current LOC + register providerLimits.ts (greens the file-size gate; shrink tracked via #3501)

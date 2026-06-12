@@ -203,11 +203,6 @@ import {
   getDegradedModel,
   getBackgroundDegradationConfig,
 } from "../services/backgroundTaskDetector.ts";
-import {
-  shouldUseFallback,
-  isFallbackDecision,
-  EMERGENCY_FALLBACK_CONFIG,
-} from "../services/emergencyFallback.ts";
 import type { CompressionConfig } from "../services/compression/types.ts";
 import { prepareWebSearchFallbackBody } from "../services/webSearchFallback.ts";
 import {
@@ -1552,7 +1547,6 @@ export async function handleChatCore({
   isCombo = false,
   comboStepId = null,
   comboExecutionKey = null,
-  disableEmergencyFallback = false,
   cachedSettings = null,
   skipUpstreamRetry = false,
   createPiiTransform = null,
@@ -4773,85 +4767,20 @@ export async function handleChatCore({
       });
       persistFailureUsage(statusCode, `upstream_${statusCode}`);
 
-      const requestHasTools =
-        Array.isArray(translatedBody.tools) && translatedBody.tools.length > 0;
-      let emergencyFallbackServed = false;
-
-      if (!disableEmergencyFallback && !stream) {
-        const fbDecision = shouldUseFallback(
-          statusCode,
-          message,
-          requestHasTools,
-          EMERGENCY_FALLBACK_CONFIG
-        );
-        if (isFallbackDecision(fbDecision)) {
-          log?.info?.("EMERGENCY_FALLBACK", fbDecision.reason);
-          try {
-            const originalProvider = provider;
-            const fbExecutor = getExecutor(fbDecision.provider);
-            const fbResult = await fbExecutor.execute({
-              model: fbDecision.model,
-              body: {
-                ...translatedBody,
-                model: fbDecision.model,
-                max_tokens: Math.min(
-                  typeof translatedBody.max_tokens === "number"
-                    ? translatedBody.max_tokens
-                    : fbDecision.maxOutputTokens,
-                  fbDecision.maxOutputTokens
-                ),
-                max_completion_tokens: Math.min(
-                  typeof translatedBody.max_completion_tokens === "number"
-                    ? translatedBody.max_completion_tokens
-                    : typeof translatedBody.max_tokens === "number"
-                      ? translatedBody.max_tokens
-                      : fbDecision.maxOutputTokens,
-                  fbDecision.maxOutputTokens
-                ),
-              },
-              stream: false,
-              credentials: credentials,
-              signal: streamController.signal,
-              log,
-              extendedContext,
-            });
-            if (fbResult.response.ok) {
-              provider = fbDecision.provider;
-              model = fbDecision.model;
-              translatedBody.model = fbDecision.model;
-              providerResponse = fbResult.response;
-              providerUrl = fbResult.url;
-              providerHeaders = new Headers(fbResult.headers || {});
-              finalBody = fbResult.transformedBody;
-              reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
-              log?.info?.(
-                "EMERGENCY_FALLBACK",
-                `Serving ${fbDecision.provider}/${fbDecision.model} as budget fallback for ${originalProvider}/${requestedModel}`
-              );
-              emergencyFallbackServed = true;
-            } else {
-              log?.warn?.(
-                "EMERGENCY_FALLBACK",
-                `Emergency fallback also failed (${fbResult.response.status})`
-              );
-            }
-          } catch (fbErr) {
-            const errMessage = fbErr instanceof Error ? fbErr.message : String(fbErr);
-            log?.warn?.("EMERGENCY_FALLBACK", `Emergency fallback error: ${errMessage}`);
-          }
-        }
-      }
-
-      if (!emergencyFallbackServed) {
-        return createErrorResult(
-          statusCode,
-          errMsg,
-          retryAfterMs,
-          upstreamErrorCode,
-          upstreamErrorType,
-          upstreamErrorBody
-        );
-      }
+      // Emergency budget fallback is orchestrated exclusively by the routing layer
+      // (src/sse/handlers/chat.ts), which resolves credentials FOR the emergency
+      // provider through account selection. The executor-level hop that used to
+      // live here re-sent the FAILING provider's credentials to the emergency
+      // provider's endpoint (e.g. the OpenAI API key to integrate.api.nvidia.com)
+      // — a cross-provider credential leak that also never succeeded upstream.
+      return createErrorResult(
+        statusCode,
+        errMsg,
+        retryAfterMs,
+        upstreamErrorCode,
+        upstreamErrorType,
+        upstreamErrorBody
+      );
     }
     // ── End T5 ───────────────────────────────────────────────────────────────
   }
