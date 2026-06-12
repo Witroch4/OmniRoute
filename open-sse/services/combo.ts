@@ -8,8 +8,12 @@
 import {
   checkFallbackError,
   classifyErrorText,
+  classifyLockoutReason,
+  decayModelFailureCount,
   formatRetryAfter,
   getRuntimeProviderProfile,
+  isModelLocked,
+  recordModelLockoutFailure,
   recordProviderFailure,
   isProviderFailureCode,
   isProviderExhaustedReason,
@@ -44,6 +48,7 @@ import {
   getLastSessionModel,
   getHandoff,
 } from "../../src/lib/db/contextHandoffs.ts";
+import { resolveModelLockoutSettings } from "../../src/lib/resilience/modelLockoutSettings";
 import { fetchCodexQuota } from "./codexQuotaFetcher.ts";
 import { getQuotaFetcher } from "./quotaPreflight.ts";
 import * as semaphore from "./rateLimitSemaphore.ts";
@@ -3593,6 +3598,7 @@ export async function handleComboChat({
       ): Promise<{ ok: boolean; response?: Response } | null> => {
         const target = orderedTargets[i];
         const modelStr = target.modelStr;
+        const rawModel = parseModel(modelStr).model || modelStr;
         const provider = target.provider;
 
         const cb = getCircuitBreaker(provider);
@@ -3645,6 +3651,13 @@ export async function handleComboChat({
             "COMBO",
             `Skipping ${modelStr} — provider ${provider} marked exhausted this request (#1731)`
           );
+          if (i > 0) fallbackCount++;
+          return null;
+        }
+
+        // Pre-check: skip models locked by the resilience system (model-level lockout)
+        if (provider && rawModel && isModelLocked(provider, target.connectionId || "", rawModel)) {
+          log.info("COMBO", `Skipping ${modelStr} — model locked by resilience (cooldown active)`);
           if (i > 0) fallbackCount++;
           return null;
         }
@@ -3852,6 +3865,25 @@ export async function handleComboChat({
               lastError = `Upstream response failed quality validation: ${quality.reason}`;
               if (!lastStatus) lastStatus = 502;
               if (i > 0) fallbackCount++;
+              if (provider && rawModel) {
+                const mlSettings = resolveModelLockoutSettings(settings);
+                if (mlSettings.enabled && mlSettings.errorCodes.includes(502)) {
+                  recordModelLockoutFailure(
+                    provider,
+                    target.connectionId || "",
+                    rawModel,
+                    "quality_failure",
+                    502,
+                    mlSettings.baseCooldownMs,
+                    profile,
+                    {
+                      exactCooldownMs: mlSettings.useExponentialBackoff
+                        ? 0
+                        : mlSettings.baseCooldownMs,
+                    }
+                  );
+                }
+              }
               emit("combo.target.failed", {
                 comboName: combo.name,
                 targetIndex: i,
@@ -3862,6 +3894,25 @@ export async function handleComboChat({
               });
               return null;
             }
+
+            // Success decay: a healthy response walks the model's lockout failure
+            // count back down (and eventually clears an expired lockout entirely).
+            if (provider && rawModel) {
+              const dcResult = decayModelFailureCount(
+                provider,
+                target.connectionId || "",
+                rawModel
+              );
+              if (dcResult.cleared) {
+                log.info("COMBO", `Model ${modelStr} fully recovered — lockout cleared`);
+              } else if (dcResult.newFailureCount > 0) {
+                log.debug(
+                  "COMBO",
+                  `Model ${modelStr} decayed to failureCount=${dcResult.newFailureCount}`
+                );
+              }
+            }
+
             const latencyMs = Date.now() - startTime;
             emit("combo.target.succeeded", {
               comboName: combo.name,
@@ -4235,7 +4286,36 @@ export async function handleComboChat({
             !isTokenLimitBreach &&
             [408, 429, 500, 502, 503, 504].includes(result.status);
           if (retry < maxRetries && isTransient && !providerExhausted) {
-            continue; // Retry same model
+            // Record model lockout immediately on the first transient failure —
+            // once the model is cooling down, retrying it would waste an upstream
+            // call and extend the cooldown via exponential backoff.
+            let lockoutRecorded = false;
+            if (provider && rawModel && retry === 0) {
+              const mlSettings = resolveModelLockoutSettings(settings);
+              if (mlSettings.enabled && mlSettings.errorCodes.includes(result.status)) {
+                recordModelLockoutFailure(
+                  provider,
+                  target.connectionId || "",
+                  rawModel,
+                  classifyLockoutReason(result.status),
+                  result.status,
+                  mlSettings.baseCooldownMs,
+                  profile,
+                  {
+                    exactCooldownMs: mlSettings.useExponentialBackoff
+                      ? 0
+                      : mlSettings.baseCooldownMs,
+                  }
+                );
+                lockoutRecorded = true;
+              }
+            }
+            if (lockoutRecorded) {
+              log.info("COMBO", `Skipping retry for ${modelStr} — model lockout active`);
+              if (i > 0) fallbackCount++;
+              return null;
+            }
+            continue; // Retry same model (transient error, no lockout recorded)
           }
 
           // Done retrying this model
@@ -4250,6 +4330,25 @@ export async function handleComboChat({
           lastError = errorText || String(result.status);
           if (!lastStatus) lastStatus = result.status;
           if (i > 0) fallbackCount++;
+          // Wire combo failures into the resilience dashboard (model-level lockout)
+          // alongside the provider-level cooldown below — they govern different scopes.
+          if (provider && rawModel) {
+            const mlSettings = resolveModelLockoutSettings(settings);
+            if (mlSettings.enabled && mlSettings.errorCodes.includes(result.status)) {
+              recordModelLockoutFailure(
+                provider,
+                target.connectionId || "",
+                rawModel,
+                classifyLockoutReason(result.status),
+                result.status,
+                mlSettings.baseCooldownMs,
+                profile,
+                {
+                  exactCooldownMs: mlSettings.useExponentialBackoff ? 0 : mlSettings.baseCooldownMs,
+                }
+              );
+            }
+          }
           log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
 
           if (resilienceSettings.providerCooldown.enabled && provider && provider !== "unknown") {
