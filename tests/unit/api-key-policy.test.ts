@@ -495,10 +495,10 @@ test("enforceApiKeyPolicy returns Anthropic error envelope for /v1/messages mode
     "claude-fable-5"
   );
 
-  assert.equal(denied.rejection.status, 403);
+  assert.equal(denied.rejection.status, 400);
   const body = await denied.rejection.json();
   assert.equal(body.type, "error");
-  assert.equal(body.error.type, "permission_error");
+  assert.equal(body.error.type, "invalid_request_error");
   assert.match(body.error.message, /claude-fable-5/);
   assert.equal(
     body.error.message,
