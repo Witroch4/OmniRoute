@@ -500,8 +500,11 @@ test("enforceApiKeyPolicy returns Anthropic error envelope for /v1/messages mode
   assert.equal(body.type, "error");
   assert.equal(body.error.type, "permission_error");
   assert.match(body.error.message, /claude-fable-5/);
-  assert.match(body.error.message, /not enabled by this OmniRoute policy/);
-  assert.doesNotMatch(body.error.message, /login|authenticate|api key|credential/i);
+  assert.equal(
+    body.error.message,
+    'Model "claude-fable-5" is not enabled or quota is insufficient. Choose another allowed model.'
+  );
+  assert.doesNotMatch(body.error.message, /login|authenticate|api key|credential|omniroute/i);
   assert.equal(body.error.code, undefined);
 });
 

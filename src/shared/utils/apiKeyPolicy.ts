@@ -543,7 +543,7 @@ export async function enforceApiKeyPolicy(
           request,
           HTTP_STATUS.FORBIDDEN,
           `Model "${modelStr}" is not allowed for this API key`,
-          `Model "${modelStr}" is not enabled by this OmniRoute policy. Choose another allowed model or adjust model permissions.`
+          `Model "${modelStr}" is not enabled or quota is insufficient. Choose another allowed model.`
         ),
       };
     }
