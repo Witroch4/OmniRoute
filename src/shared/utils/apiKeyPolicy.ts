@@ -198,7 +198,8 @@ function policyErrorResponse(
   statusCode: number,
   message: string,
   anthropicMessage = message,
-  anthropicErrorType = "permission_error"
+  anthropicErrorType = "permission_error",
+  anthropicStatusCode = statusCode
 ): Response {
   if (!isAnthropicMessagesRequest(request)) {
     return errorResponse(statusCode, message);
@@ -214,7 +215,7 @@ function policyErrorResponse(
       },
     }),
     {
-      status: statusCode,
+      status: anthropicStatusCode,
       headers: { "Content-Type": "application/json" },
     }
   );
@@ -543,7 +544,9 @@ export async function enforceApiKeyPolicy(
           request,
           HTTP_STATUS.FORBIDDEN,
           `Model "${modelStr}" is not allowed for this API key`,
-          `Model "${modelStr}" is not enabled or quota is insufficient. Choose another allowed model.`
+          `Model "${modelStr}" is not enabled or quota is insufficient. Choose another allowed model.`,
+          "invalid_request_error",
+          HTTP_STATUS.BAD_REQUEST
         ),
       };
     }
