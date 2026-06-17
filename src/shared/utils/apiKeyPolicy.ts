@@ -91,6 +91,7 @@ export interface ApiKeyMetadata {
   rateLimits?: RateLimitRule[] | null;
   allowedEndpoints?: string[];
   disableNonPublicModels?: boolean;
+  allowUsageCommand?: boolean;
 }
 
 /**

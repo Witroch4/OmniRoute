@@ -262,6 +262,7 @@ export const importAgyAuthBulkSchema = z.object({
 export const createKeySchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
   noLog: z.boolean().optional(),
+  allowUsageCommand: z.boolean().optional(),
   scopes: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
 });
 
@@ -1687,6 +1688,7 @@ export const updateKeyPermissionsSchema = z
     allowedEndpoints: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
     streamDefaultMode: z.enum(["legacy", "json"]).optional(),
     disableNonPublicModels: z.boolean().optional(),
+    allowUsageCommand: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -1706,7 +1708,9 @@ export const updateKeyPermissionsSchema = z
       value.rateLimits === undefined &&
       value.scopes === undefined &&
       value.allowedEndpoints === undefined &&
-      value.streamDefaultMode === undefined
+      value.streamDefaultMode === undefined &&
+      value.allowUsageCommand === undefined &&
+      value.disableNonPublicModels === undefined
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

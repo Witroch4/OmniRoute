@@ -128,6 +128,7 @@ interface ApiKey {
   allowedEndpoints?: string[];
   streamDefaultMode?: StreamDefaultMode;
   disableNonPublicModels?: boolean;
+  allowUsageCommand?: boolean;
   allowedQuotas?: string[] | null;
   createdAt: string;
 }
@@ -221,6 +222,7 @@ export default function ApiManagerPageClient() {
   const [newKeyManageEnabled, setNewKeyManageEnabled] = useState(false);
   const [newKeySelfUsageEnabled, setNewKeySelfUsageEnabled] = useState(true);
   const [newKeyAccountQuotaEnabled, setNewKeyAccountQuotaEnabled] = useState(false);
+  const [newKeyAllowUsageCommand, setNewKeyAllowUsageCommand] = useState(false);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
@@ -542,6 +544,7 @@ export default function ApiManagerPageClient() {
             selfUsageEnabled: newKeySelfUsageEnabled,
             selfAccountQuotaEnabled: newKeyAccountQuotaEnabled,
           }),
+          allowUsageCommand: newKeyAllowUsageCommand,
         }),
       });
       const data = await res.json();
@@ -553,6 +556,7 @@ export default function ApiManagerPageClient() {
         setNewKeyManageEnabled(false);
         setNewKeySelfUsageEnabled(true);
         setNewKeyAccountQuotaEnabled(false);
+        setNewKeyAllowUsageCommand(false);
         setShowAddModal(false);
       } else {
         setCreateError(data.error || t("failedCreateKey"));
@@ -659,6 +663,7 @@ export default function ApiManagerPageClient() {
     allowedEndpoints: string[],
     streamDefaultMode: StreamDefaultMode,
     disableNonPublicModels: boolean,
+    allowUsageCommand: boolean,
     blockedModels: string[]
   ) => {
     if (!editingKey || !editingKey.id) return;
@@ -726,6 +731,7 @@ export default function ApiManagerPageClient() {
           allowedEndpoints,
           streamDefaultMode,
           disableNonPublicModels,
+          allowUsageCommand,
         }),
       });
 
@@ -968,6 +974,7 @@ export default function ApiManagerPageClient() {
               const hasThrottle = throttleDelayMs > 0;
               const hasManageScope = Array.isArray(key.scopes) && key.scopes.includes("manage");
               const hasJsonStreamDefault = key.streamDefaultMode === "json";
+              const hasLocalUsageCommand = key.allowUsageCommand === true;
               const maxSessions = typeof key.maxSessions === "number" ? key.maxSessions : 0;
               const hasSessionLimit = maxSessions > 0;
               const activeSessions = sessionCounts[key.id] || 0;
@@ -1091,6 +1098,12 @@ export default function ApiManagerPageClient() {
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[11px] font-medium">
                           <span className="material-symbols-outlined text-[12px]">data_object</span>
                           {t("streamDefaultBadge")}
+                        </span>
+                      )}
+                      {hasLocalUsageCommand && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-500/10 text-slate-600 dark:text-slate-300 text-[11px] font-medium">
+                          <span className="material-symbols-outlined text-[12px]">terminal</span>
+                          {t("localUsageCommandBadge")}
                         </span>
                       )}
                       {hasSessionLimit && (
@@ -1298,6 +1311,7 @@ export default function ApiManagerPageClient() {
           setNewKeyManageEnabled(false);
           setNewKeySelfUsageEnabled(true);
           setNewKeyAccountQuotaEnabled(false);
+          setNewKeyAllowUsageCommand(false);
           setNameError(null);
           setCreateError(null);
         }}
@@ -1392,6 +1406,26 @@ export default function ApiManagerPageClient() {
                 {newKeyAccountQuotaEnabled ? tc("enabled") : tc("disabled")}
               </button>
             </div>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <p className="text-sm text-text-main">{t("localUsageCommand")}</p>
+                <p className="text-xs text-text-muted">{t("localUsageCommandDesc")}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={newKeyAllowUsageCommand}
+                onClick={() => setNewKeyAllowUsageCommand((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors shrink-0 ${
+                  newKeyAllowUsageCommand
+                    ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
+                    : "bg-black/5 dark:bg-white/5 text-text-muted border border-border"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">terminal</span>
+                {newKeyAllowUsageCommand ? tc("enabled") : tc("disabled")}
+              </button>
+            </div>
           </div>
           {createError && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30">
@@ -1407,6 +1441,7 @@ export default function ApiManagerPageClient() {
                 setNewKeyManageEnabled(false);
                 setNewKeySelfUsageEnabled(true);
                 setNewKeyAccountQuotaEnabled(false);
+                setNewKeyAllowUsageCommand(false);
                 setNameError(null);
                 setCreateError(null);
               }}
@@ -1523,6 +1558,7 @@ const PermissionsModal = memo(function PermissionsModal({
     allowedEndpoints: string[],
     streamDefaultMode: StreamDefaultMode,
     disableNonPublicModels: boolean,
+    allowUsageCommand: boolean,
     blockedModels: string[]
   ) => void;
 }) {
@@ -1602,6 +1638,9 @@ const PermissionsModal = memo(function PermissionsModal({
   const [allowAllEndpoints, setAllowAllEndpoints] = useState(initialEndpoints.length === 0);
   const [disableNonPublicModels, setDisableNonPublicModels] = useState(
     apiKey?.disableNonPublicModels === true
+  );
+  const [usageCommandEnabled, setUsageCommandEnabled] = useState(
+    apiKey?.allowUsageCommand === true
   );
   const getModelDisplayName = useCallback(
     (modelId: string) =>
@@ -1786,6 +1825,7 @@ const PermissionsModal = memo(function PermissionsModal({
       allowAllEndpoints ? [] : selectedEndpoints,
       streamDefaultMode,
       disableNonPublicModels,
+      usageCommandEnabled,
       blockedModels
     );
   }, [
@@ -1817,6 +1857,7 @@ const PermissionsModal = memo(function PermissionsModal({
     selectedEndpoints,
     streamDefaultMode,
     disableNonPublicModels,
+    usageCommandEnabled,
     blockedClaudeCodeFamilies,
     initialBlockedModels,
     apiKey?.scopes,
@@ -2375,6 +2416,21 @@ const PermissionsModal = memo(function PermissionsModal({
             {selfAccountQuotaEnabled ? tc("enabled") : tc("disabled")}
           </button>
           <p className="text-xs text-text-muted">{t("sharedAccountQuotaVisibilityDesc")}</p>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={usageCommandEnabled}
+            onClick={() => setUsageCommandEnabled((prev) => !prev)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+              usageCommandEnabled
+                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30"
+                : "bg-black/5 dark:bg-white/5 text-text-muted border border-border"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[14px]">terminal</span>
+            {t("localUsageCommand")} - {usageCommandEnabled ? tc("enabled") : tc("disabled")}
+          </button>
+          <p className="text-xs text-text-muted">{t("localUsageCommandDesc")}</p>
         </div>
 
         {/* Disable Non-Public Models Toggle */}
