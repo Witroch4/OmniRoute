@@ -24,6 +24,7 @@
   "_rebaseline_2026_06_15_3938_perplexity_v218": "PR #3938 own growth: perplexity-web.ts 868->939 (+71 = rebuild buildPplxRequestBody to mirror the current www.perplexity.ai schematized request body — version 2.18, use_schematized_api + the full supported_block_use_cases list, dsl_query, shared requestId for frontend_uuid/client_search_results_cache_key, last_backend_uuid only on follow-ups — plus the x-perplexity-request-* / x-request-id headers replacing the stale X-App-ApiVersion pair that triggered HTTP 400). Cohesive upstream-schema sync in a single executor; not extractable.",
   "_rebaseline_2026_06_16_4021_context_editing": "PR #4021 own growth: base.ts 1222->1244 (+22 = inject delegated Context Editing at the single Claude pre-serialization chokepoint — applyContextEditingToBody() call gated to the genuine `claude` provider, the contextEditing field on ExecuteInput, its destructure, and a debug log) and chatCore.ts 5868->5875 (+7 = capture contextEditing.enabled at the canonical compression-settings read into a function-scoped flag, threaded to the two executor.execute() callsites). The reusable edit-builder + strategy constants live in the new small open-sse/config/contextEditing.ts (well under cap). Cohesive opt-in feature at the existing dispatch chokepoint; not extractable without hiding the Claude body-finalization boundary.",
   "_rebaseline_2026_06_16_4033_compression_token_saver_ui": "PR #4033 net -46 LOC overall: CompressionSettingsTab.tsx 932->974 (+42 over frozen after relocating Token Saver from Endpoint/Appearance into Compression Settings). This is a deliberate UI ownership redistribution, not aggregate code growth; keeping the control with the compression settings makes the module boundary clearer.",
+  "_rebaseline_2026_06_17_4034_usage_command": "PR #4034 own growth: apiKeys.ts 1633->1661 (+28 = the allow_usage_command additive column — fallback definition, parseAllowUsageCommand, prepared-statement SELECT column, and the metadata/create/update wiring, mirroring the existing disable_non_public_models accessor pattern) and chat.ts 1425->1432 (+7 = the handleInternalUsageCommand intercept hook at the existing post-auth chokepoint in handleChat). The reusable command logic lives in the new src/lib/usage/internalUsageCommand.ts (well under cap). Cohesive opt-in feature at the established column/dispatch boundaries; not extractable without splitting the api-keys domain module.",
   "cap": 800,
   "frozen": {
     "open-sse/config/providerRegistry.ts": 4731,
@@ -101,7 +102,7 @@
     "src/app/api/usage/analytics/route.ts": 941,
     "src/app/api/v1/models/catalog.ts": 1435,
     "src/lib/cloudflaredTunnel.ts": 934,
-    "src/lib/db/apiKeys.ts": 1633,
+    "src/lib/db/apiKeys.ts": 1661,
     "src/lib/db/core.ts": 1820,
     "src/lib/db/migrationRunner.ts": 1125,
     "src/lib/db/models.ts": 1180,
@@ -126,7 +127,7 @@
     "src/shared/constants/sidebarVisibility.ts": 1100,
     "src/shared/services/cliRuntime.ts": 1090,
     "src/shared/validation/schemas.ts": 2523,
-    "src/sse/handlers/chat.ts": 1425,
+    "src/sse/handlers/chat.ts": 1432,
     "src/sse/services/auth.ts": 2219
   },
   "_rebaseline_2026_06_09": "Re-baseline consciente pre-release v3.8.19: 9 arquivos cresceram durante o ciclo (features mergeadas: RequestLoggerV2 +281 request-logger rework, stream +101, combo +73, chatCore +45, catalog +32 fable-5/catalog-flag, callLogs +4, accountFallback +2, usageHistory novo 840) + core.ts +7 (fix resetAllDbModuleState, PR 3536). A catraca segue valendo destes valores — proximo crescimento falha. Decisao: encolher (esp. RequestLoggerV2/chatCore) e a issue #3501 ficam para o ciclo seguinte.",
