@@ -324,6 +324,60 @@ test("handleInternalUsageCommand returns enabled usage snapshot locally", async 
   assert.equal(body.content[0].text.includes("Weekly Sonnet\n30%\nResets in 1d"), true);
 });
 
+test("handleInternalUsageCommand streams Responses API events for Codex clients", async () => {
+  const response = await handleInternalUsageCommand(
+    new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sk-enabled",
+        Accept: "text/event-stream",
+      },
+    }),
+    {
+      model: "codex/gpt-5.5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "@@om-usage" }] }],
+      stream: true,
+    },
+    {
+      isValidApiKey: async () => true,
+      getApiKeyMetadata: async () => ({
+        id: "key-enabled",
+        name: "enabled",
+        allowedConnections: ["conn-claude"],
+        allowUsageCommand: true,
+      }),
+      now: () => NOW,
+      getProviderConnectionById: async () => ({
+        id: "conn-claude",
+        provider: "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "weekly (7d)": {
+            used: 72,
+            total: 100,
+            resetAt: new Date(NOW + 24 * 60 * 60_000).toISOString(),
+          },
+        },
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.ok(response, "command should be handled locally");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("Content-Type") || "", /text\/event-stream/);
+  const text = await response.text();
+  assert.match(text, /event: response\.output_text\.delta/);
+  assert.match(text, /Weekly \(7 day\)\\n72%\\nResets in 1d/);
+  assert.match(text, /event: response\.completed/);
+});
+
 test("handleInternalUsageCommand ignores normal prompts", async () => {
   const response = await handleInternalUsageCommand(
     new Request("http://localhost/v1/chat/completions", {

@@ -417,6 +417,14 @@ function isAnthropicRequest(request: Request): boolean {
   }
 }
 
+function isResponsesRequest(request: Request): boolean {
+  try {
+    return new URL(request.url).pathname.endsWith("/v1/responses");
+  } catch {
+    return false;
+  }
+}
+
 function textEncoderStream(payload: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -471,6 +479,109 @@ function createOpenAIStreamResponse(text: string, body: unknown): Response {
     ),
     { headers: { "Content-Type": "text/event-stream; charset=utf-8" } }
   );
+}
+
+function createResponsesPayload(text: string, body: unknown) {
+  const created = Math.floor(Date.now() / 1000);
+  const id = `resp_usage_${created}`;
+  const model = getResponseModel(body);
+  return {
+    id,
+    object: "response",
+    created_at: created,
+    status: "completed",
+    background: false,
+    error: null,
+    model,
+    output: [
+      {
+        id: `msg_${id}_0`,
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", annotations: [], logprobs: [], text }],
+      },
+    ],
+    output_text: text,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  };
+}
+
+function createResponsesTextResponse(text: string, body: unknown): Response {
+  return Response.json(createResponsesPayload(text, body));
+}
+
+function createResponsesStreamResponse(text: string, body: unknown): Response {
+  const response = createResponsesPayload(text, body);
+  const message = response.output[0];
+  const content = message.content[0];
+  let sequenceNumber = 0;
+  const event = (type: string, data: JsonRecord) => {
+    sequenceNumber += 1;
+    return `event: ${type}\ndata: ${JSON.stringify({ ...data, sequence_number: sequenceNumber })}\n\n`;
+  };
+  const payload = [
+    event("response.created", {
+      type: "response.created",
+      response: { ...response, status: "in_progress", output: [] },
+    }),
+    event("response.in_progress", {
+      type: "response.in_progress",
+      response: {
+        id: response.id,
+        object: response.object,
+        created_at: response.created_at,
+        status: "in_progress",
+      },
+    }),
+    event("response.output_item.added", {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { id: message.id, type: "message", content: [], role: "assistant" },
+    }),
+    event("response.content_part.added", {
+      type: "response.content_part.added",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", annotations: [], logprobs: [], text: "" },
+    }),
+    event("response.output_text.delta", {
+      type: "response.output_text.delta",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+      logprobs: [],
+    }),
+    event("response.output_text.done", {
+      type: "response.output_text.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      text,
+      logprobs: [],
+    }),
+    event("response.content_part.done", {
+      type: "response.content_part.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: content,
+    }),
+    event("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: message,
+    }),
+    event("response.completed", {
+      type: "response.completed",
+      response,
+    }),
+  ].join("");
+
+  return new Response(textEncoderStream(payload), {
+    headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+  });
 }
 
 function createAnthropicTextResponse(text: string, body: unknown): Response {
@@ -540,6 +651,11 @@ export function createLocalTextResponse(request: Request, body: unknown, text: s
     return stream
       ? createAnthropicStreamResponse(text, body)
       : createAnthropicTextResponse(text, body);
+  }
+  if (isResponsesRequest(request)) {
+    return stream
+      ? createResponsesStreamResponse(text, body)
+      : createResponsesTextResponse(text, body);
   }
   return stream ? createOpenAIStreamResponse(text, body) : createOpenAITextResponse(text, body);
 }
