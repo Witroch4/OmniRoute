@@ -24,6 +24,7 @@ export interface ProviderLimitsCacheEntry {
   message: string | null;
   fetchedAt: string;
   source?: string | null;
+  usdEstimate?: unknown;
 }
 
 const PROVIDER_LIMITS_CACHE_NAMESPACE = "providerLimitsCache";

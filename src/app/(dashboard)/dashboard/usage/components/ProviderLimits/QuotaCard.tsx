@@ -23,6 +23,7 @@ interface QuotaCardProps {
         plan?: string | null;
         message?: string | null;
         stale?: { since?: string; reason?: string } | null;
+        usdEstimate?: any | null;
       }
     | undefined;
   loading: boolean;
@@ -32,6 +33,7 @@ interface QuotaCardProps {
   providerLabel: string;
   onRefresh: () => void;
   onOpenCutoff: () => void;
+  onOpenUsdEstimate: () => void;
   onToggleActive: (nextActive: boolean) => void;
   togglingActive: boolean;
 }
@@ -46,6 +48,7 @@ export default function QuotaCard({
   providerLabel,
   onRefresh,
   onOpenCutoff,
+  onOpenUsdEstimate,
   onToggleActive,
   togglingActive,
 }: QuotaCardProps) {
@@ -69,6 +72,9 @@ export default function QuotaCard({
   const hasStaleData = !!quota?.stale;
   const displayRefreshedAt = quota?.stale?.since || refreshedAt;
   const canEditCutoff = quotas.some((q: any) => q && typeof q.name === "string" && !q.isCredits);
+  const canEstimateUsd = Array.isArray(quota?.usdEstimate?.windows)
+    ? quota.usdEstimate.windows.length > 0
+    : false;
 
   return (
     <Card
@@ -96,8 +102,10 @@ export default function QuotaCard({
         hasStaleData={hasStaleData}
         onRefresh={onRefresh}
         onOpenCutoff={onOpenCutoff}
+        onOpenUsdEstimate={onOpenUsdEstimate}
         canEditCutoff={canEditCutoff}
         hasCutoffOverrides={hasOverrides}
+        canEstimateUsd={canEstimateUsd}
       />
     </Card>
   );

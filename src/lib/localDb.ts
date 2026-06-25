@@ -10,6 +10,7 @@ export {
   // Provider Connections
   getProviderConnections,
   getProviderConnectionById,
+  getProviderConnectionRefsByIds,
   createProviderConnection,
   updateProviderConnection,
   deleteProviderConnection,

@@ -1,6 +1,7 @@
 import {
   getAllProviderLimitsCache,
   getProviderConnectionById,
+  getProviderConnectionRefsByIds,
   getProviderConnections,
   getProviderLimitsCache,
   getSettings,
@@ -33,6 +34,7 @@ import {
 } from "@omniroute/open-sse/config/antigravityModelAliases.ts";
 import { isUserCallableAgyModelId } from "@omniroute/open-sse/config/agyModels.ts";
 import { onUsageRecorded } from "./usageEvents";
+import { buildProviderQuotaUsdEstimate } from "./providerQuotaUsdEstimator";
 
 type JsonRecord = Record<string, unknown>;
 type SyncSource = "manual" | "scheduled";
@@ -607,38 +609,32 @@ export async function getSanitizedCachedProviderLimitsMap(): Promise<
   Record<string, ProviderLimitsCacheEntry>
 > {
   const caches = getAllProviderLimitsCache();
-  // Sanitization only rewrites Antigravity/agy quota keys; every other provider's cache
-  // entry is returned untouched (see sanitizeProviderLimitsCacheForConnection). The
-  // dashboard polls this on an auto-refresh interval, so avoid the unconditional
-  // `SELECT * FROM provider_connections` + per-row credential decryption that the
-  // previous implementation paid on every poll: skip the scan entirely when nothing is
-  // cached, and otherwise fetch ONLY the Antigravity/agy connections. For any other
-  // provider, byId.get(id) is undefined and the entry is returned verbatim — identical
-  // output to scanning every active connection, but without decrypting unrelated keys.
-  // (LEDGER-2 / #3821-review)
   const connectionIds = Object.keys(caches);
   if (connectionIds.length === 0) return {};
 
-  const sanitizableConnections = [
-    ...((await getProviderConnections({
-      isActive: true,
-      provider: "antigravity",
-    })) as unknown as ProviderConnectionLike[]),
-    ...((await getProviderConnections({
-      isActive: true,
-      provider: "agy",
-    })) as unknown as ProviderConnectionLike[]),
-  ];
-  if (sanitizableConnections.length === 0) {
-    // No connection can change the cache → return the raw entries unchanged.
-    return { ...caches };
-  }
+  // The dashboard also shows local USD capacity estimates per provider quota window.
+  // That calculation only needs provider+id, so use a lightweight lookup and keep
+  // cache entries unmodified on disk.
+  const connectionRefs = getProviderConnectionRefsByIds(connectionIds);
+  const byId = new Map(connectionRefs.map((conn) => [conn.id, conn]));
+  const sanitizedEntries = await Promise.all(
+    Object.entries(caches).map(async ([connectionId, entry]) => {
+      const connection = byId.get(connectionId);
+      const sanitized = sanitizeProviderLimitsCacheForConnection(connection, entry) || entry;
+      if (!connection?.id || !connection.provider || !sanitized.quotas) {
+        return [connectionId, sanitized] as const;
+      }
 
-  const byId = new Map(sanitizableConnections.map((conn) => [conn.id, conn]));
+      const usdEstimate = await buildProviderQuotaUsdEstimate(
+        { id: connection.id, provider: connection.provider },
+        sanitized
+      );
+      return [connectionId, { ...sanitized, usdEstimate }] as const;
+    })
+  );
   const sanitized: Record<string, ProviderLimitsCacheEntry> = {};
-  for (const [connectionId, entry] of Object.entries(caches)) {
-    sanitized[connectionId] =
-      sanitizeProviderLimitsCacheForConnection(byId.get(connectionId), entry) || entry;
+  for (const [connectionId, entry] of sanitizedEntries) {
+    sanitized[connectionId] = entry;
   }
   return sanitized;
 }

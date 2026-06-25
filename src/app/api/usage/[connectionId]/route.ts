@@ -1,4 +1,5 @@
 import { fetchAndPersistProviderLimits } from "@/lib/usage/providerLimits";
+import { buildProviderQuotaUsdEstimate } from "@/lib/usage/providerQuotaUsdEstimator";
 
 /**
  * GET /api/usage/[connectionId] - Get live usage data for a specific connection
@@ -17,10 +18,18 @@ export async function GET(
 ) {
   try {
     const { connectionId } = await params;
-    const { usage } = await fetchAndPersistProviderLimits(connectionId, "manual", {
-      allowRotatingRefresh: true,
-    });
-    return Response.json(usage);
+    const { connection, usage, cache } = await fetchAndPersistProviderLimits(
+      connectionId,
+      "manual",
+      {
+        allowRotatingRefresh: true,
+      }
+    );
+    const usdEstimate = await buildProviderQuotaUsdEstimate(
+      { id: connection.id, provider: connection.provider },
+      cache
+    );
+    return Response.json({ ...usage, usdEstimate });
   } catch (error) {
     const status =
       typeof (error as { status?: unknown })?.status === "number"

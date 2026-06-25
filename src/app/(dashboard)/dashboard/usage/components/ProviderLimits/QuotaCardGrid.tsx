@@ -10,8 +10,10 @@ interface Props {
   lastRefreshedAt: Record<string, string | undefined>;
   emailsVisible: boolean;
   providerLabels: Record<string, string>;
+  renderInlineQuotaSummary?: (quota: any) => unknown;
   onRefresh: (id: string, provider: string) => void;
   onOpenCutoff: (connection: any) => void;
+  onOpenUsdEstimate: (connection: any) => void;
   onToggleActive: (id: string, nextActive: boolean) => void;
   togglingActiveId: string | null;
 }
@@ -26,6 +28,7 @@ export default function QuotaCardGrid({
   providerLabels,
   onRefresh,
   onOpenCutoff,
+  onOpenUsdEstimate,
   onToggleActive,
   togglingActiveId,
 }: Props) {
@@ -62,6 +65,7 @@ export default function QuotaCardGrid({
                 providerLabel={providerLabels[conn.provider] || conn.provider}
                 onRefresh={() => onRefresh(conn.id, conn.provider)}
                 onOpenCutoff={() => onOpenCutoff(conn)}
+                onOpenUsdEstimate={() => onOpenUsdEstimate(conn)}
                 onToggleActive={(nextActive) => onToggleActive(conn.id, nextActive)}
                 togglingActive={togglingActiveId === conn.id}
               />

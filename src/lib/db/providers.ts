@@ -139,6 +139,36 @@ function toNumberOrZero(value: unknown): number {
 
 // ──────────────── Provider Connections ────────────────
 
+export interface ProviderConnectionRef {
+  id: string;
+  provider: string;
+  isActive: boolean;
+}
+
+export function getProviderConnectionRefsByIds(ids: string[]): ProviderConnectionRef[] {
+  const uniqueIds = Array.from(
+    new Set(ids.filter((id) => typeof id === "string" && id.trim().length > 0))
+  );
+  if (uniqueIds.length === 0) return [];
+
+  const db = getDbInstance() as unknown as DbLike;
+  const placeholders = uniqueIds.map((_, index) => `@id${index}`).join(", ");
+  const params = Object.fromEntries(uniqueIds.map((id, index) => [`id${index}`, id]));
+  const rows = db
+    .prepare(
+      `SELECT id, provider, is_active as isActive FROM provider_connections WHERE id IN (${placeholders})`
+    )
+    .all(params) as Array<{ id?: string; provider?: string; isActive?: number }>;
+
+  return rows
+    .filter((row) => row.id && row.provider)
+    .map((row) => ({
+      id: String(row.id),
+      provider: String(row.provider),
+      isActive: row.isActive !== 0,
+    }));
+}
+
 export async function getProviderConnections(filter: JsonRecord = {}) {
   const db = getDbInstance() as unknown as DbLike;
   let sql = "SELECT * FROM provider_connections";

@@ -30,8 +30,10 @@ interface Props {
   hasStaleData: boolean;
   onRefresh: () => void;
   onOpenCutoff: () => void;
+  onOpenUsdEstimate: () => void;
   canEditCutoff: boolean;
   hasCutoffOverrides: boolean;
+  canEstimateUsd: boolean;
 }
 
 function QuotaDetailRow({ q }: { q: any }) {
@@ -115,8 +117,10 @@ export default function QuotaCardExpanded({
   hasStaleData,
   onRefresh,
   onOpenCutoff,
+  onOpenUsdEstimate,
   canEditCutoff,
   hasCutoffOverrides,
+  canEstimateUsd,
 }: Props) {
   const t = useTranslations("usage");
   const tr = (key: string, fallback: string, values?: UsageTranslationValues) =>
@@ -188,6 +192,19 @@ export default function QuotaCardExpanded({
           >
             <span className="material-symbols-outlined text-[12px]">tune</span>
             {tr("editCutoffs", "Edit cutoffs")}
+          </button>
+          <button
+            type="button"
+            disabled={!canEstimateUsd}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenUsdEstimate();
+            }}
+            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border border-border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            title={tr("quotaUsdEstimate", "USD estimate")}
+          >
+            <span className="material-symbols-outlined text-[12px]">calculate</span>
+            {tr("quotaUsdShort", "USD est.")}
           </button>
           <button
             type="button"

@@ -21,6 +21,7 @@ import useEmailPrivacyStore from "@/store/emailPrivacyStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import QuotaCutoffModal from "./QuotaCutoffModal";
 import QuotaCardGrid from "./QuotaCardGrid";
+import QuotaUsdEstimateModal from "./QuotaUsdEstimateModal";
 import { useVisibleQuotaData } from "./useVisibleQuotaData";
 import { formatAutoRefreshCountdown } from "./formatters";
 import { translateUsageOrFallback, type UsageTranslationValues } from "./i18nFallback";
@@ -269,6 +270,7 @@ export default function ProviderLimits({
   const autoRefreshIntervalMs = autoRefreshInterval > 0 ? autoRefreshInterval * 1000 : 0;
   const [autoRefreshClock, setAutoRefreshClock] = useState(() => Date.now());
   const [cutoffModalConn, setCutoffModalConn] = useState<any | null>(null);
+  const [usdEstimateModalConn, setUsdEstimateModalConn] = useState<any | null>(null);
   const [cutoffModalWindows, setCutoffModalWindows] = useState<any[]>([]);
   const [providerWindowDefaults, setProviderWindowDefaults] = useState<
     Record<string, Record<string, number>>
@@ -368,6 +370,7 @@ export default function ProviderLimits({
           quotas: parseQuotaData(conn.provider, cached),
           plan: cached.plan || null,
           message: cached.message || null,
+          usdEstimate: cached.usdEstimate || null,
           raw: cached,
         };
 
@@ -447,6 +450,7 @@ export default function ProviderLimits({
             quotas: parsedQuotas,
             plan: data.plan || null,
             message: data.message || null,
+            usdEstimate: data.usdEstimate || null,
             raw: data,
             stale: data._stale ? { since: data._staleSince, reason: data._staleReason } : null,
           },
@@ -1066,6 +1070,7 @@ export default function ProviderLimits({
             setCutoffModalWindows(windows);
             setCutoffModalConn(conn);
           }}
+          onOpenUsdEstimate={(conn) => setUsdEstimateModalConn(conn)}
           onToggleActive={handleToggleActive}
           togglingActiveId={togglingActiveId}
         />
@@ -1109,6 +1114,27 @@ export default function ProviderLimits({
               };
             });
           }}
+        />
+      )}
+      {usdEstimateModalConn && (
+        <QuotaUsdEstimateModal
+          isOpen={!!usdEstimateModalConn}
+          onClose={() => setUsdEstimateModalConn(null)}
+          estimate={quotaData[usdEstimateModalConn.id]?.usdEstimate ?? null}
+          providerLabel={
+            PROVIDER_LABEL[usdEstimateModalConn.provider] || usdEstimateModalConn.provider
+          }
+          accountName={
+            pickDisplayValue(
+              [
+                usdEstimateModalConn.name,
+                usdEstimateModalConn.displayName,
+                usdEstimateModalConn.email,
+              ],
+              emailsVisible,
+              usdEstimateModalConn.provider
+            ) || usdEstimateModalConn.provider
+          }
         />
       )}
     </div>
