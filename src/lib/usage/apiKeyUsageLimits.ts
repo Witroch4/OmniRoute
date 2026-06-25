@@ -457,6 +457,22 @@ export function buildApiKeyUsageLimitText(
   ].join("\n");
 }
 
+export function buildApiKeyUsageLimitPercentText(
+  status: ApiKeyUsageLimitStatus,
+  now = Date.now()
+): string {
+  return [
+    "Cota pessoal",
+    "Diaria",
+    formatUsagePercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd)),
+    `Resets in ${formatResetIn(status.dailyResetAtIso, now)}`,
+    "",
+    "Semanal",
+    formatUsagePercent(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd)),
+    `Resets in ${formatResetIn(status.weeklyResetAtIso, now)}`,
+  ].join("\n");
+}
+
 function buildUsageLimitExceededMessage(status: ApiKeyUsageLimitStatus, now = Date.now()): string {
   if (status.dailyExceeded && status.dailyLimitUsd !== null) {
     const percent = formatUsagePercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd));

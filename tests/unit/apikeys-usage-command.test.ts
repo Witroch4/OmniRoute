@@ -36,7 +36,9 @@ test("allowUsageCommand defaults to false for new API keys", async () => {
 
   assert.ok(metadata);
   assert.equal(metadata.allowUsageCommand, false);
+  assert.equal(metadata.usageCommandShowUsd, false);
   assert.equal(key?.allowUsageCommand, false);
+  assert.equal(key?.usageCommandShowUsd, false);
 });
 
 test("allowUsageCommand can be toggled through updateApiKeyPermissions", async () => {
@@ -53,4 +55,20 @@ test("allowUsageCommand can be toggled through updateApiKeyPermissions", async (
 
   const disabled = await apiKeysDb.getApiKeyMetadata(created.key);
   assert.equal(disabled?.allowUsageCommand, false);
+});
+
+test("usageCommandShowUsd can be toggled through updateApiKeyPermissions", async () => {
+  const created = await apiKeysDb.createApiKey("Usage Command Display", "machine-usage-03");
+
+  await apiKeysDb.updateApiKeyPermissions(created.id, { usageCommandShowUsd: true });
+  apiKeysDb.clearApiKeyCaches();
+
+  const enabled = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.equal(enabled?.usageCommandShowUsd, true);
+
+  await apiKeysDb.updateApiKeyPermissions(created.id, { usageCommandShowUsd: false });
+  apiKeysDb.clearApiKeyCaches();
+
+  const disabled = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.equal(disabled?.usageCommandShowUsd, false);
 });

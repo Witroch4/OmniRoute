@@ -41,11 +41,13 @@ test("API key USD usage limits persist and default off", async () => {
   assert.equal(metadata?.usageLimitEnabled, false);
   assert.equal(metadata?.dailyUsageLimitUsd, null);
   assert.equal(metadata?.weeklyUsageLimitUsd, null);
+  assert.equal(metadata?.usageCommandShowUsd, false);
 
   await apiKeysDb.updateApiKeyPermissions(created.id, {
     usageLimitEnabled: true,
     dailyUsageLimitUsd: 10.5,
     weeklyUsageLimitUsd: 50,
+    usageCommandShowUsd: true,
   });
   apiKeysDb.clearApiKeyCaches();
 
@@ -53,6 +55,7 @@ test("API key USD usage limits persist and default off", async () => {
   assert.equal(metadata?.usageLimitEnabled, true);
   assert.equal(metadata?.dailyUsageLimitUsd, 10.5);
   assert.equal(metadata?.weeklyUsageLimitUsd, 50);
+  assert.equal(metadata?.usageCommandShowUsd, true);
 });
 
 test("getApiKeyUsageLimitStatus aligns weekly USD spend with provider resetAt when available", async () => {

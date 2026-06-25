@@ -4,6 +4,7 @@ export interface ApiKeyUsageLimitFields {
   usageLimitEnabled: boolean;
   dailyUsageLimitUsd: number | null;
   weeklyUsageLimitUsd: number | null;
+  usageCommandShowUsd: boolean;
 }
 
 export function parseUsageLimitEnabled(value: unknown): boolean {
@@ -30,6 +31,9 @@ export function parseApiKeyUsageLimitFields(record: UsageLimitRecord): ApiKeyUsa
     weeklyUsageLimitUsd: parseNullablePositiveNumber(
       record.weekly_usage_limit_usd ?? record.weeklyUsageLimitUsd
     ),
+    usageCommandShowUsd: parseUsageLimitEnabled(
+      record.usage_command_show_usd ?? record.usageCommandShowUsd
+    ),
   };
 }
 
@@ -37,7 +41,8 @@ export function hasUsageLimitUpdate(update: UsageLimitRecord): boolean {
   return (
     update.usageLimitEnabled !== undefined ||
     update.dailyUsageLimitUsd !== undefined ||
-    update.weeklyUsageLimitUsd !== undefined
+    update.weeklyUsageLimitUsd !== undefined ||
+    update.usageCommandShowUsd !== undefined
   );
 }
 
@@ -48,6 +53,7 @@ export function appendUsageLimitUpdates(
     usageLimitEnabled?: number;
     dailyUsageLimitUsd?: number | null;
     weeklyUsageLimitUsd?: number | null;
+    usageCommandShowUsd?: number;
   }
 ) {
   if (update.usageLimitEnabled !== undefined) {
@@ -61,5 +67,9 @@ export function appendUsageLimitUpdates(
   if (update.weeklyUsageLimitUsd !== undefined) {
     updates.push("weekly_usage_limit_usd = @weeklyUsageLimitUsd");
     params.weeklyUsageLimitUsd = parseNullablePositiveNumber(update.weeklyUsageLimitUsd);
+  }
+  if (update.usageCommandShowUsd !== undefined) {
+    updates.push("usage_command_show_usd = @usageCommandShowUsd");
+    params.usageCommandShowUsd = update.usageCommandShowUsd === true ? 1 : 0;
   }
 }

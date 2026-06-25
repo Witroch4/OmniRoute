@@ -891,6 +891,7 @@ function buildQuotaPreflightRateLimitedResult(
     allRateLimited: true,
     retryAfter,
     retryAfterHuman: formatRetryAfter(retryAfter),
+    connectionId: blockedByPreflight[0]?.id || undefined,
     lastError: `All ${provider} accounts blocked by quota preflight`,
     lastErrorCode: 429,
   };
@@ -1088,6 +1089,7 @@ export async function getProviderCredentials(
             allRateLimited: true,
             retryAfter: earliest,
             retryAfterHuman: formatRetryAfter(earliest),
+            connectionId: undefined,
           };
         }
         log.warn("AUTH", `${provider} | ${allConnections.length} accounts found but none active`);
@@ -1288,6 +1290,7 @@ export async function getProviderCredentials(
           allRateLimited: true,
           retryAfter: earliest,
           retryAfterHuman: formatRetryAfter(earliest),
+          connectionId: earliestConn?.id || undefined,
           lastError: earliestConn?.lastError || null,
           lastErrorCode: allBlockedByModelCooldown ? 429 : earliestConn?.errorCode || null,
           cooldownScope: allBlockedByModelCooldown ? "model" : "connection",
@@ -1344,6 +1347,7 @@ export async function getProviderCredentials(
         allRateLimited: true,
         retryAfter,
         retryAfterHuman: formatRetryAfter(retryAfter),
+        connectionId: blockedByPolicy[0]?.id || undefined,
         lastError: `All ${provider} accounts reached configured quota threshold`,
         lastErrorCode: 429,
       };
@@ -1377,6 +1381,7 @@ export async function getProviderCredentials(
         allRateLimited: true,
         retryAfter,
         retryAfterHuman: formatRetryAfter(retryAfter),
+        connectionId: exhaustedQuota[0]?.id || undefined,
         lastError: `All ${provider} accounts have exhausted their quota`,
         lastErrorCode: 429,
       };

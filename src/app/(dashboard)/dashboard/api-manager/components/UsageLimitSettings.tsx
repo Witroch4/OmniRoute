@@ -4,20 +4,24 @@ import { Input } from "@/shared/components";
 
 export function UsageLimitSettings({
   enabled,
+  showUsdInUsageCommand,
   dailyLimitUsd,
   weeklyLimitUsd,
   enabledLabel,
   disabledLabel,
   onEnabledChange,
+  onShowUsdInUsageCommandChange,
   onDailyLimitUsdChange,
   onWeeklyLimitUsdChange,
 }: {
   enabled: boolean;
+  showUsdInUsageCommand: boolean;
   dailyLimitUsd: string;
   weeklyLimitUsd: string;
   enabledLabel: string;
   disabledLabel: string;
   onEnabledChange: (enabled: boolean) => void;
+  onShowUsdInUsageCommandChange: (enabled: boolean) => void;
   onDailyLimitUsdChange: (value: string) => void;
   onWeeklyLimitUsdChange: (value: string) => void;
 }) {
@@ -69,6 +73,29 @@ export function UsageLimitSettings({
             placeholder="0.00"
           />
         </div>
+      </div>
+      <div className="mt-3 flex items-start justify-between gap-3 rounded-md border border-border/40 bg-background/40 p-2.5">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-text-main">@@om-usage USD display</p>
+          <p className="mt-0.5 text-[11px] text-text-muted">
+            When disabled, @@om-usage reports this key quota as percentages.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showUsdInUsageCommand}
+          disabled={!enabled}
+          onClick={() => onShowUsdInUsageCommandChange(!showUsdInUsageCommand)}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+            showUsdInUsageCommand
+              ? "border border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+              : "border border-border bg-black/5 text-text-muted dark:bg-white/5"
+          } ${!enabled ? "cursor-not-allowed opacity-50" : ""}`}
+        >
+          <span className="material-symbols-outlined text-[14px]">attach_money</span>
+          {showUsdInUsageCommand ? enabledLabel : disabledLabel}
+        </button>
       </div>
       <p className="mt-2 text-[11px] text-text-muted">
         Weekly quota follows the cached Claude weekly reset when available; otherwise it falls back

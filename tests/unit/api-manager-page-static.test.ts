@@ -9,6 +9,10 @@ const pagePath = path.join(
   repoRoot,
   "src/app/(dashboard)/dashboard/api-manager/ApiManagerPageClient.tsx"
 );
+const usageLimitSettingsPath = path.join(
+  repoRoot,
+  "src/app/(dashboard)/dashboard/api-manager/components/UsageLimitSettings.tsx"
+);
 const messagesDir = path.join(repoRoot, "src/i18n/messages");
 
 const selfServiceScopeMessageKeys = [
@@ -61,13 +65,24 @@ test("permissions modal switch buttons declare button type", () => {
     selfServiceBlock.match(/<button\s+type="button"\s+role="switch"/g) ?? []
   ).length;
 
-  // Self-service Visibility block has 4 switches: own-usage visibility,
-  // shared-account quota visibility, disable-non-public-models (#3041), and the
-  // per-key local usage command allowance (#4034).
+  // Self-service Visibility block has 4 inline switches: own-usage visibility,
+  // shared-account quota visibility, per-key local usage command allowance
+  // (#4034), and disable-non-public-models (#3041). UsageLimitSettings owns
+  // its nested USD switches.
   // The invariant is that every switch declares type="button"
   // (typedSwitchButtonCount === switchButtonCount) to avoid implicit submit.
   assert.equal(switchButtonCount, 4);
   assert.equal(typedSwitchButtonCount, 4);
+});
+
+test("usage limit settings switch buttons declare button type", () => {
+  const source = fs.readFileSync(usageLimitSettingsPath, "utf8");
+  const switchButtonCount = (source.match(/role="switch"/g) ?? []).length;
+  const typedSwitchButtonCount = (source.match(/<button\s+type="button"\s+role="switch"/g) ?? [])
+    .length;
+
+  assert.equal(switchButtonCount, 2);
+  assert.equal(typedSwitchButtonCount, 2);
 });
 
 test("permissions modal exposes Claude Code default wildcard model", () => {

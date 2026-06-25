@@ -362,13 +362,25 @@ export function unavailableResponse(
 ) {
   const retryAfterSec = normalizeRetryAfterSeconds(retryAfter);
   const msg = retryAfterHuman ? `${message} (${retryAfterHuman})` : message;
-  return new Response(JSON.stringify({ error: { message: msg } }), {
-    status: statusCode,
-    headers: {
-      "Content-Type": "application/json",
-      "Retry-After": String(retryAfterSec),
-    },
-  });
+  const errorType = statusCode === 429 ? "rate_limit_error" : "server_error";
+  const errorCode = statusCode === 429 ? "rate_limited" : "unavailable";
+  return new Response(
+    JSON.stringify({
+      type: "error",
+      error: {
+        message: msg,
+        type: errorType,
+        code: errorCode,
+      },
+    }),
+    {
+      status: statusCode,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": String(retryAfterSec),
+      },
+    }
+  );
 }
 
 export function providerCircuitOpenResponse(

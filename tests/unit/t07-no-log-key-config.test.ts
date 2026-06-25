@@ -69,6 +69,11 @@ test("updateKeyPermissionsSchema accepts noLog-only updates and rejects empty pa
   });
   assert.equal(streamDefaultOnly.success, true);
 
+  const usageCommandDisplayOnly = schemas.validateBody(schemas.updateKeyPermissionsSchema, {
+    usageCommandShowUsd: true,
+  });
+  assert.equal(usageCommandDisplayOnly.success, true);
+
   const emptyPayload = schemas.validateBody(schemas.updateKeyPermissionsSchema, {});
   assert.equal(emptyPayload.success, false);
 });

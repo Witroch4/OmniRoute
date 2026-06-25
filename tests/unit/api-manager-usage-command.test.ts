@@ -14,7 +14,9 @@ test("api manager exposes allowUsageCommand in create, edit, and list UI", () =>
 
   assert.ok(src.includes("newKeyAllowUsageCommand"), "create modal must keep command state");
   assert.ok(src.includes("setUsageCommandEnabled"), "permissions modal must edit command state");
+  assert.ok(src.includes("setUsageCommandShowUsd"), "permissions modal must edit display state");
   assert.ok(src.includes("allowUsageCommand"), "API payloads must include allowUsageCommand");
+  assert.ok(src.includes("usageCommandShowUsd"), "API payloads must include display mode");
   assert.ok(src.includes('t("localUsageCommand")'), "toggle must use i18n title");
   assert.ok(src.includes('t("localUsageCommandBadge")'), "key list must show enabled state");
 });
@@ -27,6 +29,10 @@ test("api key routes and schemas accept allowUsageCommand", () => {
   assert.ok(
     schemas.includes("allowUsageCommand: z.boolean().optional()"),
     "zod schemas must accept the field"
+  );
+  assert.ok(
+    schemas.includes("usageCommandShowUsd: z.boolean().optional()"),
+    "zod schemas must accept the display field"
   );
   assert.ok(createRoute.includes("allowUsageCommand"), "create route must persist the field");
   assert.ok(updateRoute.includes("allowUsageCommand"), "update route must persist the field");

@@ -25,6 +25,7 @@ import {
   runWithTlsTracking,
   isTlsFingerprintActive,
 } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import { getProviderLimitsCache } from "@/lib/db/providerLimits";
 import { resolveProxyForConnection } from "@/lib/localDb";
 import { CircuitBreakerOpenError, getCircuitBreaker } from "../../shared/utils/circuitBreaker";
 import { classify429FromError, type FailureKind } from "../../shared/utils/classify429";
@@ -49,6 +50,7 @@ const PREFERRED_BY_FAMILY: Record<string, string> = {
 };
 
 const CODEX_NATIVE_RESPONSES_MODELS = new Set(["gpt-5.5"]);
+const CLAUDE_LIMIT_TIME_ZONE = "America/Fortaleza";
 
 type TrafficType = "production" | "shadow";
 
@@ -87,6 +89,95 @@ function isCodexNativeResponsesRequest(
       ? String(body.metadata.source || "")
       : "";
   return metadataSource.toLowerCase().includes("codex");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function getCredentialConnectionId(credentials: unknown): string | null {
+  if (!isRecord(credentials)) return null;
+  const connectionId = credentials.connectionId;
+  return typeof connectionId === "string" && connectionId.trim() ? connectionId : null;
+}
+
+function isQuotaExhausted(quota: Record<string, unknown>): boolean {
+  const usedPercentage = numericValue(quota.usedPercentage);
+  if (usedPercentage !== null && usedPercentage >= 100) return true;
+
+  const remainingPercentage = numericValue(quota.remainingPercentage);
+  if (remainingPercentage !== null && remainingPercentage <= 0) return true;
+
+  const used = numericValue(quota.used);
+  const total = numericValue(quota.total);
+  if (used !== null && total !== null && total > 0 && used >= total) return true;
+
+  const remaining = numericValue(quota.remaining);
+  return remaining !== null && remaining <= 0;
+}
+
+function formatFortalezaResetTime(resetAt: string): string | null {
+  const resetDate = new Date(resetAt);
+  if (!Number.isFinite(resetDate.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CLAUDE_LIMIT_TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(resetDate);
+  const hour = parts.find((part) => part.type === "hour")?.value;
+  const minute = parts.find((part) => part.type === "minute")?.value;
+  const period = parts.find((part) => part.type === "dayPeriod")?.value.toLowerCase();
+  if (!hour || !minute || !period) return null;
+  return `${hour}${minute === "00" ? "" : `:${minute}`}${period}`;
+}
+
+function findClaudeWeeklyResetAt(model: string, connectionId: string | null): string | null {
+  if (!connectionId) return null;
+  const cache = getProviderLimitsCache(connectionId);
+  if (!cache?.quotas || !isRecord(cache.quotas)) return null;
+
+  const modelLower = model.toLowerCase();
+  const weeklyEntries = Object.entries(cache.quotas).filter(([key, value]) => {
+    if (!isRecord(value)) return false;
+    const normalized = key.toLowerCase();
+    return normalized.includes("weekly") || normalized.includes("7d");
+  });
+  const preferredEntries = modelLower.includes("sonnet")
+    ? weeklyEntries.filter(([key]) => key.toLowerCase().includes("sonnet"))
+    : weeklyEntries.filter(([key]) => !key.toLowerCase().includes("sonnet"));
+  const candidates = preferredEntries.length > 0 ? preferredEntries : weeklyEntries;
+
+  for (const [, quota] of candidates) {
+    if (!isQuotaExhausted(quota)) continue;
+    const resetAt = typeof quota.resetAt === "string" && quota.resetAt.trim() ? quota.resetAt : "";
+    if (resetAt) return resetAt;
+  }
+
+  return null;
+}
+
+function buildClaudeWeeklyLimitMessage(
+  provider: string,
+  model: string,
+  credentials: unknown
+): string | null {
+  if (provider !== "claude") return null;
+  const resetAt = findClaudeWeeklyResetAt(model, getCredentialConnectionId(credentials));
+  if (!resetAt) return null;
+  const resetTime = formatFortalezaResetTime(resetAt);
+  if (!resetTime) return null;
+  return `You've hit your weekly limit · resets ${resetTime} (${CLAUDE_LIMIT_TIME_ZONE})`;
 }
 
 async function hasOnlyActiveCodexAccount() {
@@ -550,12 +641,15 @@ export function handleNoCredentials(
       });
     }
 
-    log.warn("CHAT", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
+    const friendlyQuotaMessage = buildClaudeWeeklyLimitMessage(provider, model, credentials);
+    const responseMessage = friendlyQuotaMessage || `[${provider}/${model}] ${errorMsg}`;
+
+    log.warn("CHAT", `${responseMessage} (${credentials.retryAfterHuman})`);
     return unavailableResponse(
       status,
-      `[${provider}/${model}] ${errorMsg}`,
+      responseMessage,
       credentials.retryAfter,
-      credentials.retryAfterHuman
+      friendlyQuotaMessage ? undefined : credentials.retryAfterHuman
     );
   }
 
@@ -596,10 +690,7 @@ export function handleNoCredentials(
     // all disabled. log level is `warn` rather than `error` because zero active
     // credentials is an expected operator-driven state, not a server fault.
     log.warn("AUTH", `No active credentials for provider: ${provider}`);
-    return errorResponse(
-      HTTP_STATUS.NOT_FOUND,
-      `No active credentials for provider: ${provider}`
-    );
+    return errorResponse(HTTP_STATUS.NOT_FOUND, `No active credentials for provider: ${provider}`);
   }
   log.warn("CHAT", "No more accounts available", { provider });
   return errorResponse(

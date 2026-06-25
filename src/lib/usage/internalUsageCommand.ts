@@ -1,5 +1,6 @@
 import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import {
+  buildApiKeyUsageLimitPercentText,
   buildApiKeyUsageLimitText,
   type ApiKeyUsageLimitStatus,
 } from "@/lib/usage/apiKeyUsageLimits";
@@ -19,6 +20,7 @@ interface UsageCommandApiKeyMetadata {
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
+  usageCommandShowUsd?: boolean;
 }
 
 interface ProviderConnectionLike {
@@ -375,10 +377,13 @@ export async function buildUsageCommandText(
 ): Promise<string> {
   const resolvedDeps = await normalizeDeps(deps);
   if (metadata.usageLimitEnabled === true) {
-    return buildApiKeyUsageLimitText(
-      await resolvedDeps.getApiKeyUsageLimitStatus(metadata, { now: resolvedDeps.now }),
-      resolvedDeps.now()
-    );
+    const status = await resolvedDeps.getApiKeyUsageLimitStatus(metadata, {
+      now: resolvedDeps.now,
+    });
+    const now = resolvedDeps.now();
+    return metadata.usageCommandShowUsd === true
+      ? buildApiKeyUsageLimitText(status, now)
+      : buildApiKeyUsageLimitPercentText(status, now);
   }
 
   const snapshot = selectUsageSnapshot(await collectUsageSnapshots(metadata, resolvedDeps));

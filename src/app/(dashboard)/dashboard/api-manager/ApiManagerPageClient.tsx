@@ -127,6 +127,7 @@ interface ApiKey {
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
+  usageCommandShowUsd?: boolean;
   allowedQuotas?: string[] | null;
   createdAt: string;
 }
@@ -706,6 +707,7 @@ export default function ApiManagerPageClient() {
     usageLimitEnabled: boolean,
     dailyUsageLimitUsd: number | null,
     weeklyUsageLimitUsd: number | null,
+    usageCommandShowUsd: boolean,
     blockedModels: string[]
   ) => {
     if (!editingKey || !editingKey.id) return;
@@ -777,6 +779,7 @@ export default function ApiManagerPageClient() {
           usageLimitEnabled,
           dailyUsageLimitUsd,
           weeklyUsageLimitUsd,
+          usageCommandShowUsd,
         }),
       });
 
@@ -1544,6 +1547,7 @@ const PermissionsModal = memo(function PermissionsModal({
     usageLimitEnabled: boolean,
     dailyUsageLimitUsd: number | null,
     weeklyUsageLimitUsd: number | null,
+    usageCommandShowUsd: boolean,
     blockedModels: string[]
   ) => void;
 }) {
@@ -1628,6 +1632,9 @@ const PermissionsModal = memo(function PermissionsModal({
     apiKey?.allowUsageCommand === true
   );
   const [usageLimitEnabled, setUsageLimitEnabled] = useState(apiKey?.usageLimitEnabled === true);
+  const [usageCommandShowUsd, setUsageCommandShowUsd] = useState(
+    apiKey?.usageCommandShowUsd === true
+  );
   const [dailyUsageLimitUsd, setDailyUsageLimitUsd] = useState(
     typeof apiKey?.dailyUsageLimitUsd === "number" && apiKey.dailyUsageLimitUsd > 0
       ? String(apiKey.dailyUsageLimitUsd)
@@ -1830,6 +1837,7 @@ const PermissionsModal = memo(function PermissionsModal({
       usageLimitEnabled,
       parseUsdLimitInput(dailyUsageLimitUsd),
       parseUsdLimitInput(weeklyUsageLimitUsd),
+      usageCommandShowUsd,
       blockedModels
     );
   }, [
@@ -1863,6 +1871,7 @@ const PermissionsModal = memo(function PermissionsModal({
     disableNonPublicModels,
     usageCommandEnabled,
     usageLimitEnabled,
+    usageCommandShowUsd,
     dailyUsageLimitUsd,
     weeklyUsageLimitUsd,
     parseUsdLimitInput,
@@ -2441,11 +2450,13 @@ const PermissionsModal = memo(function PermissionsModal({
           <p className="text-xs text-text-muted">{t("localUsageCommandDesc")}</p>
           <UsageLimitSettings
             enabled={usageLimitEnabled}
+            showUsdInUsageCommand={usageCommandShowUsd}
             dailyLimitUsd={dailyUsageLimitUsd}
             weeklyLimitUsd={weeklyUsageLimitUsd}
             enabledLabel={tc("enabled")}
             disabledLabel={tc("disabled")}
             onEnabledChange={setUsageLimitEnabled}
+            onShowUsdInUsageCommandChange={setUsageCommandShowUsd}
             onDailyLimitUsdChange={setDailyUsageLimitUsd}
             onWeeklyLimitUsdChange={setWeeklyUsageLimitUsd}
           />

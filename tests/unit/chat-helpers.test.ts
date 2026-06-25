@@ -9,6 +9,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
+const providerLimitsDb = await import("../../src/lib/db/providerLimits.ts");
 const combosDb = await import("../../src/lib/db/combos.ts");
 const {
   resolveModelOrError,
@@ -300,6 +301,50 @@ test("handleNoCredentials returns Retry-After when every account is rate limited
   assert.equal(response.status, 429);
   assert.ok(Number(response.headers.get("Retry-After")) >= 1);
   assert.match(json.error.message, /\[openai\/gpt-4o-mini\] Quota exceeded/);
+});
+
+test("handleNoCredentials uses cached Claude weekly reset for exhausted weekly quota", async () => {
+  const retryAfter = new Date(Date.now() + 45_000).toISOString();
+  providerLimitsDb.setProviderLimitsCache("conn_claude_weekly", {
+    plan: "Claude Max",
+    quotas: {
+      "session (5h)": {
+        used: 0,
+        total: 100,
+        remaining: 100,
+        resetAt: null,
+      },
+      "weekly (7d)": {
+        used: 100,
+        total: 100,
+        remaining: 0,
+        resetAt: "2026-06-25T23:00:00.456Z",
+      },
+    },
+    message: null,
+    fetchedAt: "2026-06-25T16:00:00.000Z",
+  });
+
+  const response = handleNoCredentials(
+    {
+      allRateLimited: true,
+      retryAfter,
+      retryAfterHuman: "reset after 45s",
+      connectionId: "conn_claude_weekly",
+      lastErrorCode: 429,
+      lastError: "This request would exceed your account's rate limit.",
+    },
+    "conn_claude_weekly",
+    "claude",
+    "claude-opus-4-8",
+    null,
+    null
+  );
+  const json = (await response.json()) as { error: { message: string; type?: string } };
+
+  assert.equal(response.status, 429);
+  assert.equal(json.error.type, "rate_limit_error");
+  assert.equal(json.error.message, "You've hit your weekly limit · resets 8pm (America/Fortaleza)");
 });
 
 test("handleNoCredentials returns structured model_cooldown when every credential for the model is cooling down", async () => {
