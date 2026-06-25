@@ -269,6 +269,111 @@ test("getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota
   assert.equal(status.weeklySpentUsd, 2);
 });
 
+test("getApiKeyUsageLimitStatus uses Codex weekly reset for Codex-limited keys", async () => {
+  const created = await apiKeysDb.createApiKey("Codex Reset Key", "machine-limit-codex");
+  await apiKeysDb.updateApiKeyPermissions(created.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 0.5,
+  });
+
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const codexResetAt = "2026-06-26T21:49:00.000Z";
+  const claudeResetAt = "2026-06-19T23:00:00.000Z";
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, allowedConnections: ["conn-codex"] },
+    {
+      now: () => Date.parse("2026-06-19T17:00:00.000Z"),
+      getProviderConnectionById: async (connectionId) => ({
+        id: connectionId,
+        provider: connectionId === "conn-codex" ? "codex" : "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: (connectionId) => ({
+        plan: connectionId === "conn-codex" ? "Prolite" : "Claude Max",
+        quotas:
+          connectionId === "conn-codex"
+            ? {
+                weekly: {
+                  used: 9,
+                  total: 100,
+                  resetAt: codexResetAt,
+                },
+              }
+            : {
+                "weekly (7d)": {
+                  used: 100,
+                  total: 100,
+                  resetAt: claudeResetAt,
+                },
+              },
+        message: null,
+        fetchedAt: "2026-06-19T17:00:00.000Z",
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.equal(status.weeklyResetAtIso, codexResetAt);
+  assert.equal(status.weeklyWindowStartIso, "2026-06-19T21:49:00.000Z");
+});
+
+test("getApiKeyUsageLimitStatus prefers the requested provider reset for unrestricted keys", async () => {
+  const created = await apiKeysDb.createApiKey("Codex Any Connection Key", "machine-limit-any");
+  await apiKeysDb.updateApiKeyPermissions(created.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 0.5,
+  });
+
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const codexResetAt = "2026-06-26T21:49:00.000Z";
+  const claudeResetAt = "2026-06-19T23:00:00.000Z";
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, preferredProvider: "codex" },
+    {
+      now: () => Date.parse("2026-06-19T17:00:00.000Z"),
+      getProviderConnectionById: async () => null,
+      getProviderConnections: async () => [
+        { id: "conn-claude", provider: "claude", isActive: true },
+        { id: "conn-codex", provider: "codex", isActive: true },
+      ],
+      getProviderLimitsCache: () => null,
+      getAllProviderLimitsCache: () => ({
+        "conn-claude": {
+          plan: "Claude Max",
+          quotas: {
+            "weekly (7d)": {
+              used: 100,
+              total: 100,
+              resetAt: claudeResetAt,
+            },
+          },
+          message: null,
+          fetchedAt: "2026-06-19T17:00:00.000Z",
+        },
+        "conn-codex": {
+          plan: "Prolite",
+          quotas: {
+            weekly: {
+              used: 9,
+              total: 100,
+              resetAt: codexResetAt,
+            },
+          },
+          message: null,
+          fetchedAt: "2026-06-19T17:00:00.000Z",
+        },
+      }),
+    }
+  );
+
+  assert.equal(status.weeklyResetAtIso, codexResetAt);
+});
+
 test("buildApiKeyUsageLimitText returns API-key quota spend percentage and reset lines", async () => {
   const text = usageLimits.buildApiKeyUsageLimitText(
     {
@@ -336,6 +441,36 @@ test("buildApiKeyUsageLimitRejection includes over-quota percentage and reset hi
     body.error.message,
     "This API key reached its weekly USD usage quota ($1.09 of $1.00, 109%). Resets in 6d. Choose another allowed model after reset."
   );
+});
+
+test("buildApiKeyUsageLimitRejection hides USD amounts when display mode is percentage", async () => {
+  const response = usageLimits.buildApiKeyUsageLimitRejection(
+    new Request("http://localhost/v1/responses"),
+    {
+      enabled: true,
+      dailyLimitUsd: 10,
+      weeklyLimitUsd: 0.5,
+      dailySpentUsd: 0.01,
+      weeklySpentUsd: 0.505,
+      dailyWindowStartIso: "2026-06-19T03:00:00.000Z",
+      dailyResetAtIso: "2026-06-20T03:00:00.000Z",
+      weeklyWindowStartIso: "2026-06-19T21:49:00.000Z",
+      weeklyResetAtIso: "2026-06-26T21:49:00.000Z",
+      dailyExceeded: false,
+      weeklyExceeded: true,
+    },
+    Date.parse("2026-06-19T17:00:00.000Z"),
+    { showUsd: false }
+  );
+
+  assert.equal(response.status, 400);
+  const body = (await response.json()) as { error: { message: string } };
+  assert.equal(
+    body.error.message,
+    "This API key reached its weekly usage quota (101%). Resets in 7d 4h 49m. Choose another allowed model after reset."
+  );
+  assert.equal(body.error.message.includes("$"), false);
+  assert.equal(body.error.message.includes("USD"), false);
 });
 
 test("buildApiKeyUsageLimitRejection uses 400 so Claude Code does not trigger login", () => {

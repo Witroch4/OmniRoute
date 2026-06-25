@@ -96,6 +96,7 @@ export interface ApiKeyMetadata {
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
+  usageCommandShowUsd?: boolean;
 }
 
 /**
@@ -185,6 +186,15 @@ function matchesComboAccessRule(comboName: string, requestedModel: string, rule:
     rule === requestedModel ||
     `combo/${normalizedRule}` === requestedModel
   );
+}
+
+function inferPreferredProvider(modelStr: string | null): string | null {
+  if (!modelStr || !modelStr.includes("/")) return null;
+  const [provider] = modelStr.split("/", 1);
+  const normalized = provider.trim().toLowerCase();
+  if (!normalized || normalized === "combo" || normalized === "auto") return null;
+  if (normalized === "cc" || normalized === "claude-code") return "claude";
+  return normalized;
 }
 
 function isAnthropicMessagesRequest(request: Request): boolean {
@@ -388,9 +398,12 @@ export async function enforceApiKeyPolicy(
     try {
       const usageLimitRejection = await buildApiKeyUsageLimitPolicyRejection(request, {
         id: apiKeyInfo.id,
+        allowedConnections: apiKeyInfo.allowedConnections,
+        preferredProvider: inferPreferredProvider(modelStr),
         usageLimitEnabled: apiKeyInfo.usageLimitEnabled,
         dailyUsageLimitUsd: apiKeyInfo.dailyUsageLimitUsd,
         weeklyUsageLimitUsd: apiKeyInfo.weeklyUsageLimitUsd,
+        usageCommandShowUsd: apiKeyInfo.usageCommandShowUsd,
       });
       if (usageLimitRejection) {
         return { apiKey, apiKeyInfo, rejection: usageLimitRejection };
