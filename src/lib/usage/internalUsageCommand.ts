@@ -36,6 +36,11 @@ interface UsageSnapshot {
   quotas: JsonRecord;
 }
 
+interface UsageCommandSelection {
+  preferredProvider?: string | null;
+  preferredConnectionId?: string | null;
+}
+
 export interface InternalUsageCommandDeps {
   now?: () => number;
   isValidApiKey?: (apiKey: string) => Promise<boolean>;
@@ -90,10 +95,24 @@ function readHeader(request: Request, name: string): string | null {
   return request.headers.get(name) || request.headers.get(name.toLowerCase());
 }
 
+function getRequestPathname(request: Request): string {
+  try {
+    return new URL(request.url, "http://localhost").pathname;
+  } catch {
+    return "";
+  }
+}
+
+function hasPathSegment(pathname: string, segment: string): boolean {
+  return pathname
+    .split("/")
+    .map((entry) => entry.trim().toLowerCase())
+    .includes(segment);
+}
+
 function readPathScopedToken(request: Request): string | null {
   try {
-    const url = new URL(request.url, "http://localhost");
-    const segments = url.pathname
+    const segments = getRequestPathname(request)
       .split("/")
       .map((segment) => segment.trim())
       .filter(Boolean);
@@ -352,7 +371,7 @@ function snapshotScore(snapshot: UsageSnapshot): number {
   return score;
 }
 
-function selectUsageSnapshot(snapshots: UsageSnapshot[]): UsageSnapshot | null {
+function selectBestUsageSnapshot(snapshots: UsageSnapshot[]): UsageSnapshot | null {
   let selected: UsageSnapshot | null = null;
   let bestScore = -1;
   for (const snapshot of snapshots) {
@@ -365,6 +384,27 @@ function selectUsageSnapshot(snapshots: UsageSnapshot[]): UsageSnapshot | null {
   return selected;
 }
 
+function selectUsageSnapshot(
+  snapshots: UsageSnapshot[],
+  selection: UsageCommandSelection = {}
+): UsageSnapshot | null {
+  const preferredConnectionId = selection.preferredConnectionId?.trim();
+  if (preferredConnectionId) {
+    const snapshot = snapshots.find((entry) => entry.connectionId === preferredConnectionId);
+    if (snapshot) return snapshot;
+  }
+
+  const preferredProvider = normalizeProviderId(selection.preferredProvider);
+  if (preferredProvider) {
+    const providerSnapshots = snapshots.filter(
+      (entry) => normalizeProviderId(entry.provider) === preferredProvider
+    );
+    return selectBestUsageSnapshot(providerSnapshots);
+  }
+
+  return selectBestUsageSnapshot(snapshots);
+}
+
 function appendQuotaBlock(lines: string[], label: string, quota: JsonRecord | null, now: number) {
   lines.push(label);
   lines.push(formatPercent(getQuotaUsedPercent(quota)));
@@ -373,7 +413,8 @@ function appendQuotaBlock(lines: string[], label: string, quota: JsonRecord | nu
 
 export async function buildUsageCommandText(
   metadata: UsageCommandApiKeyMetadata,
-  deps: InternalUsageCommandDeps = {}
+  deps: InternalUsageCommandDeps = {},
+  selection: UsageCommandSelection = {}
 ): Promise<string> {
   const resolvedDeps = await normalizeDeps(deps);
   if (metadata.usageLimitEnabled === true) {
@@ -386,7 +427,10 @@ export async function buildUsageCommandText(
       : buildApiKeyUsageLimitPercentText(status, now);
   }
 
-  const snapshot = selectUsageSnapshot(await collectUsageSnapshots(metadata, resolvedDeps));
+  const snapshot = selectUsageSnapshot(
+    await collectUsageSnapshots(metadata, resolvedDeps),
+    selection
+  );
 
   if (!snapshot) {
     return ["Plan", "Unavailable", "", "Usage", "No cached usage data available."].join("\n");
@@ -408,21 +452,59 @@ function getResponseModel(body: unknown): string {
     : LOCAL_USAGE_MODEL;
 }
 
+function normalizeProviderId(provider: string | null | undefined): string | null {
+  const normalized = provider?.trim().toLowerCase().replace(/_/g, "-");
+  if (!normalized) return null;
+  if (normalized === "cc" || normalized === "claude-code" || normalized === "claudecode") {
+    return "claude";
+  }
+  return normalized;
+}
+
+function inferProviderFromModel(body: unknown): string | null {
+  const model = isRecord(body) && typeof body.model === "string" ? body.model.trim() : "";
+  if (!model) return null;
+  const segments = model
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length < 2) return null;
+  if (segments[0].toLowerCase() === "no-think" && segments[1]) {
+    return normalizeProviderId(segments[1]);
+  }
+  return normalizeProviderId(segments[0]);
+}
+
+function inferProviderFromPath(request: Request): string | null {
+  const pathname = getRequestPathname(request);
+  const segments = pathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const providersIndex = segments.findIndex((segment) => segment.toLowerCase() === "providers");
+  if (providersIndex >= 0 && segments[providersIndex + 1]) {
+    return normalizeProviderId(decodeURIComponent(segments[providersIndex + 1]));
+  }
+  if (hasPathSegment(pathname, "responses")) return "codex";
+  if (hasPathSegment(pathname, "messages")) return "claude";
+  return null;
+}
+
+function inferUsageCommandSelection(request: Request, body: unknown): UsageCommandSelection {
+  const preferredConnectionId = readHeader(request, "x-omniroute-connection")?.trim() || null;
+  return {
+    preferredConnectionId,
+    preferredProvider: inferProviderFromModel(body) ?? inferProviderFromPath(request),
+  };
+}
+
 function isAnthropicRequest(request: Request): boolean {
   if (request.headers.has("anthropic-version")) return true;
-  try {
-    return new URL(request.url).pathname.endsWith("/v1/messages");
-  } catch {
-    return false;
-  }
+  return hasPathSegment(getRequestPathname(request), "messages");
 }
 
 function isResponsesRequest(request: Request): boolean {
-  try {
-    return new URL(request.url).pathname.endsWith("/v1/responses");
-  } catch {
-    return false;
-  }
+  return hasPathSegment(getRequestPathname(request), "responses");
 }
 
 function textEncoderStream(payload: string): ReadableStream<Uint8Array> {
@@ -686,6 +768,6 @@ export async function handleInternalUsageCommand(
   return createLocalTextResponse(
     request,
     body,
-    await buildUsageCommandText(metadata, resolvedDeps)
+    await buildUsageCommandText(metadata, resolvedDeps, inferUsageCommandSelection(request, body))
   );
 }

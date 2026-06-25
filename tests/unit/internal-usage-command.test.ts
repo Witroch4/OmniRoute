@@ -343,18 +343,18 @@ test("handleInternalUsageCommand streams Responses API events for Codex clients"
       getApiKeyMetadata: async () => ({
         id: "key-enabled",
         name: "enabled",
-        allowedConnections: ["conn-claude"],
+        allowedConnections: ["conn-codex"],
         allowUsageCommand: true,
       }),
       now: () => NOW,
       getProviderConnectionById: async () => ({
-        id: "conn-claude",
-        provider: "claude",
+        id: "conn-codex",
+        provider: "codex",
         isActive: true,
       }),
       getProviderConnections: async () => [],
       getProviderLimitsCache: () => ({
-        plan: "Claude Max",
+        plan: "Codex Pro",
         quotas: {
           "weekly (7d)": {
             used: 72,
@@ -376,6 +376,121 @@ test("handleInternalUsageCommand streams Responses API events for Codex clients"
   assert.match(text, /event: response\.output_text\.delta/);
   assert.match(text, /Weekly \(7 day\)\\n72%\\nResets in 1d/);
   assert.match(text, /event: response\.completed/);
+});
+
+test("handleInternalUsageCommand prefers Codex quota snapshots for Responses API callers", async () => {
+  const response = await handleInternalUsageCommand(
+    new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sk-enabled",
+        Accept: "text/event-stream",
+      },
+    }),
+    {
+      model: "codex/gpt-5.5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "@@om-usage" }] }],
+      stream: true,
+    },
+    {
+      isValidApiKey: async () => true,
+      getApiKeyMetadata: async () => ({
+        id: "key-enabled",
+        name: "enabled",
+        allowedConnections: ["conn-claude", "conn-codex"],
+        allowUsageCommand: true,
+      }),
+      now: () => NOW,
+      getProviderConnectionById: async (connectionId) => ({
+        id: connectionId,
+        provider: connectionId === "conn-codex" ? "codex" : "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: (connectionId) => ({
+        plan: connectionId === "conn-codex" ? "Codex Pro" : "Claude Max",
+        quotas: {
+          "weekly (7d)": {
+            used: connectionId === "conn-codex" ? 18 : 72,
+            total: 100,
+            resetAt: new Date(NOW + 24 * 60 * 60_000).toISOString(),
+          },
+          "weekly sonnet (7d)": {
+            used: connectionId === "conn-codex" ? 0 : 30,
+            total: 100,
+            resetAt: new Date(NOW + 24 * 60 * 60_000).toISOString(),
+          },
+        },
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.ok(response, "command should be handled locally");
+  const text = await response.text();
+  assert.match(text, /Codex Pro/);
+  assert.match(text, /Weekly \(7 day\)\\n18%\\nResets in 1d/);
+  assert.doesNotMatch(text, /Claude Max/);
+});
+
+test("handleInternalUsageCommand keeps Claude quota snapshots for Anthropic callers", async () => {
+  const response = await handleInternalUsageCommand(
+    new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": "sk-enabled",
+      },
+    }),
+    {
+      model: "claude-opus-4-8",
+      messages: [{ role: "user", content: "@@om-usage" }],
+    },
+    {
+      isValidApiKey: async () => true,
+      getApiKeyMetadata: async () => ({
+        id: "key-enabled",
+        name: "enabled",
+        allowedConnections: ["conn-codex", "conn-claude"],
+        allowUsageCommand: true,
+      }),
+      now: () => NOW,
+      getProviderConnectionById: async (connectionId) => ({
+        id: connectionId,
+        provider: connectionId === "conn-codex" ? "codex" : "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: (connectionId) => ({
+        plan: connectionId === "conn-codex" ? "Codex Pro" : "Claude Max",
+        quotas: {
+          "weekly (7d)": {
+            used: connectionId === "conn-codex" ? 18 : 72,
+            total: 100,
+            resetAt: new Date(NOW + 24 * 60 * 60_000).toISOString(),
+          },
+          "weekly sonnet (7d)": {
+            used: connectionId === "conn-codex" ? 0 : 30,
+            total: 100,
+            resetAt: new Date(NOW + 24 * 60 * 60_000).toISOString(),
+          },
+        },
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.ok(response, "command should be handled locally");
+  const body = (await response.json()) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  assert.match(body.content[0].text, /Claude Max/);
+  assert.match(body.content[0].text, /Weekly \(7 day\)\n72%\nResets in 1d/);
+  assert.doesNotMatch(body.content[0].text, /Codex Pro/);
 });
 
 test("handleInternalUsageCommand ignores normal prompts", async () => {
