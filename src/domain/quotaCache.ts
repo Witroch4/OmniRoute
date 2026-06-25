@@ -18,6 +18,7 @@ import { getProviderConnectionById, resolveProxyForConnection } from "@/lib/loca
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { safePercentage } from "@/shared/utils/formatting";
 import { saveQuotaSnapshot, cleanupOldSnapshots } from "@/lib/db/quotaSnapshots";
+import { recordProviderQuotaResetEventIfChanged } from "@/lib/db/quotaResetEvents";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -232,6 +233,19 @@ export function setQuotaCache(
         (quotaInfo.total > 0
           ? Math.round(((quotaInfo.total - (quotaInfo.used || 0)) / quotaInfo.total) * 100)
           : 0);
+      recordProviderQuotaResetEventIfChanged({
+        provider,
+        connectionId,
+        windowKey,
+        currentResetAt: quotaInfo.resetAt ?? null,
+        currentRemainingPercentage: remainingPercentage,
+        previousObservation: prior?.quotas?.[windowKey]
+          ? {
+              resetAt: prior.quotas[windowKey].resetAt,
+              remainingPercentage: prior.quotas[windowKey].remainingPercentage,
+            }
+          : null,
+      });
       // #4438 — only persist on the first observation or a real change.
       if (!quotaSnapshotChanged(prior, windowKey, remainingPercentage, entry.exhausted)) continue;
       try {

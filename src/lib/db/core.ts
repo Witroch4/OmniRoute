@@ -432,6 +432,27 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_quota_snapshots_provider_time ON quota_snapshots(provider, created_at);
   CREATE INDEX IF NOT EXISTS idx_quota_snapshots_connection_time ON quota_snapshots(connection_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_quota_snapshots_created_at ON quota_snapshots(created_at);
+
+  CREATE TABLE IF NOT EXISTS provider_quota_reset_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    window_key TEXT NOT NULL,
+    window_started_at TEXT NOT NULL,
+    window_resets_at TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    previous_remaining_percentage REAL,
+    new_remaining_percentage REAL,
+    previous_used_percentage REAL,
+    new_used_percentage REAL,
+    raw_data TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(connection_id, window_key, window_started_at, window_resets_at)
+  );
+  CREATE INDEX IF NOT EXISTS idx_provider_quota_reset_events_connection_window
+    ON provider_quota_reset_events(connection_id, window_key, window_resets_at);
+  CREATE INDEX IF NOT EXISTS idx_provider_quota_reset_events_provider_observed
+    ON provider_quota_reset_events(provider, observed_at);
 `;
 
 // ──────────────── Column Mapping ────────────────
