@@ -100,16 +100,16 @@ test("buildUsageCommandText formats cached Claude usage windows exactly", async 
       "",
       "Usage",
       "Session (5hr)",
-      "53%",
+      "47% left",
       "Resets in 9m",
       "",
       "Weekly (7 day)",
-      "72%",
-      "Resets in 1d",
+      "28% left",
+      "Resets in 1d 0h 0m",
       "",
       "Weekly Sonnet",
-      "30%",
-      "Resets in 1d",
+      "70% left",
+      "Resets in 1d 0h 0m",
     ].join("\n")
   );
 });
@@ -156,7 +156,7 @@ test("buildUsageCommandText formats API key usage limits as percentages by defau
 
   assert.equal(
     text,
-    ["Cota pessoal", "Diaria", "20%", "Resets in 15h", "", "Semanal", "11%", "Resets in 7d"].join(
+    ["Daily", "80% left", "Resets in 15h 0m", "", "Weekly", "90% left", "Resets in 7d 0h 0m"].join(
       "\n"
     )
   );
@@ -206,21 +206,21 @@ test("buildUsageCommandText keeps USD output when the API key display flag is en
   assert.equal(
     text,
     [
-      "Cota diaria",
+      "Daily quota",
       "$10.00",
-      "Gasto diario",
+      "Daily spent",
       "$2.00",
-      "Uso diario",
+      "Daily used",
       "20%",
-      "Resets in 15h",
+      "Resets in 15h 0m",
       "",
-      "Cota semanal",
+      "Weekly quota",
       "$50.00",
-      "Gasto semanal",
+      "Weekly spent",
       "$5.25",
-      "Uso semanal",
+      "Weekly used",
       "11%",
-      "Resets in 7d",
+      "Resets in 7d 0h 0m",
     ].join("\n")
   );
 });
@@ -296,12 +296,12 @@ test("handleInternalUsageCommandHttpRequest returns terminal text for an allowed
       "",
       "Usage",
       "Session (5hr)",
-      "74%",
-      "Resets in 2h",
+      "26% left",
+      "Resets in 2h 0m",
       "",
       "Weekly (7 day)",
-      "25%",
-      "Resets in 6d",
+      "75% left",
+      "Resets in 6d 0h 0m",
       "",
       "Weekly Sonnet",
       "Unavailable",
@@ -456,7 +456,7 @@ test("handleInternalUsageCommand returns enabled usage snapshot locally", async 
   const body = (await response.json()) as {
     content: Array<{ type: string; text: string }>;
   };
-  assert.equal(body.content[0].text.includes("Weekly Sonnet\n30%\nResets in 1d"), true);
+  assert.equal(body.content[0].text.includes("Weekly Sonnet\n70% left\nResets in 1d 0h 0m"), true);
 });
 
 test("handleInternalUsageCommand streams Responses API events for Codex clients", async () => {
@@ -509,7 +509,7 @@ test("handleInternalUsageCommand streams Responses API events for Codex clients"
   assert.match(response.headers.get("Content-Type") || "", /text\/event-stream/);
   const text = await response.text();
   assert.match(text, /event: response\.output_text\.delta/);
-  assert.match(text, /Weekly \(7 day\)\\n72%\\nResets in 1d/);
+  assert.match(text, /Weekly \(7 day\)\\n28% left\\nResets in 1d 0h 0m/);
   assert.match(text, /event: response\.completed/);
 });
 
@@ -566,7 +566,7 @@ test("handleInternalUsageCommand prefers Codex quota snapshots for Responses API
   assert.ok(response, "command should be handled locally");
   const text = await response.text();
   assert.match(text, /Codex Pro/);
-  assert.match(text, /Weekly \(7 day\)\\n18%\\nResets in 1d/);
+  assert.match(text, /Weekly \(7 day\)\\n82% left\\nResets in 1d 0h 0m/);
   assert.doesNotMatch(text, /Claude Max/);
 });
 
@@ -624,7 +624,7 @@ test("handleInternalUsageCommand keeps Claude quota snapshots for Anthropic call
     content: Array<{ type: string; text: string }>;
   };
   assert.match(body.content[0].text, /Claude Max/);
-  assert.match(body.content[0].text, /Weekly \(7 day\)\n72%\nResets in 1d/);
+  assert.match(body.content[0].text, /Weekly \(7 day\)\n28% left\nResets in 1d 0h 0m/);
   assert.doesNotMatch(body.content[0].text, /Codex Pro/);
 });
 

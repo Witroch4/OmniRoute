@@ -414,9 +414,9 @@ function getResetAt(quota: JsonRecord | null): string | null {
   return typeof quota.resetAt === "string" && quota.resetAt.trim() ? quota.resetAt : null;
 }
 
-function formatPercent(percent: number | null): string {
+function formatLeftPercent(percent: number | null): string {
   if (percent === null || !Number.isFinite(percent)) return "Unavailable";
-  return `${Math.round(percent)}%`;
+  return `${Math.round(100 - Math.max(0, Math.min(100, percent)))}% left`;
 }
 
 export function formatResetIn(resetAt: string | null, now = Date.now()): string {
@@ -428,12 +428,15 @@ export function formatResetIn(resetAt: string | null, now = Date.now()): string 
   if (deltaMs <= 0) return "now";
 
   const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
+  const totalMinutes = Math.max(1, Math.ceil(deltaMs / minuteMs));
+  const dayMinutes = 24 * 60;
+  const days = Math.floor(totalMinutes / dayMinutes);
+  const hours = Math.floor((totalMinutes % dayMinutes) / 60);
+  const minutes = totalMinutes % 60;
 
-  if (deltaMs < hourMs) return `${Math.max(1, Math.ceil(deltaMs / minuteMs))}m`;
-  if (deltaMs < dayMs) return `${Math.max(1, Math.ceil(deltaMs / hourMs))}h`;
-  return `${Math.max(1, Math.ceil(deltaMs / dayMs))}d`;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function formatPlan(plan: unknown): string {
@@ -487,7 +490,7 @@ function selectUsageSnapshot(
 
 function appendQuotaBlock(lines: string[], label: string, quota: JsonRecord | null, now: number) {
   lines.push(label);
-  lines.push(formatPercent(getQuotaUsedPercent(quota)));
+  lines.push(formatLeftPercent(getQuotaUsedPercent(quota)));
   lines.push(`Resets in ${formatResetIn(getResetAt(quota), now)}`);
 }
 

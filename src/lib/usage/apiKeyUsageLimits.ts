@@ -107,6 +107,11 @@ function formatUsagePercent(percent: number | null): string {
   return `${Math.round(percent)}%`;
 }
 
+function formatLeftPercent(percent: number | null): string {
+  if (percent === null || !Number.isFinite(percent)) return "Unavailable";
+  return `${Math.round(100 - clampPercent(percent))}% left`;
+}
+
 function formatResetIn(resetAt: string | null, now = Date.now()): string {
   if (!resetAt) return "unknown";
   const resetMs = Date.parse(resetAt);
@@ -116,27 +121,15 @@ function formatResetIn(resetAt: string | null, now = Date.now()): string {
   if (deltaMs <= 0) return "now";
 
   const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
+  const totalMinutes = Math.max(1, Math.ceil(deltaMs / minuteMs));
+  const dayMinutes = 24 * 60;
+  const days = Math.floor(totalMinutes / dayMinutes);
+  const hours = Math.floor((totalMinutes % dayMinutes) / 60);
+  const minutes = totalMinutes % 60;
 
-  const days = Math.floor(deltaMs / dayMs);
-  const hours = Math.floor((deltaMs % dayMs) / hourMs);
-  const minutes = Math.ceil((deltaMs % hourMs) / minuteMs);
-
-  if (days > 0) {
-    const parts = [`${days}d`];
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0 && parts.length < 3) parts.push(`${minutes}m`);
-    return parts.join(" ");
-  }
-
-  if (hours > 0) {
-    const parts = [`${hours}h`];
-    if (minutes > 0) parts.push(`${minutes}m`);
-    return parts.join(" ");
-  }
-
-  return `${Math.max(1, minutes)}m`;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function resetDay(value: string | null): string | null {
@@ -473,19 +466,19 @@ export function buildApiKeyUsageLimitText(
   now = Date.now()
 ): string {
   return [
-    "Cota diaria",
+    "Daily quota",
     formatUsd(status.dailyLimitUsd),
-    "Gasto diario",
+    "Daily spent",
     formatUsd(status.dailySpentUsd),
-    "Uso diario",
+    "Daily used",
     formatUsagePercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd)),
     `Resets in ${formatResetIn(status.dailyResetAtIso, now)}`,
     "",
-    "Cota semanal",
+    "Weekly quota",
     formatUsd(status.weeklyLimitUsd),
-    "Gasto semanal",
+    "Weekly spent",
     formatUsd(status.weeklySpentUsd),
-    "Uso semanal",
+    "Weekly used",
     formatUsagePercent(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd)),
     `Resets in ${formatResetIn(status.weeklyResetAtIso, now)}`,
   ].join("\n");
@@ -496,13 +489,12 @@ export function buildApiKeyUsageLimitPercentText(
   now = Date.now()
 ): string {
   return [
-    "Cota pessoal",
-    "Diaria",
-    formatUsagePercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd)),
+    "Daily",
+    formatLeftPercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd)),
     `Resets in ${formatResetIn(status.dailyResetAtIso, now)}`,
     "",
-    "Semanal",
-    formatUsagePercent(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd)),
+    "Weekly",
+    formatLeftPercent(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd)),
     `Resets in ${formatResetIn(status.weeklyResetAtIso, now)}`,
   ].join("\n");
 }

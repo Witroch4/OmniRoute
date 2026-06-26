@@ -395,21 +395,21 @@ test("buildApiKeyUsageLimitText returns API-key quota spend percentage and reset
   assert.equal(
     text,
     [
-      "Cota diaria",
+      "Daily quota",
       "$10.00",
-      "Gasto diario",
+      "Daily spent",
       "$2.00",
-      "Uso diario",
+      "Daily used",
       "20%",
-      "Resets in 7h",
+      "Resets in 7h 0m",
       "",
-      "Cota semanal",
+      "Weekly quota",
       "$50.00",
-      "Gasto semanal",
+      "Weekly spent",
       "$5.25",
-      "Uso semanal",
+      "Weekly used",
       "11%",
-      "Resets in 6d",
+      "Resets in 6d 0h 0m",
     ].join("\n")
   );
 });
@@ -439,7 +439,7 @@ test("buildApiKeyUsageLimitRejection includes over-quota percentage and reset hi
   const body = (await response.json()) as { error: { message: string } };
   assert.equal(
     body.error.message,
-    "This API key reached its weekly USD usage quota ($1.09 of $1.00, 109%). Resets in 6d. Choose another allowed model after reset."
+    "This API key reached its weekly USD usage quota ($1.09 of $1.00, 109%). Resets in 6d 0h 0m. Choose another allowed model after reset."
   );
 });
 
