@@ -147,6 +147,18 @@ const cases: Case[] = [
     method: "POST",
     expectedClass: "MANAGEMENT",
   },
+  {
+    name: "/api/usage/om-usage is PUBLIC because the route validates its own API key",
+    path: "/api/usage/om-usage",
+    method: "GET",
+    expectedClass: "PUBLIC",
+  },
+  {
+    name: "/api/usage/om-usage-extra stays MANAGEMENT",
+    path: "/api/usage/om-usage-extra",
+    method: "GET",
+    expectedClass: "MANAGEMENT",
+  },
 
   {
     name: "/api/providers/* MUST stay MANAGEMENT",

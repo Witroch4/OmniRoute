@@ -155,6 +155,20 @@ test("runAuthzPipeline keeps management API rejections as JSON", async () => {
   assert.equal(body.error.code, "AUTH_001");
 });
 
+test("runAuthzPipeline lets the self-authenticated usage command route reach its handler", async () => {
+  await forceAuthRequired();
+
+  const response = await pipeline.runAuthzPipeline(
+    request("http://localhost/api/usage/om-usage?provider=claude", {
+      headers: { authorization: "Bearer client-api-key" },
+    }),
+    { enforce: true }
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-omniroute-route-class"), "PUBLIC");
+});
+
 test("runAuthzPipeline rejects oversized API bodies before auth", async () => {
   const response = await pipeline.runAuthzPipeline(
     request("http://localhost/api/v1/chat/completions", {

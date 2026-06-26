@@ -1,3 +1,9 @@
+const PUBLIC_EXACT_API_ROUTES = [
+  // Self-authenticated terminal endpoint. The route validates the OmniRoute API
+  // key and allowUsageCommand itself, so it must not require management auth.
+  "/api/usage/om-usage",
+];
+
 const PUBLIC_API_ROUTE_PREFIXES = [
   "/api/auth/login",
   "/api/auth/logout",
@@ -24,6 +30,10 @@ const PUBLIC_READONLY_API_ROUTE_PREFIXES = [
 const PUBLIC_READONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export function isPublicApiRoute(pathname: string, method = "GET"): boolean {
+  if (PUBLIC_EXACT_API_ROUTES.includes(pathname)) {
+    return true;
+  }
+
   if (PUBLIC_API_ROUTE_PREFIXES.some((route) => pathname.startsWith(route))) {
     return true;
   }
@@ -35,4 +45,9 @@ export function isPublicApiRoute(pathname: string, method = "GET"): boolean {
   return PUBLIC_READONLY_API_ROUTE_PREFIXES.some((route) => pathname.startsWith(route));
 }
 
-export { PUBLIC_API_ROUTE_PREFIXES, PUBLIC_READONLY_API_ROUTE_PREFIXES, PUBLIC_READONLY_METHODS };
+export {
+  PUBLIC_EXACT_API_ROUTES,
+  PUBLIC_API_ROUTE_PREFIXES,
+  PUBLIC_READONLY_API_ROUTE_PREFIXES,
+  PUBLIC_READONLY_METHODS,
+};
