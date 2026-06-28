@@ -10,6 +10,7 @@ interface Props {
   lastRefreshedAt: Record<string, string | undefined>;
   emailsVisible: boolean;
   providerLabels: Record<string, string>;
+  renderInlineQuotaSummary?: (quota: any) => React.ReactNode;
   onRefresh: (id: string, provider: string) => void;
   onOpenCutoff: (connection: any) => void;
   onToggleActive: (id: string, nextActive: boolean) => void;
