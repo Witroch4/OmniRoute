@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, memo, useRef, useId } from "react";
 import { Card, Button, Input, Modal, CardSkeleton } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { getProviderDisplayName } from "@/lib/display/names";
 import { compareTr, matchesSearch } from "@/shared/utils/turkishText";
 import { ENDPOINT_CATEGORIES } from "@/shared/constants/endpointCategories";
@@ -126,7 +126,18 @@ interface ProviderConnection {
 
 interface KeyUsageStats {
   totalRequests: number;
+  totalCost: number;
   lastUsed: string | null;
+}
+
+function formatUsdCost(value: number, locale: string): string {
+  const amount = Number.isFinite(value) ? value : 0;
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: amount > 0 && amount < 1 ? 4 : 2,
+    maximumFractionDigits: amount > 0 && amount < 1 ? 4 : 2,
+  }).format(amount);
 }
 
 interface Model {
@@ -146,6 +157,7 @@ type ProviderGroup = [provider: string, models: Model[]];
 export default function ApiManagerPageClient() {
   const t = useTranslations("apiManager");
   const tc = useTranslations("common");
+  const locale = useLocale();
   const newKeyNameInputId = useId();
   const createKeyFormRef = useRef<HTMLDivElement | null>(null);
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -339,6 +351,10 @@ export default function ApiManagerPageClient() {
           (sum: number, entry: any) => sum + (Number(entry.requests) || 0),
           0
         );
+        const totalCost = matches.reduce((sum: number, entry: { cost?: unknown }) => {
+          const cost = Number(entry.cost);
+          return sum + (Number.isFinite(cost) ? cost : 0);
+        }, 0);
 
         // Match call logs by unique ID as well for the lastUsed timestamp
         // Prefer an exact apiKeyId match; fall back to name match for legacy
@@ -350,6 +366,7 @@ export default function ApiManagerPageClient() {
 
         stats[key.id] = {
           totalRequests,
+          totalCost,
           lastUsed,
         };
       }
@@ -1072,6 +1089,11 @@ export default function ApiManagerPageClient() {
                       {stats?.totalRequests ?? 0}{" "}
                       <span className="text-text-muted font-normal text-xs">{t("reqs")}</span>
                     </span>
+                    {(stats?.totalRequests ?? 0) > 0 && (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 tabular-nums">
+                        {formatUsdCost(stats?.totalCost ?? 0, locale)}
+                      </span>
+                    )}
                     {stats?.lastUsed ? (
                       <span className="text-[10px] text-text-muted">
                         {t("lastUsedOn", { date: new Date(stats.lastUsed).toLocaleDateString() })}
@@ -1084,6 +1106,14 @@ export default function ApiManagerPageClient() {
                     {new Date(key.createdAt).toLocaleDateString()}
                   </div>
                   <div className="col-span-2 flex items-center justify-end gap-1">
+                    <a
+                      href={`/dashboard/costs?range=all&apiKeyIds=${encodeURIComponent(key.id)}&groupBy=model`}
+                      className="p-2 hover:bg-emerald-500/10 rounded text-text-muted hover:text-emerald-500 opacity-0 group-hover:opacity-100 transition-all"
+                      title={`View costs for ${key.name}`}
+                      aria-label={`View costs for ${key.name}`}
+                    >
+                      <span className="material-symbols-outlined text-[18px]">payments</span>
+                    </a>
                     <button
                       onClick={() => handleRegenerateKey(key.id)}
                       className="p-2 hover:bg-amber-500/10 rounded text-text-muted hover:text-amber-500 opacity-0 group-hover:opacity-100 transition-all"

@@ -69,6 +69,14 @@ test("permissions modal switch buttons declare button type", () => {
   assert.equal(typedSwitchButtonCount, 3);
 });
 
+test("API key rows expose cost drilldown links", () => {
+  const source = readApiManagerPage();
+
+  assert.match(source, /formatUsdCost\(stats\?\.totalCost \?\? 0, locale\)/);
+  assert.match(source, /\/dashboard\/costs\?range=all&apiKeyIds=\$\{encodeURIComponent\(key\.id\)\}&groupBy=model/);
+  assert.match(source, />payments<\/span>/);
+});
+
 test("self-service API key scope labels do not expose missing placeholders", () => {
   const messageFiles = fs.readdirSync(messagesDir).filter((file) => file.endsWith(".json"));
 
