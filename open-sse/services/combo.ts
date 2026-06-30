@@ -2333,6 +2333,7 @@ export async function handleComboChat({
             log,
             tag: "COMBO",
             exhaustedLogLevel: "info",
+            structuredError,
           });
 
           // #2101: Prevent infinite fallback loops with 400 Bad Request errors that are genuinely
@@ -3240,6 +3241,7 @@ async function handleRoundRobinCombo({
           log,
           tag: "COMBO-RR",
           exhaustedLogLevel: "debug",
+          structuredError,
         });
 
         // Transient errors → mark in semaphore so round-robin stops stampeding this target.
