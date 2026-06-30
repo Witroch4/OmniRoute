@@ -84,6 +84,7 @@ import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTel
 import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
+import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
 import { cloneLogPayload } from "@/lib/logPayloads";
 import { handleInternalUsageCommand } from "@/lib/usage/internalUsageCommand";
 import {
@@ -229,13 +230,12 @@ export async function handleChat(
   // a clear OmniRoute-level error before any routing or upstream call (#5110).
   // Responses-API requests use `input` (not `messages`) so they are unaffected,
   // and an absent `messages` field is left to downstream validation.
-  if (Array.isArray((body as { messages?: unknown }).messages) &&
-    (body as { messages: unknown[] }).messages.length === 0) {
+  if (
+    Array.isArray((body as { messages?: unknown }).messages) &&
+    (body as { messages: unknown[] }).messages.length === 0
+  ) {
     log.warn("CHAT", "Rejecting request with empty messages array");
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      "messages: at least one message is required"
-    );
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: at least one message is required");
   }
 
   // Build clientRawRequest for logging (if not provided)
@@ -333,6 +333,7 @@ export async function handleChat(
     return policy.rejection;
   }
   const apiKeyInfo = policy.apiKeyInfo;
+  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
   telemetry.endPhase();
 
   // Guardrail pre-call pipeline — prompt injection, PII masking, and future custom rules.
@@ -630,6 +631,7 @@ export async function handleChat(
           sessionKey: sessionAffinityKey,
           ...(target?.allowRateLimitedConnection ? { allowRateLimitedConnections: true } : {}),
           ...(target?.connectionId ? { forcedConnectionId: target.connectionId } : {}),
+          ...(bypassProviderQuotaPolicy ? { bypassQuotaPolicy: true } : {}),
         }
       );
       if (!creds || creds.allRateLimited) return false;
@@ -645,6 +647,18 @@ export async function handleChat(
     ]);
     const relayConfig =
       combo.strategy === "context-relay" ? resolveComboConfig(combo, settings) : null;
+    const relayOptions =
+      combo.strategy === "context-relay" || bypassProviderQuotaPolicy
+        ? {
+            ...(combo.strategy === "context-relay"
+              ? {
+                  sessionId,
+                  config: relayConfig,
+                }
+              : {}),
+            ...(bypassProviderQuotaPolicy ? { bypassProviderQuotaPolicy: true } : {}),
+          }
+        : undefined;
     telemetry.endPhase();
 
     // Context-relay keeps generation in combo.ts, but handoff injection lives here
@@ -708,13 +722,7 @@ export async function handleChat(
       settings,
       allCombos,
       apiKeyAllowedConnections: apiKeyInfo?.allowedConnections ?? null,
-      relayOptions:
-        combo.strategy === "context-relay"
-          ? {
-              sessionId,
-              config: relayConfig,
-            }
-          : undefined,
+      relayOptions,
       signal: request?.signal ?? null,
     });
 
@@ -926,6 +934,7 @@ async function handleSingleModelChat(
     return runtimeOptions.providerId;
   })();
   const forceLiveComboTest = runtimeOptions.forceLiveComboTest === true;
+  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
   const hasForcedConnection =
     typeof runtimeOptions.forcedConnectionId === "string" &&
     runtimeOptions.forcedConnectionId.trim().length > 0;
@@ -1045,6 +1054,9 @@ async function handleSingleModelChat(
                       allowSuppressedConnections: true,
                       bypassQuotaPolicy: true,
                     }
+                  : {}),
+                ...(!forceLiveComboTest && bypassProviderQuotaPolicy
+                  ? { bypassQuotaPolicy: true }
                   : {}),
                 ...(runtimeOptions.forcedConnectionId
                   ? { forcedConnectionId: runtimeOptions.forcedConnectionId }
