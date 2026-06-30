@@ -1278,12 +1278,22 @@ export async function handleComboChat({
       log.warn("COMBO", "Failed to retrieve Last Known Good Provider. This is non-fatal.", { err });
     }
 
+    const autoCandidateResilienceSettings =
+      relayOptions?.bypassProviderQuotaPolicy === true
+        ? {
+            ...resilienceSettings,
+            quotaPreflight: {
+              ...resilienceSettings.quotaPreflight,
+              enabled: false,
+            },
+          }
+        : resilienceSettings;
     const candidates = await buildAutoCandidates(
       eligibleTargets,
       combo.name,
       relayOptions?.sessionId,
       resetWindowConfig,
-      resilienceSettings
+      autoCandidateResilienceSettings
     );
     const routableCandidates = candidates.filter(
       (candidate) => candidate.quotaCutoffBlocked !== true
