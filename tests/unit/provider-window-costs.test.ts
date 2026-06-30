@@ -192,3 +192,141 @@ test("Claude provider window costs split spending across API keys from the curre
   assert.equal(result.rows[1].costUsd, 1.5);
   assert.equal(result.rows[1].limitUsd, null);
 });
+
+test("provider window costs use the recorded reset event as the cost cutoff", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, output: 1, cached: 1, cache_creation: 1, reasoning: 1 },
+    },
+  });
+
+  providerLimits.setProviderLimitsCache("claude-reset-event", {
+    quotas: {
+      "weekly (7d)": {
+        used: 25,
+        total: 100,
+        remainingPercentage: 75,
+        resetAt: "2026-07-01T10:00:00.000Z",
+      },
+    },
+    plan: "default_claude_max_20x",
+    message: null,
+    fetchedAt: "2026-06-25T12:00:00.000Z",
+  });
+
+  core
+    .getDbInstance()
+    .prepare(
+      `
+      INSERT INTO provider_quota_reset_events
+        (provider, connection_id, window_key, window_started_at, window_resets_at,
+         observed_at, previous_remaining_percentage, new_remaining_percentage,
+         previous_used_percentage, new_used_percentage, raw_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+    )
+    .run(
+      "claude",
+      "claude-reset-event",
+      "weekly (7d)",
+      "2026-06-24T12:00:00.000Z",
+      "2026-07-01T10:00:00.000Z",
+      "2026-06-24T12:01:00.000Z",
+      0,
+      100,
+      100,
+      0,
+      null
+    );
+
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-reset-event",
+    tokens: { input: 5_000_000, output: 0 },
+    timestamp: "2026-06-24T11:30:00.000Z",
+  });
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-reset-event",
+    tokens: { input: 500_000, output: 0 },
+    timestamp: "2026-06-24T12:30:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "claude",
+    connectionId: "claude-reset-event",
+    now: Date.parse("2026-06-25T12:00:00.000Z"),
+  });
+
+  assert.equal(result.windowStartAt, "2026-06-24T12:00:00.000Z");
+  assert.equal(result.totalCostUsd, 0.5);
+  assert.equal(result.estimatedFullQuotaUsd, 2);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].requests, 1);
+});
+
+test("provider window costs prefer recorded USD history over repricing usage tokens", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, output: 1, cached: 0.1, cache_creation: 1, reasoning: 1 },
+    },
+  });
+
+  const key = await apiKeys.createApiKey("Recorded USD Key", "machine-recorded-usd");
+
+  providerLimits.setProviderLimitsCache("claude-recorded-cost", {
+    quotas: {
+      "weekly (7d)": {
+        used: 50,
+        total: 100,
+        remainingPercentage: 50,
+        resetAt: "2026-07-01T10:00:00.000Z",
+      },
+    },
+    plan: "default_claude_max_20x",
+    message: null,
+    fetchedAt: "2026-06-25T12:00:00.000Z",
+  });
+
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-recorded-cost",
+    apiKeyId: key.id,
+    apiKeyName: "Recorded old",
+    tokens: { input: 1_000_000, cacheRead: 1_000_000, output: 0 },
+    timestamp: "2026-06-24T10:00:00.000Z",
+  });
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-recorded-cost",
+    apiKeyId: key.id,
+    apiKeyName: "Recorded old",
+    tokens: { input: 1_000_000, cacheRead: 1_000_000, output: 0 },
+    timestamp: "2026-06-24T10:01:00.000Z",
+  });
+
+  core
+    .getDbInstance()
+    .prepare("INSERT INTO domain_cost_history (api_key_id, cost, timestamp) VALUES (?, ?, ?)")
+    .run(key.id, 10, Date.parse("2026-06-24T10:00:00.010Z"));
+  core
+    .getDbInstance()
+    .prepare("INSERT INTO domain_cost_history (api_key_id, cost, timestamp) VALUES (?, ?, ?)")
+    .run(key.id, 7, Date.parse("2026-06-24T10:01:00.010Z"));
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "claude",
+    connectionId: "claude-recorded-cost",
+    now: Date.parse("2026-06-25T12:00:00.000Z"),
+  });
+
+  assert.equal(result.totalCostUsd, 17);
+  assert.equal(result.estimatedFullQuotaUsd, 34);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].apiKeyName, "Recorded USD Key");
+  assert.equal(result.rows[0].costUsd, 17);
+});

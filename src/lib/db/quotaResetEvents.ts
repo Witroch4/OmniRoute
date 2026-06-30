@@ -36,6 +36,8 @@ interface QuotaSnapshotObservationRow {
   remainingPercentage: number | null;
 }
 
+const RESET_EVENT_OBSERVED_TOLERANCE_MS = 5 * 60 * 1000;
+
 function toNumberOrNull(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -130,9 +132,13 @@ export function recordProviderQuotaResetEventIfChanged(input: ResetEventInput): 
   if (currentResetMs <= previousResetMs) return;
   if (resetDay(previousResetIso) === resetDay(currentResetIso)) return;
 
+  const observedAt = parseResetIso(input.observedAt ?? null) ?? new Date().toISOString();
+  const observedMs = Date.parse(observedAt);
+  if (!Number.isFinite(observedMs)) return;
+  if (previousResetMs > observedMs + RESET_EVENT_OBSERVED_TOLERANCE_MS) return;
+
   const previousRemaining = clampPercent(toNumberOrNull(previous?.remainingPercentage));
   const currentRemaining = clampPercent(toNumberOrNull(input.currentRemainingPercentage));
-  const observedAt = parseResetIso(input.observedAt ?? null) ?? new Date().toISOString();
 
   try {
     const db = getDbInstance() as unknown as DbLike;
@@ -188,6 +194,8 @@ export function getProviderQuotaWindowStartIso(
           AND LOWER(window_key) LIKE '%weekly%'
           AND LOWER(window_key) NOT LIKE '%sonnet%'
           AND observed_at <= @nowIso
+          AND window_started_at <= @nowIso
+          AND window_started_at < window_resets_at
         ORDER BY observed_at DESC, id DESC
       `
       )
@@ -195,7 +203,14 @@ export function getProviderQuotaWindowStartIso(
 
     for (const row of rows) {
       if (resetDay(row.windowResetsAt) === targetDay) {
-        return parseResetIso(row.windowStartedAt);
+        const startedAt = parseResetIso(row.windowStartedAt);
+        const resetsAt = parseResetIso(row.windowResetsAt);
+        if (!startedAt || !resetsAt) continue;
+        const startedMs = Date.parse(startedAt);
+        const resetsMs = Date.parse(resetsAt);
+        if (!Number.isFinite(startedMs) || !Number.isFinite(resetsMs)) continue;
+        if (startedMs > nowMs || startedMs >= resetsMs) continue;
+        return startedAt;
       }
     }
     return null;

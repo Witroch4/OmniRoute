@@ -22,6 +22,7 @@ interface ProviderWindowCostPayload {
   windowStartAt: string;
   windowResetAt: string | null;
   windowSource: "provider_weekly_reset" | "fallback_rolling_7d";
+  windowStartSource: "recorded_reset_event" | "inferred_from_reset_at" | "fallback_rolling_7d";
   quotaName: string | null;
   quotaUsedPercent: number | null;
   quotaRemainingPercent: number | null;
@@ -204,9 +205,11 @@ export default function ProviderUsdCostModal({
                     {formatDateTime(payload.windowResetAt)}
                   </span>
                   <span>
-                    {payload.windowSource === "provider_weekly_reset"
-                      ? `From ${payload.quotaName || "weekly quota"} reset`
-                      : "Fallback rolling 7d"}
+                    {payload.windowStartSource === "recorded_reset_event"
+                      ? `From recorded ${payload.quotaName || "weekly quota"} reset`
+                      : payload.windowSource === "provider_weekly_reset"
+                        ? `From ${payload.quotaName || "weekly quota"} reset`
+                        : "Fallback rolling 7d"}
                   </span>
                 </div>
                 <div className="mt-3 flex flex-col gap-2">

@@ -8,9 +8,8 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-quota-res
 process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../../src/lib/db/core.ts");
-const { recordProviderQuotaResetEventIfChanged, getProviderQuotaWindowStartIso } = await import(
-  "../../../src/lib/db/quotaResetEvents.ts"
-);
+const { recordProviderQuotaResetEventIfChanged, getProviderQuotaWindowStartIso } =
+  await import("../../../src/lib/db/quotaResetEvents.ts");
 
 // Force migrations (incl. 108_provider_quota_reset_events) to run.
 core.getDbInstance();
@@ -81,6 +80,30 @@ test("does not record for a non-weekly (e.g. daily) window", () => {
   });
   assert.equal(
     getProviderQuotaWindowStartIso("conn-daily", CUR_RESET, Date.parse(OBSERVED) + 1000),
+    null
+  );
+});
+
+test("does not use a weekly reset transition whose previous reset is still in the future", () => {
+  recordProviderQuotaResetEventIfChanged({
+    provider: "codex",
+    connectionId: "conn-future-start",
+    windowKey: "weekly",
+    currentResetAt: "2026-07-07T01:42:22.000Z",
+    currentRemainingPercentage: 100,
+    previousObservation: {
+      resetAt: "2026-07-06T10:11:58.000Z",
+      remainingPercentage: 77,
+    },
+    observedAt: "2026-06-30T01:44:39.457Z",
+  });
+
+  assert.equal(
+    getProviderQuotaWindowStartIso(
+      "conn-future-start",
+      "2026-07-07T01:42:22.000Z",
+      Date.parse("2026-06-30T01:44:40.000Z")
+    ),
     null
   );
 });

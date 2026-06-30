@@ -2,26 +2,44 @@ import { getCostSummary } from "@/domain/costRules";
 import { getApiKeys } from "@/lib/db/apiKeys";
 import { getDbInstance } from "@/lib/db/core";
 import { getAllProviderLimitsCache, getProviderLimitsCache } from "@/lib/db/providerLimits";
+import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
 import { calculateCost } from "@/lib/usage/costCalculator";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const RECORDED_COST_MATCH_TOLERANCE_MS = 30_000;
 
 type JsonRecord = Record<string, unknown>;
 
-interface CostRow {
+interface UsageCostRow {
+  id: number;
   apiKeyId: string | null;
   apiKeyName: string | null;
   provider: string;
   model: string;
   serviceTier: string;
-  requests: number;
   promptTokens: number;
   completionTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
   reasoningTokens: number;
   totalTokens: number;
-  lastUsed: string | null;
+  timestamp: string | null;
+}
+
+interface RecordedCostRow {
+  rowId: number;
+  apiKeyId: string;
+  timestamp: number;
+  cost: number;
+}
+
+interface ProviderWindowCostModelRow {
+  model: string;
+  provider: string;
+  serviceTier: string;
+  requests: number;
+  totalTokens: number;
+  costUsd: number;
 }
 
 export interface ProviderWindowCostBreakdownRow {
@@ -38,14 +56,11 @@ export interface ProviderWindowCostBreakdownRow {
   limitUsedPercent: number | null;
   budgetResetAt: string | null;
   lastUsed: string | null;
-  models: Array<{
-    model: string;
-    provider: string;
-    serviceTier: string;
-    requests: number;
-    totalTokens: number;
-    costUsd: number;
-  }>;
+  models: ProviderWindowCostModelRow[];
+}
+
+interface ProviderWindowCostAggregateRow extends ProviderWindowCostBreakdownRow {
+  modelMap: Map<string, ProviderWindowCostModelRow>;
 }
 
 export interface ProviderWindowCostBreakdown {
@@ -54,6 +69,7 @@ export interface ProviderWindowCostBreakdown {
   windowStartAt: string;
   windowResetAt: string | null;
   windowSource: "provider_weekly_reset" | "fallback_rolling_7d";
+  windowStartSource: "recorded_reset_event" | "inferred_from_reset_at" | "fallback_rolling_7d";
   quotaName: string | null;
   quotaUsedPercent: number | null;
   quotaRemainingPercent: number | null;
@@ -93,6 +109,21 @@ function parseResetAt(value: unknown, nowMs: number): number | null {
   const parsed = Date.parse(resetAt);
   if (!Number.isFinite(parsed) || parsed <= nowMs) return null;
   return parsed;
+}
+
+function getRecordedWindowStartMs(
+  connectionId: string | null,
+  resetMs: number,
+  nowMs: number
+): number | null {
+  if (!connectionId) return null;
+  const resetIso = new Date(resetMs).toISOString();
+  const startIso = getProviderQuotaWindowStartIso(connectionId, resetIso, nowMs);
+  if (!startIso) return null;
+  const startMs = Date.parse(startIso);
+  if (!Number.isFinite(startMs)) return null;
+  if (startMs > nowMs || startMs >= resetMs) return null;
+  return startMs;
 }
 
 function getRemainingPercent(quota: JsonRecord): number | null {
@@ -137,6 +168,7 @@ function selectWeeklyWindow(
   quotaName: string | null;
   quotaUsedPercent: number | null;
   quotaRemainingPercent: number | null;
+  windowStartSource: ProviderWindowCostBreakdown["windowStartSource"];
 } {
   const cacheEntries = connectionId
     ? [[connectionId, getProviderLimitsCache(connectionId)] as const]
@@ -144,13 +176,14 @@ function selectWeeklyWindow(
 
   let selected: {
     score: number;
+    connectionId: string;
     resetMs: number;
     quotaName: string;
     quotaUsedPercent: number | null;
     quotaRemainingPercent: number | null;
   } | null = null;
 
-  for (const [, cache] of cacheEntries) {
+  for (const [entryConnectionId, cache] of cacheEntries) {
     const quotas = toRecord(cache?.quotas);
     for (const [name, rawQuota] of Object.entries(quotas)) {
       const score = scoreWeeklyQuota(name);
@@ -168,6 +201,7 @@ function selectWeeklyWindow(
       ) {
         selected = {
           score,
+          connectionId: entryConnectionId,
           resetMs,
           quotaName: name,
           quotaUsedPercent: usedPercent,
@@ -178,10 +212,16 @@ function selectWeeklyWindow(
   }
 
   if (selected) {
+    const recordedStartMs = getRecordedWindowStartMs(
+      selected.connectionId,
+      selected.resetMs,
+      nowMs
+    );
     return {
-      startMs: selected.resetMs - WEEK_MS,
+      startMs: recordedStartMs ?? selected.resetMs - WEEK_MS,
       resetMs: selected.resetMs,
       source: "provider_weekly_reset",
+      windowStartSource: recordedStartMs ? "recorded_reset_event" : "inferred_from_reset_at",
       quotaName: selected.quotaName,
       quotaUsedPercent: selected.quotaUsedPercent,
       quotaRemainingPercent: selected.quotaRemainingPercent,
@@ -192,6 +232,7 @@ function selectWeeklyWindow(
     startMs: nowMs - WEEK_MS,
     resetMs: null,
     source: "fallback_rolling_7d",
+    windowStartSource: "fallback_rolling_7d",
     quotaName: null,
     quotaUsedPercent: null,
     quotaRemainingPercent: null,
@@ -219,6 +260,129 @@ async function getCurrentApiKeyNames(): Promise<Map<string, string>> {
   return names;
 }
 
+function uniqueApiKeyIds(rows: UsageCostRow[]): string[] {
+  return Array.from(
+    new Set(
+      rows
+        .map((row) => (typeof row.apiKeyId === "string" ? row.apiKeyId : ""))
+        .filter((value) => value.length > 0)
+    )
+  );
+}
+
+function appendNamedPlaceholders(
+  params: Record<string, unknown>,
+  prefix: string,
+  values: string[]
+): string {
+  return values
+    .map((value, index) => {
+      const key = `${prefix}${index}`;
+      params[key] = value;
+      return `@${key}`;
+    })
+    .join(", ");
+}
+
+function getRecordedCostsByApiKey(
+  apiKeyIds: string[],
+  sinceMs: number,
+  untilMs: number
+): Map<string, RecordedCostRow[]> {
+  if (apiKeyIds.length === 0) return new Map();
+
+  try {
+    const params: Record<string, unknown> = {
+      sinceMs: Math.max(0, sinceMs - RECORDED_COST_MATCH_TOLERANCE_MS),
+      untilMs: untilMs + RECORDED_COST_MATCH_TOLERANCE_MS,
+    };
+    const placeholders = appendNamedPlaceholders(params, "apiKey", apiKeyIds);
+    const rows = getDbInstance()
+      .prepare<RecordedCostRow>(
+        `
+        SELECT
+          id as rowId,
+          api_key_id as apiKeyId,
+          timestamp,
+          cost
+        FROM domain_cost_history
+        WHERE api_key_id IN (${placeholders})
+          AND timestamp >= @sinceMs
+          AND timestamp <= @untilMs
+        ORDER BY api_key_id ASC, timestamp ASC, rowid ASC
+      `
+      )
+      .all(params);
+
+    const byApiKey = new Map<string, RecordedCostRow[]>();
+    for (const row of rows) {
+      if (!row.apiKeyId || !Number.isFinite(row.timestamp) || !Number.isFinite(row.cost)) {
+        continue;
+      }
+      const list = byApiKey.get(row.apiKeyId) ?? [];
+      list.push(row);
+      byApiKey.set(row.apiKeyId, list);
+    }
+    return byApiKey;
+  } catch {
+    return new Map();
+  }
+}
+
+function findClosestRecordedCost(
+  candidates: RecordedCostRow[] | undefined,
+  timestampMs: number,
+  usedRecordedRows: Set<number>
+): RecordedCostRow | null {
+  if (!candidates?.length || !Number.isFinite(timestampMs)) return null;
+
+  let best: RecordedCostRow | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    if (usedRecordedRows.has(candidate.rowId)) continue;
+    const delta = Math.abs(candidate.timestamp - timestampMs);
+    if (delta > RECORDED_COST_MATCH_TOLERANCE_MS) {
+      if (candidate.timestamp > timestampMs + RECORDED_COST_MATCH_TOLERANCE_MS) break;
+      continue;
+    }
+    if (delta < bestDelta) {
+      best = candidate;
+      bestDelta = delta;
+    }
+  }
+
+  if (best) usedRecordedRows.add(best.rowId);
+  return best;
+}
+
+async function getUsageRowCostUsd(
+  row: UsageCostRow,
+  recordedCostsByApiKey: Map<string, RecordedCostRow[]>,
+  usedRecordedRows: Set<number>
+): Promise<number> {
+  const usageTimestampMs = Date.parse(row.timestamp ?? "");
+  const recordedCost = findClosestRecordedCost(
+    row.apiKeyId ? recordedCostsByApiKey.get(row.apiKeyId) : undefined,
+    usageTimestampMs,
+    usedRecordedRows
+  );
+  if (recordedCost) return Math.max(0, toNumber(recordedCost.cost));
+
+  return calculateCost(
+    row.provider,
+    row.model,
+    {
+      input: toNumber(row.promptTokens),
+      output: toNumber(row.completionTokens),
+      cacheRead: toNumber(row.cacheReadTokens),
+      cacheCreation: toNumber(row.cacheCreationTokens),
+      reasoning: toNumber(row.reasoningTokens),
+    },
+    { serviceTier: row.serviceTier }
+  );
+}
+
 export async function getProviderWindowCostBreakdown({
   provider,
   connectionId = null,
@@ -233,11 +397,18 @@ export async function getProviderWindowCostBreakdown({
   const window = selectWeeklyWindow(providerKey, connectionId, nowMs);
   const windowStartAt = new Date(window.startMs).toISOString();
   const windowResetAt = window.resetMs ? new Date(window.resetMs).toISOString() : null;
+  const nowIso = new Date(nowMs).toISOString();
 
-  const where = ["LOWER(provider) = @provider", "timestamp >= @since"];
-  const params: Record<string, string> = {
+  const where = [
+    "LOWER(provider) = @provider",
+    "timestamp >= @since",
+    "timestamp <= @nowIso",
+    "COALESCE(success, 1) = 1",
+  ];
+  const params: Record<string, unknown> = {
     provider: providerKey,
     since: windowStartAt,
+    nowIso,
   };
   if (windowResetAt) {
     where.push("timestamp < @resetAt");
@@ -248,40 +419,40 @@ export async function getProviderWindowCostBreakdown({
     params.connectionId = connectionId;
   }
 
-  const rows = getDbInstance()
-    .prepare<CostRow>(
+  const usageRows = getDbInstance()
+    .prepare<UsageCostRow>(
       `
       SELECT
+        id,
         NULLIF(api_key_id, '') as apiKeyId,
         NULLIF(api_key_name, '') as apiKeyName,
         LOWER(provider) as provider,
         LOWER(model) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-        COUNT(*) as requests,
-        COALESCE(SUM(tokens_input), 0) as promptTokens,
-        COALESCE(SUM(tokens_output), 0) as completionTokens,
-        COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
-        COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
-        MAX(timestamp) as lastUsed
+        COALESCE(tokens_input, 0) as promptTokens,
+        COALESCE(tokens_output, 0) as completionTokens,
+        COALESCE(tokens_cache_read, 0) as cacheReadTokens,
+        COALESCE(tokens_cache_creation, 0) as cacheCreationTokens,
+        COALESCE(tokens_reasoning, 0) as reasoningTokens,
+        COALESCE(tokens_input + tokens_output, 0) as totalTokens,
+        timestamp
       FROM usage_history
       WHERE ${where.join(" AND ")}
-      GROUP BY
-        COALESCE(NULLIF(api_key_id, ''), NULLIF(api_key_name, ''), 'unattributed'),
-        NULLIF(api_key_id, ''),
-        NULLIF(api_key_name, ''),
-        LOWER(provider),
-        LOWER(model),
-        serviceTier
+      ORDER BY timestamp ASC, id ASC
       `
     )
     .all(params);
 
   const currentApiKeyNames = await getCurrentApiKeyNames();
-  const byApiKey = new Map<string, ProviderWindowCostBreakdownRow>();
+  const recordedCostsByApiKey = getRecordedCostsByApiKey(
+    uniqueApiKeyIds(usageRows),
+    window.startMs,
+    nowMs
+  );
+  const usedRecordedRows = new Set<number>();
+  const byApiKey = new Map<string, ProviderWindowCostAggregateRow>();
 
-  for (const row of rows) {
+  for (const row of usageRows) {
     const apiKeyId = row.apiKeyId || null;
     const apiKeyName = row.apiKeyName || null;
     const apiKeyKey = makeApiKeyKey(apiKeyId, apiKeyName);
@@ -291,18 +462,7 @@ export async function getProviderWindowCostBreakdown({
       apiKeyId ||
       "Unattributed";
     const costUsd = roundUsd(
-      await calculateCost(
-        row.provider,
-        row.model,
-        {
-          input: toNumber(row.promptTokens),
-          output: toNumber(row.completionTokens),
-          cacheRead: toNumber(row.cacheReadTokens),
-          cacheCreation: toNumber(row.cacheCreationTokens),
-          reasoning: toNumber(row.reasoningTokens),
-        },
-        { serviceTier: row.serviceTier }
-      )
+      await getUsageRowCostUsd(row, recordedCostsByApiKey, usedRecordedRows)
     );
 
     let aggregate = byApiKey.get(apiKeyKey);
@@ -336,46 +496,55 @@ export async function getProviderWindowCostBreakdown({
         budgetResetAt,
         lastUsed: null,
         models: [],
+        modelMap: new Map(),
       };
       byApiKey.set(apiKeyKey, aggregate);
     }
 
-    aggregate.requests += toNumber(row.requests);
+    aggregate.requests += 1;
     aggregate.promptTokens += toNumber(row.promptTokens);
     aggregate.completionTokens += toNumber(row.completionTokens);
     aggregate.totalTokens += toNumber(row.totalTokens);
     aggregate.costUsd = roundUsd(aggregate.costUsd + costUsd);
-    if (!aggregate.lastUsed || (row.lastUsed && row.lastUsed > aggregate.lastUsed)) {
-      aggregate.lastUsed = row.lastUsed || aggregate.lastUsed;
+    if (!aggregate.lastUsed || (row.timestamp && row.timestamp > aggregate.lastUsed)) {
+      aggregate.lastUsed = row.timestamp || aggregate.lastUsed;
     }
-    aggregate.models.push({
+    const modelKey = `${row.provider}\0${row.model}\0${row.serviceTier}`;
+    const model = aggregate.modelMap.get(modelKey) ?? {
       model: row.model,
       provider: row.provider,
       serviceTier: row.serviceTier,
-      requests: toNumber(row.requests),
-      totalTokens: toNumber(row.totalTokens),
-      costUsd,
-    });
+      requests: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    };
+    model.requests += 1;
+    model.totalTokens += toNumber(row.totalTokens);
+    model.costUsd = roundUsd(model.costUsd + costUsd);
+    aggregate.modelMap.set(modelKey, model);
   }
 
   const breakdownRows = Array.from(byApiKey.values())
     .map((row) => {
       const limitUsedPercent =
         row.limitUsd && row.limitUsd > 0 ? roundPercent((row.costUsd / row.limitUsd) * 100) : null;
+      const models = Array.from(row.modelMap.values())
+        .map((model) => ({ ...model, costUsd: roundUsd(model.costUsd) }))
+        .sort((left, right) => right.costUsd - left.costUsd);
+      const { modelMap, ...publicRow } = row;
+      void modelMap;
       return {
-        ...row,
+        ...publicRow,
         costUsd: roundUsd(row.costUsd),
         limitUsedPercent,
-        models: row.models
-          .map((model) => ({ ...model, costUsd: roundUsd(model.costUsd) }))
-          .sort((left, right) => right.costUsd - left.costUsd),
+        models,
       };
     })
     .sort((left, right) => right.costUsd - left.costUsd);
 
   const totalCostUsd = roundUsd(breakdownRows.reduce((sum, row) => sum + row.costUsd, 0));
   const estimatedFullQuotaUsd =
-    window.quotaUsedPercent && window.quotaUsedPercent > 0
+    totalCostUsd > 0 && window.quotaUsedPercent && window.quotaUsedPercent > 0
       ? roundUsd(totalCostUsd / (window.quotaUsedPercent / 100))
       : null;
 
@@ -385,6 +554,7 @@ export async function getProviderWindowCostBreakdown({
     windowStartAt,
     windowResetAt,
     windowSource: window.source,
+    windowStartSource: window.windowStartSource,
     quotaName: window.quotaName,
     quotaUsedPercent:
       window.quotaUsedPercent === null ? null : roundPercent(window.quotaUsedPercent),
