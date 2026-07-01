@@ -3,6 +3,7 @@ import {
   buildApiKeyUsageLimitText,
   type ApiKeyUsageLimitStatus,
 } from "@/lib/usage/apiKeyUsageLimits";
+import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 
 export const INTERNAL_USAGE_COMMAND = "@@om-usage";
 export const USAGE_COMMAND_DISABLED_MESSAGE = "Usage command is disabled for this API key.";
@@ -634,22 +635,27 @@ export async function handleInternalUsageCommandHttpRequest(
   request: Request,
   deps: InternalUsageCommandDeps = {}
 ): Promise<Response> {
-  const resolvedDeps = await normalizeDeps(deps);
-  const apiKey = extractUsageCommandApiKey(request);
-  if (!apiKey || !(await resolvedDeps.isValidApiKey(apiKey))) {
-    return createPlainUsageCommandResponse(USAGE_COMMAND_AUTH_REQUIRED_MESSAGE, 401);
-  }
+  try {
+    const resolvedDeps = await normalizeDeps(deps);
+    const apiKey = extractUsageCommandApiKey(request);
+    if (!apiKey || !(await resolvedDeps.isValidApiKey(apiKey))) {
+      return createPlainUsageCommandResponse(USAGE_COMMAND_AUTH_REQUIRED_MESSAGE, 401);
+    }
 
-  const metadata = await resolvedDeps.getApiKeyMetadata(apiKey);
-  if (!metadata?.id) {
-    return createPlainUsageCommandResponse(USAGE_COMMAND_AUTH_REQUIRED_MESSAGE, 401);
-  }
+    const metadata = await resolvedDeps.getApiKeyMetadata(apiKey);
+    if (!metadata?.id) {
+      return createPlainUsageCommandResponse(USAGE_COMMAND_AUTH_REQUIRED_MESSAGE, 401);
+    }
 
-  if (metadata.allowUsageCommand !== true) {
-    return createPlainUsageCommandResponse(USAGE_COMMAND_DISABLED_MESSAGE, 403);
-  }
+    if (metadata.allowUsageCommand !== true) {
+      return createPlainUsageCommandResponse(USAGE_COMMAND_DISABLED_MESSAGE, 403);
+    }
 
-  return createPlainUsageCommandResponse(
-    await buildUsageCommandText(metadata, resolvedDeps, inferHttpUsageCommandSelection(request))
-  );
+    return createPlainUsageCommandResponse(
+      await buildUsageCommandText(metadata, resolvedDeps, inferHttpUsageCommandSelection(request))
+    );
+  } catch (err) {
+    const body = buildErrorBody(500, err instanceof Error ? err.message : String(err));
+    return Response.json(body, { status: 500 });
+  }
 }

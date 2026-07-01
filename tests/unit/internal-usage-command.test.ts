@@ -261,6 +261,38 @@ test("handleInternalUsageCommandHttpRequest returns terminal text for an allowed
   );
 });
 
+test("handleInternalUsageCommandHttpRequest sanitizes internal errors and never leaks stack traces", async () => {
+  const response = await handleInternalUsageCommandHttpRequest(
+    new Request("http://localhost/api/usage/om-usage", {
+      headers: { Authorization: "Bearer sk-boom" },
+    }),
+    {
+      isValidApiKey: async () => {
+        throw new Error(
+          `boom at /home/diegosouzapw/dev/proxys/OmniRoute/src/lib/usage/internalUsageCommand.ts:1:1`
+        );
+      },
+      getApiKeyMetadata: async () => {
+        throw new Error("metadata lookup must not run when auth check throws");
+      },
+      getProviderConnectionById: async () => null,
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => null,
+      getAllProviderLimitsCache: () => ({}),
+      getApiKeyUsageLimitStatus: async () => {
+        throw new Error("usage limit lookup must not run when auth check throws");
+      },
+    }
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get("content-type"), "application/json");
+  const body = await response.json();
+  assert.equal(typeof body.error.message, "string");
+  assert.equal(body.error.message.includes("at /"), false);
+  assert.equal(body.error.message.includes("internalUsageCommand.ts"), false);
+});
+
 test("handleInternalUsageCommandHttpRequest rejects invalid API keys as plain text", async () => {
   const response = await handleInternalUsageCommandHttpRequest(
     new Request("http://localhost/api/usage/om-usage", {
