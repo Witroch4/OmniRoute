@@ -387,6 +387,104 @@ test("provider window costs cut at an observed same-resetAt quota reset", async 
   assert.equal(result.rows[0].requests, 1);
 });
 
+test("provider window costs use persisted quota snapshots when the live limits cache is empty", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, output: 1, cached: 1, cache_creation: 1, reasoning: 1 },
+    },
+  });
+
+  const db = core.getDbInstance();
+  const insertSnapshot = db.prepare(`
+    INSERT INTO quota_snapshots (
+      provider,
+      connection_id,
+      window_key,
+      remaining_percentage,
+      is_exhausted,
+      next_reset_at,
+      window_duration_ms,
+      raw_data,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insertSnapshot.run(
+    "claude",
+    "claude-snapshot-only",
+    "weekly (7d)",
+    30,
+    0,
+    "2026-07-02T23:00:00.000Z",
+    null,
+    null,
+    "2026-07-02T22:39:00.000Z"
+  );
+  insertSnapshot.run(
+    "claude",
+    "claude-snapshot-only",
+    "weekly (7d)",
+    100,
+    0,
+    "2026-07-09T23:00:00.000Z",
+    null,
+    null,
+    "2026-07-02T23:06:00.000Z"
+  );
+
+  db.prepare(
+    `
+      INSERT INTO provider_quota_reset_events
+        (provider, connection_id, window_key, window_started_at, window_resets_at,
+         observed_at, previous_remaining_percentage, new_remaining_percentage,
+         previous_used_percentage, new_used_percentage, raw_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+  ).run(
+    "claude",
+    "claude-snapshot-only",
+    "weekly (7d)",
+    "2026-07-02T23:00:00.000Z",
+    "2026-07-09T23:00:00.000Z",
+    "2026-07-02T23:06:00.000Z",
+    30,
+    100,
+    70,
+    0,
+    null
+  );
+
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-snapshot-only",
+    tokens: { input: 9_000_000, output: 0 },
+    timestamp: "2026-07-02T22:50:00.000Z",
+  });
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    connectionId: "claude-snapshot-only",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-07-02T23:10:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "claude",
+    connectionId: "claude-snapshot-only",
+    now: Date.parse("2026-07-02T23:16:00.000Z"),
+  });
+
+  assert.equal(result.windowSource, "provider_weekly_reset");
+  assert.equal(result.windowStartSource, "recorded_reset_event");
+  assert.equal(result.windowStartAt, "2026-07-02T23:00:00.000Z");
+  assert.equal(result.windowResetAt, "2026-07-09T23:00:00.000Z");
+  assert.equal(result.quotaRemainingPercent, 100);
+  assert.equal(result.totalCostUsd, 1);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].requests, 1);
+});
+
 test("provider window costs prefer recorded USD history over repricing usage tokens", async () => {
   await localDb.updatePricing({
     claude: {

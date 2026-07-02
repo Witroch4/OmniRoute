@@ -63,6 +63,15 @@ interface ProviderWindowCostAggregateRow extends ProviderWindowCostBreakdownRow 
   modelMap: Map<string, ProviderWindowCostModelRow>;
 }
 
+interface QuotaSnapshotWindowRow {
+  connectionId: string;
+  windowKey: string;
+  remainingPercentage: number | null;
+  nextResetAt: string | null;
+  createdAt: string | null;
+  rowId: number;
+}
+
 export interface ProviderWindowCostBreakdown {
   provider: string;
   connectionId: string | null;
@@ -232,6 +241,9 @@ function selectWeeklyWindow(
     };
   }
 
+  const snapshotWindow = selectPersistedSnapshotWeeklyWindow(provider, connectionId, nowMs);
+  if (snapshotWindow) return snapshotWindow;
+
   return {
     startMs: nowMs - WEEK_MS,
     resetMs: null,
@@ -240,6 +252,112 @@ function selectWeeklyWindow(
     quotaName: null,
     quotaUsedPercent: null,
     quotaRemainingPercent: null,
+  };
+}
+
+function selectPersistedSnapshotWeeklyWindow(
+  provider: string,
+  connectionId: string | null,
+  nowMs: number
+): ReturnType<typeof selectWeeklyWindow> | null {
+  const nowIso = new Date(nowMs).toISOString();
+  const params: Record<string, unknown> = {
+    provider,
+    nowIso,
+  };
+  const where = [
+    "LOWER(provider) = @provider",
+    "next_reset_at IS NOT NULL",
+    "created_at <= @nowIso",
+    "LOWER(window_key) LIKE '%weekly%'",
+    "LOWER(window_key) NOT LIKE '%sonnet%'",
+  ];
+  if (connectionId) {
+    where.push("connection_id = @connectionId");
+    params.connectionId = connectionId;
+  }
+
+  let rows: QuotaSnapshotWindowRow[];
+  try {
+    rows = getDbInstance()
+      .prepare<QuotaSnapshotWindowRow>(
+        `
+        SELECT
+          connection_id as connectionId,
+          window_key as windowKey,
+          remaining_percentage as remainingPercentage,
+          next_reset_at as nextResetAt,
+          created_at as createdAt,
+          id as rowId
+        FROM quota_snapshots
+        WHERE ${where.join(" AND ")}
+        ORDER BY created_at DESC, id DESC
+      `
+      )
+      .all(params);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.includes("no such table")) return null;
+    throw error;
+  }
+
+  let selected: {
+    score: number;
+    createdMs: number;
+    rowId: number;
+    connectionId: string;
+    resetMs: number;
+    quotaName: string;
+    quotaUsedPercent: number | null;
+    quotaRemainingPercent: number | null;
+  } | null = null;
+
+  for (const row of rows) {
+    const score = scoreWeeklyQuota(row.windowKey);
+    if (!Number.isFinite(score)) continue;
+    const resetMs = parseResetAt(row.nextResetAt, nowMs);
+    if (resetMs === null) continue;
+    const createdMs = Date.parse(row.createdAt ?? "");
+    if (!Number.isFinite(createdMs)) continue;
+    const remainingPercent =
+      row.remainingPercentage === null
+        ? null
+        : Math.max(0, Math.min(100, toNumber(row.remainingPercentage, Number.NaN)));
+    const usedPercent =
+      remainingPercent === null ? null : Math.max(0, Math.min(100, 100 - remainingPercent));
+    if (
+      !selected ||
+      score > selected.score ||
+      (score === selected.score && createdMs > selected.createdMs) ||
+      (score === selected.score && createdMs === selected.createdMs && row.rowId > selected.rowId)
+    ) {
+      selected = {
+        score,
+        createdMs,
+        rowId: row.rowId,
+        connectionId: row.connectionId,
+        resetMs,
+        quotaName: row.windowKey,
+        quotaUsedPercent: usedPercent,
+        quotaRemainingPercent: remainingPercent,
+      };
+    }
+  }
+
+  if (!selected) return null;
+
+  const providerWindowStart = getProviderWindowStart(
+    selected.connectionId,
+    selected.resetMs,
+    nowMs
+  );
+  return {
+    startMs: providerWindowStart?.startMs ?? selected.resetMs - WEEK_MS,
+    resetMs: selected.resetMs,
+    source: "provider_weekly_reset",
+    windowStartSource: providerWindowStart?.source ?? "inferred_from_reset_at",
+    quotaName: selected.quotaName,
+    quotaUsedPercent: selected.quotaUsedPercent,
+    quotaRemainingPercent: selected.quotaRemainingPercent,
   };
 }
 
