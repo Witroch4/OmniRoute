@@ -75,10 +75,7 @@ import {
   withBodyTimeout,
 } from "../utils/stream.ts";
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
-import {
-  resolveSuppressThinkClose,
-  THINKING_MARKER_HEADER,
-} from "../utils/thinkCloseMarker.ts";
+import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
@@ -178,6 +175,7 @@ import { saveRequestUsage, trackPendingRequest, appendRequestLog } from "@/lib/u
 import { finalizePendingScope, updatePendingScope } from "@/lib/usage/pendingRequestScope";
 import { recordCost } from "@/domain/costRules";
 import { calculateCost } from "@/lib/usage/costCalculator";
+import { extractReportedCostUsd, resolveCostUsd } from "@/lib/usage/reportedCost";
 import {
   buildClaudePassthroughToolNameMap,
   restoreClaudePassthroughToolNames,
@@ -1144,8 +1142,7 @@ export async function handleChatCore({
       }
       // Phase 4A: unified output styles (supersedes cavemanOutputMode via the back-compat shim).
       let outputStyleResult:
-        | import("../services/compression/outputStyles/apply.ts").OutputStylesResult
-        | null = null;
+        import("../services/compression/outputStyles/apply.ts").OutputStylesResult | null = null;
       if (config.enabled) {
         try {
           const { resolveOutputStyleSelection } =
@@ -1197,8 +1194,8 @@ export async function handleChatCore({
           ? ((compressionInputBody as Record<string, unknown>).max_tokens as number)
           : null;
       let adaptiveTelemetry:
-        | import("../services/compression/adaptiveCompression/types.ts").AdaptiveTelemetry
-        | null = null;
+        import("../services/compression/adaptiveCompression/types.ts").AdaptiveTelemetry | null =
+        null;
       const compressionPlan = selectCompressionPlan(
         config,
         compressionComboKey,
@@ -2127,8 +2124,7 @@ export async function handleChatCore({
 
   let onPipelineStreamError: streamFailure.PipelineStreamErrorHandler | null = null;
   let onClientDisconnectFinalize:
-    | ((event: { reason: string; duration: number }) => boolean)
-    | null = null;
+    ((event: { reason: string; duration: number }) => boolean) | null = null;
 
   // Create stream controller for disconnect detection
   const streamController = createStreamController({
@@ -3617,19 +3613,6 @@ export async function handleChatCore({
 
     // Save structured call log with full payloads
     const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
-    recordNonStreamingUsageStats(usage, {
-      traceEnabled,
-      provider,
-      connectionId: successConnectionId,
-      model,
-      startTime,
-      apiKeyInfo,
-      effectiveServiceTier,
-      isCombo,
-      comboStrategy,
-      endpoint: endpointPath,
-    });
-
     // Translate response to client's expected format (usually OpenAI)
     // Pass toolNameMap so Claude OAuth proxy_ prefix is stripped in tool_use blocks (#605)
     let translatedResponse = needsTranslation(responsePayloadFormat, clientResponseFormat)
@@ -3749,9 +3732,28 @@ export async function handleChatCore({
       (translatedResponse?.usage && typeof translatedResponse.usage === "object"
         ? translatedResponse.usage
         : null);
-    const estimatedCost = responseUsage
-      ? await calculateCost(provider, model, responseUsage, { serviceTier: effectiveServiceTier })
-      : 0;
+    const estimatedCost = await resolveCostUsd({
+      reportedCostSources: [responseBody, translatedResponse],
+      provider,
+      model,
+      usage: responseUsage,
+      serviceTier: effectiveServiceTier,
+      calculateCost,
+    });
+
+    recordNonStreamingUsageStats(usage, {
+      traceEnabled,
+      provider,
+      connectionId: successConnectionId,
+      model,
+      startTime,
+      apiKeyInfo,
+      effectiveServiceTier,
+      costUsd: estimatedCost,
+      isCombo,
+      comboStrategy,
+      endpoint: endpointPath,
+    });
 
     if (postCallGuardrails.blocked) {
       const guardrailMessage = postCallGuardrails.message || "Response blocked by guardrail";
@@ -4065,6 +4067,11 @@ export async function handleChatCore({
     if (streamUsage && typeof streamUsage === "object") {
       attachCompressionUsageReceiptAfterAnalytics(streamUsage as Record<string, unknown>, "stream");
     }
+    const reportedStreamCostUsd = extractReportedCostUsd(
+      streamResponseBody,
+      providerPayload,
+      clientPayload
+    );
     recordStreamingUsageStats(streamUsage, {
       provider,
       model,
@@ -4075,6 +4082,7 @@ export async function handleChatCore({
       connectionId: streamConnectionId,
       apiKeyInfo,
       effectiveServiceTier,
+      costUsd: reportedStreamCostUsd,
       isCombo,
       comboStrategy,
       endpoint: endpointPath,
@@ -4098,6 +4106,7 @@ export async function handleChatCore({
       provider,
       model,
       streamUsage,
+      reportedCostUsd: reportedStreamCostUsd,
       serviceTier: effectiveServiceTier,
       calculateCost,
       recordCost,
@@ -4115,6 +4124,7 @@ export async function handleChatCore({
       streamUsage,
       streamStatus: normalizedStreamStatus,
       serviceTier: effectiveServiceTier,
+      reportedCostUsd: reportedStreamCostUsd,
       calculateCost,
       log,
     });

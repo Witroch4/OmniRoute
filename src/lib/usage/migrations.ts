@@ -267,10 +267,10 @@ export function migrateUsageJsonToSqlite() {
         const insert = db.prepare(`
           INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name,
             tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation, tokens_reasoning,
-            status, success, latency_ms, ttft_ms, error_code, combo_strategy, timestamp)
+            cost_usd, status, success, latency_ms, ttft_ms, error_code, combo_strategy, timestamp)
           VALUES (@provider, @model, @connectionId, @apiKeyId, @apiKeyName,
             @tokensInput, @tokensOutput, @tokensCacheRead, @tokensCacheCreation, @tokensReasoning,
-            @status, @success, @latencyMs, @ttftMs, @errorCode, @comboStrategy, @timestamp)
+            @costUsd, @status, @success, @latencyMs, @ttftMs, @errorCode, @comboStrategy, @timestamp)
         `);
 
         const tx = db.transaction(() => {
@@ -289,6 +289,7 @@ export function migrateUsageJsonToSqlite() {
               tokensCacheCreation:
                 entry.tokens?.cacheCreation ?? entry.tokens?.cache_creation_input_tokens ?? 0,
               tokensReasoning: entry.tokens?.reasoning ?? entry.tokens?.reasoning_tokens ?? 0,
+              costUsd: entry.costUsd ?? entry.cost_usd ?? null,
               status: entry.status || null,
               success: entry.success === false ? 0 : 1,
               latencyMs: Number.isFinite(Number(entry.latencyMs)) ? Number(entry.latencyMs) : 0,

@@ -383,6 +383,8 @@ function isSchemaAlreadyApplied(
       return hasColumn(db, "usage_history", "service_tier");
     case "062":
       return hasColumn(db, "usage_history", "combo_strategy");
+    case "112":
+      return hasColumn(db, "usage_history", "cost_usd");
     case "070":
       // Retroactive guard for webhooks-kind-metadata migration renumbered from 068
       // (collided with 068_free_proxies + 068_services). DBs that already applied

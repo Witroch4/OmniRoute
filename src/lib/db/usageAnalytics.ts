@@ -115,7 +115,16 @@ export function getDailyUsage(unifiedSource: string, params: AnalyticsParams): D
 
 // ---------------------------------------------------------------------------
 
-export interface DailyCostRow {
+interface CostFallbackFields {
+  storedCost: number;
+  costPromptTokens: number;
+  costCompletionTokens: number;
+  costCacheReadTokens: number;
+  costCacheCreationTokens: number;
+  costReasoningTokens: number;
+}
+
+export interface DailyCostRow extends CostFallbackFields {
   date: string;
   provider: string;
   model: string;
@@ -144,7 +153,13 @@ export function getDailyCostRows(unifiedSource: string, params: AnalyticsParams)
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM ${unifiedSource} AS _u
       GROUP BY DATE(timestamp), LOWER(provider), LOWER(model), serviceTier
       ORDER BY date ASC
@@ -187,7 +202,7 @@ export function getHeatmapRows(heatmapConditions: string[], params: AnalyticsPar
 
 // ---------------------------------------------------------------------------
 
-export interface ModelUsageRow {
+export interface ModelUsageRow extends CostFallbackFields {
   model: string;
   provider: string;
   serviceTier: string;
@@ -222,6 +237,12 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
         COALESCE(MAX(timestamp), '') as lastUsed
@@ -235,7 +256,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
 
 // ---------------------------------------------------------------------------
 
-export interface ProviderCostRow {
+export interface ProviderCostRow extends CostFallbackFields {
   provider: string;
   model: string;
   serviceTier: string;
@@ -265,7 +286,13 @@ export function getProviderCostRows(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM ${unifiedSource} AS _u
       GROUP BY LOWER(provider), LOWER(model), serviceTier
     `
@@ -314,7 +341,7 @@ export function getProviderUsageRows(
 
 // ---------------------------------------------------------------------------
 
-export interface AccountCostRow {
+export interface AccountCostRow extends CostFallbackFields {
   account: string;
   provider: string;
   model: string;
@@ -348,7 +375,13 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
         COALESCE(SUM(usage_history.tokens_output), 0) as completionTokens,
         COALESCE(SUM(usage_history.tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(usage_history.tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(usage_history.tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(usage_history.tokens_reasoning), 0) as reasoningTokens,
+        COALESCE(SUM(usage_history.cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN usage_history.cost_usd IS NULL THEN usage_history.tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN usage_history.cost_usd IS NULL THEN usage_history.tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN usage_history.cost_usd IS NULL THEN usage_history.tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN usage_history.cost_usd IS NULL THEN usage_history.tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN usage_history.cost_usd IS NULL THEN usage_history.tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM usage_history
       LEFT JOIN provider_connections c ON c.id = usage_history.connection_id
       ${whereClause}
@@ -406,7 +439,7 @@ export function getAccountUsageRows(
 
 // ---------------------------------------------------------------------------
 
-export interface ApiKeyUsageRow {
+export interface ApiKeyUsageRow extends CostFallbackFields {
   apiKeyId: string | null;
   apiKeyGroupKey: string;
   provider: string;
@@ -447,7 +480,13 @@ export function getApiKeyUsageRows(
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
+        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM usage_history
       ${apiKeyWhereClause}
       GROUP BY COALESCE(NULLIF(api_key_id, ''), NULLIF(api_key_name, ''), 'unknown'), NULLIF(api_key_id, ''), LOWER(provider), LOWER(model), serviceTier
@@ -458,7 +497,7 @@ export function getApiKeyUsageRows(
 
 // ---------------------------------------------------------------------------
 
-export interface ServiceTierUsageRow {
+export interface ServiceTierUsageRow extends CostFallbackFields {
   serviceTier: string;
   provider: string;
   model: string;
@@ -493,7 +532,13 @@ export function getServiceTierUsageRows(
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
+        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM ${unifiedSource} AS _u
       GROUP BY serviceTier, LOWER(provider), LOWER(model)
     `
@@ -581,7 +626,7 @@ export function getWeeklyPatternRows(
 
 // ---------------------------------------------------------------------------
 
-export interface PresetCostModelRow {
+export interface PresetCostModelRow extends CostFallbackFields {
   model: string;
   provider: string;
   serviceTier: string;
@@ -612,7 +657,13 @@ export function getPresetCostModelRows(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        COALESCE(SUM(cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens
       FROM ${presetUnifiedSource} AS _pu
       GROUP BY LOWER(model), LOWER(provider), serviceTier
     `

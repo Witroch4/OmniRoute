@@ -33,6 +33,7 @@ import {
   getPromptCacheReadTokens,
   getReasoningTokens,
 } from "./tokenAccounting";
+import { normalizeReportedCostUsd } from "./reportedCost";
 
 export type PendingRequestMetadata = {
   clientEndpoint?: string | null;
@@ -570,6 +571,7 @@ export async function saveRequestUsage(entry: any) {
     const db = getDbInstance();
     const timestamp = entry.timestamp || new Date().toISOString();
     const serviceTier = normalizeServiceTier(entry.serviceTier ?? entry.service_tier);
+    const costUsd = normalizeReportedCostUsd(entry.costUsd ?? entry.cost_usd);
 
     const tokensInput = getLoggedInputTokens(entry.tokens);
     const tokensOutput = getLoggedOutputTokens(entry.tokens);
@@ -586,7 +588,7 @@ export async function saveRequestUsage(entry: any) {
     db.transaction(() => {
       const existing = db
         .prepare(
-          `SELECT id, endpoint FROM usage_history
+          `SELECT id, endpoint, cost_usd as costUsd FROM usage_history
            WHERE timestamp = ?
              AND COALESCE(provider, '')     = COALESCE(?, '')
              AND COALESCE(model, '')        = COALESCE(?, '')
@@ -604,13 +606,19 @@ export async function saveRequestUsage(entry: any) {
           entry.apiKeyId || null,
           tokensInput,
           tokensOutput
-        ) as { id: number; endpoint: string | null } | undefined;
+        ) as { id: number; endpoint: string | null; costUsd: number | null } | undefined;
 
       if (existing) {
-        // Back-fill endpoint if the original row missed it.
+        // Back-fill optional columns if the original row missed them.
         if (!existing.endpoint && entry.endpoint) {
           db.prepare(`UPDATE usage_history SET endpoint = ? WHERE id = ?`).run(
             entry.endpoint,
+            existing.id
+          );
+        }
+        if (existing.costUsd === null && costUsd !== null) {
+          db.prepare(`UPDATE usage_history SET cost_usd = ? WHERE id = ?`).run(
+            costUsd,
             existing.id
           );
         }
@@ -621,8 +629,8 @@ export async function saveRequestUsage(entry: any) {
         `
         INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name,
           tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation, tokens_reasoning,
-          service_tier, status, success, latency_ms, ttft_ms, error_code, combo_strategy, endpoint, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          cost_usd, service_tier, status, success, latency_ms, ttft_ms, error_code, combo_strategy, endpoint, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
       ).run(
         entry.provider || null,
@@ -635,6 +643,7 @@ export async function saveRequestUsage(entry: any) {
         getPromptCacheReadTokens(entry.tokens),
         getPromptCacheCreationTokens(entry.tokens),
         getReasoningTokens(entry.tokens),
+        costUsd,
         serviceTier,
         entry.status || null,
         entry.success === false ? 0 : 1,

@@ -25,6 +25,7 @@ export type RecordNonStreamingUsageStatsContext = {
   startTime: number;
   apiKeyInfo: { id?: string | null; name?: string | null } | null | undefined;
   effectiveServiceTier: EffectiveServiceTier;
+  costUsd?: number | null;
   isCombo: boolean;
   comboStrategy: string | null | undefined;
   endpoint?: string | null | undefined;
@@ -55,6 +56,7 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     apiKeyId: apiKeyInfo?.id || undefined,
     apiKeyName: apiKeyInfo?.name || undefined,
     serviceTier: effectiveServiceTier,
+    costUsd: ctx.costUsd ?? null,
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
   }).catch((err) => {

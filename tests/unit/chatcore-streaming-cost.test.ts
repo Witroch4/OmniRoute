@@ -6,9 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { recordStreamingCost } = await import(
-  "../../open-sse/handlers/chatCore/streamingCost.ts"
-);
+const { recordStreamingCost } = await import("../../open-sse/handlers/chatCore/streamingCost.ts");
 
 function spies(costValue: number) {
   const recorded: Array<{ apiKeyId: string; cost: number }> = [];
@@ -80,6 +78,23 @@ test("valid input records the resolved cost against the api key", async () => {
   assert.equal(s.recorded.length, 1);
   assert.equal(s.recorded[0].apiKeyId, "key-1");
   assert.equal(s.recorded[0].cost, 0.0073);
+});
+
+test("reportedCostUsd records without calling calculateCost", async () => {
+  const s = spies(99);
+  recordStreamingCost({
+    apiKeyId: "key-1",
+    provider: "claude",
+    model: "claude-sonnet-4-6",
+    streamUsage: { prompt_tokens: 100, completion_tokens: 50 },
+    reportedCostUsd: 0.0256518,
+    calculateCost: s.calculateCost,
+    recordCost: s.recordCost,
+  });
+  await waitFor(() => s.recorded.length > 0);
+  assert.equal(s.costArgs.length, 0);
+  assert.equal(s.recorded.length, 1);
+  assert.equal(s.recorded[0].cost, 0.0256518);
 });
 
 test("estimatedCost <= 0 does not record", async () => {

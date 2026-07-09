@@ -485,6 +485,52 @@ test("provider window costs use persisted quota snapshots when the live limits c
   assert.equal(result.rows[0].requests, 1);
 });
 
+test("provider window costs prefer per-row cost_usd over pricing estimates", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-sonnet-4-6": { input: 3, output: 15, cached: 0.3, cache_creation: 3.75 },
+    },
+  });
+
+  const key = await apiKeys.createApiKey("Reported Cost Key", "machine-reported-cost");
+
+  providerLimits.setProviderLimitsCache("claude-reported-cost", {
+    quotas: {
+      weekly: {
+        used: 50,
+        total: 100,
+        remainingPercentage: 50,
+        resetAt: "2026-06-30T00:00:00.000Z",
+      },
+    },
+    plan: "Max",
+    message: null,
+    fetchedAt: "2026-06-25T12:00:00.000Z",
+  });
+
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-sonnet-4-6",
+    connectionId: "claude-reported-cost",
+    apiKeyId: key.id,
+    apiKeyName: "Reported Cost Key",
+    tokens: { input: 1_000_000, output: 1_000_000 },
+    costUsd: 0.0256518,
+    timestamp: "2026-06-25T10:00:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "claude",
+    connectionId: "claude-reported-cost",
+    now: Date.parse("2026-06-25T12:00:00.000Z"),
+  });
+
+  assert.equal(result.totalCostUsd, 0.025652);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].costUsd, 0.025652);
+  assert.equal(result.estimatedFullQuotaUsd, 0.051304);
+});
+
 test("provider window costs prefer recorded USD history over repricing usage tokens", async () => {
   await localDb.updatePricing({
     claude: {

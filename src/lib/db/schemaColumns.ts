@@ -92,6 +92,10 @@ export function ensureUsageHistoryColumns(db: SqliteDatabase) {
       db.exec("ALTER TABLE usage_history ADD COLUMN service_tier TEXT DEFAULT 'standard'");
       console.log("[DB] Added usage_history.service_tier column");
     }
+    if (!columnNames.has("cost_usd")) {
+      db.exec("ALTER TABLE usage_history ADD COLUMN cost_usd REAL DEFAULT NULL");
+      console.log("[DB] Added usage_history.cost_usd column");
+    }
     db.exec("CREATE INDEX IF NOT EXISTS idx_uh_service_tier ON usage_history(service_tier)");
     if (!columnNames.has("combo_strategy")) {
       db.exec("ALTER TABLE usage_history ADD COLUMN combo_strategy TEXT DEFAULT 'direct'");

@@ -160,7 +160,7 @@ export async function rollupUsageHistoryBeforeDate(beforeDate: string): Promise<
         COUNT(*) as total_requests,
         COALESCE(SUM(tokens_input), 0) as total_input_tokens,
         COALESCE(SUM(tokens_output), 0) as total_output_tokens,
-        0.0 as total_cost
+        COALESCE(SUM(cost_usd), 0.0) as total_cost
       FROM usage_history
       WHERE timestamp < ?
         AND provider IS NOT NULL AND provider != ''
@@ -169,7 +169,8 @@ export async function rollupUsageHistoryBeforeDate(beforeDate: string): Promise<
       ON CONFLICT(provider, model, date) DO UPDATE SET
         total_requests = daily_usage_summary.total_requests + excluded.total_requests,
         total_input_tokens = daily_usage_summary.total_input_tokens + excluded.total_input_tokens,
-        total_output_tokens = daily_usage_summary.total_output_tokens + excluded.total_output_tokens
+        total_output_tokens = daily_usage_summary.total_output_tokens + excluded.total_output_tokens,
+        total_cost = daily_usage_summary.total_cost + excluded.total_cost
     `;
 
     const stmt = db.prepare(aggregateQuery);

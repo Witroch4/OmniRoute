@@ -137,9 +137,10 @@ function computeUsageRowCost(
   normalizeModelName: (model: string) => string,
   computeCostFromPricing: ComputeCostFromPricing
 ): number {
+  const storedCost = toNumber(row.storedCost ?? row.stored_cost);
   const provider = toStringValue(row.provider);
   const model = toStringValue(row.model);
-  if (!provider || !model) return 0;
+  if (!provider || !model) return storedCost;
   const serviceTier = normalizeServiceTier(row.serviceTier ?? row.service_tier);
 
   const pricing = resolveModelPricing(
@@ -149,16 +150,16 @@ function computeUsageRowCost(
     model,
     normalizeModelName
   );
-  if (!pricing) return 0;
+  if (!pricing) return storedCost;
 
-  return computeCostFromPricing(
+  const fallbackCost = computeCostFromPricing(
     pricing,
     {
-      input: toNumber(row.promptTokens),
-      output: toNumber(row.completionTokens),
-      cacheRead: toNumber(row.cacheReadTokens),
-      cacheCreation: toNumber(row.cacheCreationTokens),
-      reasoning: toNumber(row.reasoningTokens),
+      input: toNumber(row.costPromptTokens ?? row.promptTokens),
+      output: toNumber(row.costCompletionTokens ?? row.completionTokens),
+      cacheRead: toNumber(row.costCacheReadTokens ?? row.cacheReadTokens),
+      cacheCreation: toNumber(row.costCacheCreationTokens ?? row.cacheCreationTokens),
+      reasoning: toNumber(row.costReasoningTokens ?? row.reasoningTokens),
     },
     {
       provider,
@@ -167,6 +168,7 @@ function computeUsageRowCost(
       flatRateAsZero: true,
     }
   );
+  return storedCost + fallbackCost;
 }
 
 function computeUsageRowStandardCost(
@@ -177,7 +179,18 @@ function computeUsageRowStandardCost(
   computeCostFromPricing: ComputeCostFromPricing
 ): number {
   return computeUsageRowCost(
-    { ...row, serviceTier: "standard", service_tier: "standard" },
+    {
+      ...row,
+      storedCost: 0,
+      stored_cost: 0,
+      costPromptTokens: row.promptTokens,
+      costCompletionTokens: row.completionTokens,
+      costCacheReadTokens: row.cacheReadTokens,
+      costCacheCreationTokens: row.cacheCreationTokens,
+      costReasoningTokens: row.reasoningTokens,
+      serviceTier: "standard",
+      service_tier: "standard",
+    },
     pricingByProvider,
     providerAliasMap,
     normalizeModelName,

@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS usage_history (
   tokens_cache_read INTEGER DEFAULT 0,
   tokens_cache_creation INTEGER DEFAULT 0,
   tokens_reasoning INTEGER DEFAULT 0,
+  cost_usd REAL DEFAULT NULL,
   service_tier TEXT DEFAULT 'standard',
   status TEXT,
   success INTEGER DEFAULT 1,

@@ -69,6 +69,33 @@ test("recordStreamingConsumption — records REAL usd for a 200 stream (regressi
   assert.equal(calcArgs!.m, "deepseek-chat");
 });
 
+test("recordStreamingConsumption — reportedCostUsd wins over calculateCost", async () => {
+  const { recordStreamingConsumption } = await import("../../src/lib/quota/spendRecorder.ts");
+  const scheduled: RecordConsumptionInput[] = [];
+  let calcCalled = false;
+  await recordStreamingConsumption(
+    {
+      apiKeyId: "key-1",
+      connectionId: "conn-1",
+      provider: "claude",
+      model: "claude-sonnet-4-6",
+      streamUsage: { prompt_tokens: 2000, completion_tokens: 1000 },
+      streamStatus: 200,
+      reportedCostUsd: 0.0256518,
+    },
+    {
+      calculateCost: async () => {
+        calcCalled = true;
+        return 99;
+      },
+      schedule: (input) => scheduled.push(input),
+    }
+  );
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].cost.usd, 0.0256518);
+  assert.equal(calcCalled, false);
+});
+
 test("recordStreamingConsumption — skips non-200 streams entirely", async () => {
   const { recordStreamingConsumption } = await import("../../src/lib/quota/spendRecorder.ts");
   const scheduled: RecordConsumptionInput[] = [];

@@ -25,6 +25,7 @@ export function scheduleStreamingQuotaShareConsumption(args: {
   streamUsage: unknown;
   streamStatus: number;
   serviceTier?: string;
+  reportedCostUsd?: unknown;
   calculateCost: CostResolver;
   log?: LoggerLike;
 }): void {
@@ -44,6 +45,7 @@ export function scheduleStreamingQuotaShareConsumption(args: {
           streamUsage: args.streamUsage,
           streamStatus: args.streamStatus,
           serviceTier: args.serviceTier,
+          reportedCostUsd: args.reportedCostUsd,
         },
         { calculateCost: args.calculateCost, log: args.log }
       )

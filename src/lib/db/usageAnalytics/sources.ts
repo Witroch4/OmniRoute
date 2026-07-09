@@ -100,6 +100,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           tokens_cache_read,
           tokens_cache_creation,
           tokens_reasoning,
+          cost_usd,
           service_tier,
           success,
           latency_ms,
@@ -118,6 +119,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           0 as tokens_cache_read,
           0 as tokens_cache_creation,
           0 as tokens_reasoning,
+          NULLIF(total_cost, 0) as cost_usd,
           'standard' as service_tier,
           1 as success,
           0 as latency_ms,
@@ -131,6 +133,7 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           timestamp, provider, model,
           tokens_input, tokens_output,
           tokens_cache_read, tokens_cache_creation, tokens_reasoning,
+          cost_usd,
           service_tier, success, latency_ms,
           connection_id, api_key_id, api_key_name
         FROM usage_history
@@ -181,7 +184,7 @@ export function buildPresetUnifiedSource(opts: BuildUnifiedSourceOptions): Unifi
     ? `(
         SELECT timestamp, provider, model, service_tier,
           tokens_input, tokens_output,
-          tokens_cache_read, tokens_cache_creation, tokens_reasoning
+          tokens_cache_read, tokens_cache_creation, tokens_reasoning, cost_usd
         FROM usage_history
         ${presetRawWhere}
         UNION ALL
@@ -193,13 +196,14 @@ export function buildPresetUnifiedSource(opts: BuildUnifiedSourceOptions): Unifi
           total_output_tokens as tokens_output,
           0 as tokens_cache_read,
           0 as tokens_cache_creation,
-          0 as tokens_reasoning
+          0 as tokens_reasoning,
+          NULLIF(total_cost, 0) as cost_usd
         FROM daily_usage_summary
         ${presetAggWhere}
       )`
     : `(SELECT timestamp, provider, model, service_tier,
           tokens_input, tokens_output,
-          tokens_cache_read, tokens_cache_creation, tokens_reasoning
+          tokens_cache_read, tokens_cache_creation, tokens_reasoning, cost_usd
         FROM usage_history
         ${presetRawWhere}
       )`;

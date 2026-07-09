@@ -13,6 +13,7 @@
 
 import { recordConsumption } from "./enforce";
 import type { RecordConsumptionInput } from "./types";
+import { normalizeReportedCostUsd } from "@/lib/usage/reportedCost";
 
 // Minimal pino-compatible logger surface (only warn is needed)
 interface MinimalLogger {
@@ -89,6 +90,7 @@ export async function recordStreamingConsumption(
     streamUsage: unknown;
     streamStatus: number;
     serviceTier?: string;
+    reportedCostUsd?: unknown;
   },
   deps: {
     calculateCost: CostResolver;
@@ -104,7 +106,10 @@ export async function recordStreamingConsumption(
   const resolvedProvider = provider ?? "unknown";
 
   let estimatedCost = 0;
-  if (streamUsage && typeof streamUsage === "object") {
+  const reportedCostUsd = normalizeReportedCostUsd(params.reportedCostUsd);
+  if (reportedCostUsd !== null) {
+    estimatedCost = reportedCostUsd;
+  } else if (streamUsage && typeof streamUsage === "object") {
     try {
       estimatedCost = await deps.calculateCost(
         resolvedProvider,

@@ -173,6 +173,37 @@ test("GET /api/usage/analytics uses Claude family fallback instead of first prov
   assertClose(body.byModel[0].cost, 3);
 });
 
+test("GET /api/usage/analytics prefers stored cost_usd over pricing estimates", async () => {
+  const db = core.getDbInstance();
+  const timestamp = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name, tokens_input, tokens_output, cost_usd, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "claude",
+    "claude-sonnet-4-6",
+    "claude-conn",
+    "claude-key",
+    "Claude Key",
+    1_000_000,
+    1_000_000,
+    0.0256518,
+    1,
+    250,
+    timestamp
+  );
+
+  const response = await analyticsRoute.GET(makeRequest("http://localhost/api/usage/analytics"));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assertClose(body.summary.totalCost, 0.025652);
+  assertClose(body.byProvider[0].cost, 0.025652);
+  assertClose(body.byModel[0].cost, 0.025652);
+  assertClose(body.byApiKey[0].cost, 0.025652);
+  assertClose(body.dailyTrend[0].cost, 0.025652);
+});
+
 test("GET /api/usage/analytics applies Codex Fast tier multipliers and exposes tier split", async () => {
   const db = core.getDbInstance();
   const timestamp = new Date().toISOString();

@@ -8,6 +8,7 @@
  * to the caller. calculateCost and recordCost are injected so the hook stays decoupled. Behaviour
  * is byte-identical to the previous inline block.
  */
+import { normalizeReportedCostUsd } from "@/lib/usage/reportedCost";
 
 type CostResolver = (
   provider: string,
@@ -22,12 +23,20 @@ export function recordStreamingCost(args: {
   model: string | null | undefined;
   streamUsage: Record<string, number | undefined> | null | undefined;
   serviceTier?: string;
+  reportedCostUsd?: unknown;
   calculateCost: CostResolver;
   recordCost: (apiKeyId: string, cost: number) => void;
 }): void {
-  if (!args.apiKeyId || !args.streamUsage) return;
+  if (!args.apiKeyId) return;
 
   const apiKeyId = args.apiKeyId;
+  const reportedCostUsd = normalizeReportedCostUsd(args.reportedCostUsd);
+  if (reportedCostUsd !== null) {
+    if (reportedCostUsd > 0) args.recordCost(apiKeyId, reportedCostUsd);
+    return;
+  }
+  if (!args.streamUsage) return;
+
   args
     .calculateCost(args.provider, args.model, args.streamUsage, { serviceTier: args.serviceTier })
     .then((estimatedCost) => {

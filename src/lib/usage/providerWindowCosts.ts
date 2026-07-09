@@ -23,6 +23,7 @@ interface UsageCostRow {
   cacheCreationTokens: number;
   reasoningTokens: number;
   totalTokens: number;
+  costUsd: number | null;
   timestamp: string | null;
 }
 
@@ -483,6 +484,8 @@ async function getUsageRowCostUsd(
   recordedCostsByApiKey: Map<string, RecordedCostRow[]>,
   usedRecordedRows: Set<number>
 ): Promise<number> {
+  if (row.costUsd !== null) return Math.max(0, toNumber(row.costUsd));
+
   const usageTimestampMs = Date.parse(row.timestamp ?? "");
   const recordedCost = findClosestRecordedCost(
     row.apiKeyId ? recordedCostsByApiKey.get(row.apiKeyId) : undefined,
@@ -557,6 +560,7 @@ export async function getProviderWindowCostBreakdown({
         COALESCE(tokens_cache_creation, 0) as cacheCreationTokens,
         COALESCE(tokens_reasoning, 0) as reasoningTokens,
         COALESCE(tokens_input + tokens_output, 0) as totalTokens,
+        cost_usd as costUsd,
         timestamp
       FROM usage_history
       WHERE ${where.join(" AND ")}

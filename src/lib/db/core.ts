@@ -294,6 +294,7 @@ const SCHEMA_SQL = `
     tokens_cache_read INTEGER DEFAULT 0,
     tokens_cache_creation INTEGER DEFAULT 0,
     tokens_reasoning INTEGER DEFAULT 0,
+    cost_usd REAL DEFAULT NULL,
     service_tier TEXT DEFAULT 'standard',
     status TEXT,
     success INTEGER DEFAULT 1,
@@ -996,8 +997,7 @@ export function getDbInstance(): SqliteDatabase {
         let hasData = false;
         try {
           const count = probe.prepare("SELECT COUNT(*) as c FROM provider_connections").get() as
-            | { c: number }
-            | undefined;
+            { c: number } | undefined;
           hasData = Boolean(count && count.c > 0);
         } catch {
           // Table might not exist at all — truly incompatible
