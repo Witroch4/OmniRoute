@@ -26,11 +26,13 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "task-607-api-key-secret";
 
 const coreDb = await import("../../src/lib/db/core.ts");
+const localDb = await import("../../src/lib/localDb.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const combosDb = await import("../../src/lib/db/combos.ts");
 const modelComboMappingsDb = await import("../../src/lib/db/modelComboMappings.ts");
 const costRules = await import("../../src/domain/costRules.ts");
 const rateLimiter = await import("../../src/shared/utils/rateLimiter.ts");
+const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
 
 rateLimiter.setRateLimiterTestMode(true);
 
@@ -43,6 +45,7 @@ function getFsErrorCode(error: unknown): string | undefined {
 async function resetStorage() {
   apiKeysDb.resetApiKeyState();
   costRules.resetCostData();
+  usageHistory.clearPendingRequests();
   coreDb.resetDbInstance();
 
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -481,6 +484,110 @@ test("enforceApiKeyPolicy rejects disallowed models and exhausted budgets", asyn
   );
   assert.equal(overBudget.rejection.status, 429);
   assert.match(await readErrorMessage(overBudget.rejection), /Daily budget exceeded/);
+});
+
+test("enforceApiKeyPolicy scopes USD quota windows to requested Claude provider", async () => {
+  await localDb.updatePricing({
+    cc: {
+      "claude-sonnet-4-6": { input: 1, cached: 1, output: 1, cache_creation: 1 },
+    },
+  });
+  const meteredKey = await createKeyWithPolicy({
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 1,
+  });
+  const meteredMeta = await apiKeysDb.getApiKeyMetadata(meteredKey.key);
+
+  const now = Date.now();
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-sonnet-4-6",
+    apiKeyId: meteredMeta.id,
+    apiKeyName: "Policy Key",
+    tokens: { input: 2_000_000, output: 0 },
+    success: true,
+    timestamp: new Date(now - 60_000).toISOString(),
+  });
+
+  const db = coreDb.getDbInstance();
+  const createdAt = new Date(now).toISOString();
+  db.prepare(
+    `INSERT INTO provider_connections (id, provider, auth_type, name, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run("conn-claude", "claude", "oauth", "Claude", 1, createdAt, createdAt);
+  db.prepare(
+    `INSERT INTO provider_connections (id, provider, auth_type, name, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run("conn-codex", "codex", "oauth", "Codex", 1, createdAt, createdAt);
+
+  const claudeResetAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const codexResetAt = new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString();
+  const cacheStmt = db.prepare(
+    "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES (?, ?, ?)"
+  );
+  cacheStmt.run(
+    "providerLimitsCache",
+    "conn-claude",
+    JSON.stringify({
+      quotas: { "weekly (7d)": { remainingPercentage: 90, resetAt: claudeResetAt } },
+      plan: null,
+      message: null,
+      fetchedAt: createdAt,
+    })
+  );
+  cacheStmt.run(
+    "providerLimitsCache",
+    "conn-codex",
+    JSON.stringify({
+      quotas: { weekly: { remainingPercentage: 90, resetAt: codexResetAt } },
+      plan: null,
+      message: null,
+      fetchedAt: createdAt,
+    })
+  );
+
+  const insertReset = db.prepare(
+    `INSERT INTO provider_quota_reset_events
+       (provider, connection_id, window_key, window_started_at, window_resets_at,
+        observed_at, previous_remaining_percentage, new_remaining_percentage,
+        previous_used_percentage, new_used_percentage, raw_data)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  insertReset.run(
+    "claude",
+    "conn-claude",
+    "weekly (7d)",
+    new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    claudeResetAt,
+    createdAt,
+    100,
+    90,
+    0,
+    10,
+    null
+  );
+  insertReset.run(
+    "codex",
+    "conn-codex",
+    "weekly",
+    new Date(now + 24 * 60 * 60 * 1000).toISOString(),
+    codexResetAt,
+    createdAt,
+    100,
+    90,
+    0,
+    10,
+    null
+  );
+
+  const policy = await loadPolicy("usd-quota-requested-provider");
+  const result = await policy.enforceApiKeyPolicy(
+    makeAnthropicPolicyRequest(meteredKey.key),
+    "claude-sonnet-4-6"
+  );
+
+  assert.equal(result.rejection?.status, 400);
+  assert.match(await readErrorMessage(result.rejection), /weekly usage quota/);
 });
 
 test("enforceApiKeyPolicy returns Anthropic error envelope for /v1/messages model denials", async () => {

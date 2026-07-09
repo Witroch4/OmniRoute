@@ -307,11 +307,18 @@ export default function CostOverviewTab() {
   const [explorerSortKey, setExplorerSortKey] = useState<CostExplorerSortKey>("cost");
   const [explorerSortDirection, setExplorerSortDirection] =
     useState<CostExplorerSortDirection>("desc");
+  const apiKeyUsageLimitProvider = useMemo(() => {
+    const providerRows = (analytics?.byProvider || []).filter(
+      (row) => row.provider && (row.requests > 0 || row.cost > 0)
+    );
+    const providers = Array.from(new Set(providerRows.map((row) => row.provider)));
+    return providers.length === 1 ? providers[0] : null;
+  }, [analytics]);
   const {
     payload: apiKeyUsageLimits,
     loading: apiKeyUsageLimitsLoading,
     save: saveApiKeyUsageLimits,
-  } = useApiKeyUsageLimits(selectedApiKeyId);
+  } = useApiKeyUsageLimits(selectedApiKeyId, apiKeyUsageLimitProvider);
 
   useEffect(() => {
     let active = true;

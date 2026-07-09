@@ -290,6 +290,21 @@ function getWeeklyWindowStartIso(
   );
 }
 
+function getValidWeeklyWindowStartIso(
+  connectionId: string,
+  targetResetAtIso: string,
+  nowMs: number
+): string | null {
+  const windowStartIso = getWeeklyWindowStartIso(connectionId, targetResetAtIso, nowMs);
+  if (!windowStartIso) return null;
+
+  const startMs = Date.parse(windowStartIso);
+  const resetMs = Date.parse(targetResetAtIso);
+  if (!Number.isFinite(startMs) || !Number.isFinite(resetMs)) return null;
+  if (startMs > nowMs || startMs >= resetMs) return null;
+  return new Date(startMs).toISOString();
+}
+
 async function resolveDeps(deps: ApiKeyUsageLimitDeps): Promise<Required<ApiKeyUsageLimitDeps>> {
   const providers =
     deps.getProviderConnectionById && deps.getProviderConnections
@@ -334,7 +349,7 @@ async function getProviderWeeklyWindow(
           connectionId: connection.id,
           provider: connection.provider,
           resetAtIso: resetAt,
-          observedWindowStartIso: getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
+          observedWindowStartIso: getValidWeeklyWindowStartIso(connection.id, resetAt, nowMs),
         });
       }
     }
@@ -350,7 +365,7 @@ async function getProviderWeeklyWindow(
           connectionId: connection.id,
           provider: connection.provider,
           resetAtIso: resetAt,
-          observedWindowStartIso: getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
+          observedWindowStartIso: getValidWeeklyWindowStartIso(connection.id, resetAt, nowMs),
         });
       }
     }
@@ -362,7 +377,7 @@ async function getProviderWeeklyWindow(
         (candidate) => normalizeProvider(candidate.provider) === preferredProvider
       )
     : [];
-  const candidates = scopedCandidates.length > 0 ? scopedCandidates : resetCandidates;
+  const candidates = preferredProvider ? scopedCandidates : resetCandidates;
   const selected =
     candidates
       .sort((left, right) => Date.parse(left.resetAtIso) - Date.parse(right.resetAtIso))

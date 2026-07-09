@@ -8,6 +8,7 @@
  */
 
 import { isFlatRateProvider } from "./flatRateProviders";
+import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels.ts";
 
 /**
  * Normalize model name — strip provider path prefixes.
@@ -52,6 +53,169 @@ function normalizeServiceTier(value: unknown): string {
 
 function stripCodexEffortSuffix(model: string): string {
   return model.replace(/-(?:xhigh|high|medium|low|none)$/i, "");
+}
+
+type PricingRecord = Record<string, unknown>;
+type PricingModels = Record<string, PricingRecord>;
+type PricingByProvider = Record<string, PricingModels>;
+
+function findKeyInsensitive<T>(
+  obj: Record<string, T> | undefined | null,
+  key: string
+): T | undefined {
+  if (!obj || !key) return undefined;
+  const lowerKey = key.toLowerCase();
+  for (const [candidate, value] of Object.entries(obj)) {
+    if (candidate.toLowerCase() === lowerKey) return value;
+  }
+  return undefined;
+}
+
+function uniqueValues(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function getPricingModelCandidates(model: string, normalize: (model: string) => string): string[] {
+  const normalizedModel = normalize(model);
+  const lowerModel = model.toLowerCase();
+  const lowerNormalized = normalizedModel.toLowerCase();
+  const hyphenModel = lowerModel.replace(/\./g, "-");
+  const hyphenNormalized = lowerNormalized.replace(/\./g, "-");
+  const effortBaseModel = stripCodexEffortSuffix(lowerNormalized);
+
+  return uniqueValues([
+    lowerModel,
+    lowerNormalized,
+    hyphenModel,
+    hyphenNormalized,
+    effortBaseModel,
+    effortBaseModel.replace(/\./g, "-"),
+    lowerNormalized === "codex-auto-review" ? "gpt-5.5" : null,
+  ]);
+}
+
+function resolveProviderPricing(
+  pricingByProvider: PricingByProvider,
+  providerAliasMap: Record<string, string>,
+  providerRaw: string
+): PricingModels | null {
+  const providerKey = (providerRaw || "").toLowerCase();
+  let providerPricing = findKeyInsensitive<PricingModels>(pricingByProvider, providerKey);
+
+  if (!providerPricing) {
+    const alias = findKeyInsensitive<string>(providerAliasMap, providerKey);
+    if (alias) providerPricing = findKeyInsensitive<PricingModels>(pricingByProvider, alias);
+  }
+
+  if (!providerPricing) {
+    for (const [id, alias] of Object.entries(providerAliasMap)) {
+      if (typeof alias === "string" && alias.toLowerCase() === providerKey) {
+        providerPricing = findKeyInsensitive<PricingModels>(pricingByProvider, id);
+        if (providerPricing) break;
+      }
+    }
+  }
+
+  if (!providerPricing) {
+    const withoutRegion = providerKey.replace(/-cn$/, "");
+    if (withoutRegion && withoutRegion !== providerKey) {
+      providerPricing = findKeyInsensitive<PricingModels>(pricingByProvider, withoutRegion);
+    }
+  }
+
+  if (!providerPricing && providerKey === "antigravity") {
+    providerPricing = findKeyInsensitive<PricingModels>(pricingByProvider, "ag");
+  }
+
+  return providerPricing || null;
+}
+
+function getClaudeModelFamily(model: string, normalize: (model: string) => string): string | null {
+  const normalized = normalize(model).toLowerCase();
+  const match = normalized.match(/^claude[-_](fable|opus|sonnet|haiku)(?:[-_]|$)/);
+  return match?.[1] ?? null;
+}
+
+function findClaudeFamilyPricing(
+  providerPricing: PricingModels | null | undefined,
+  model: string,
+  normalize: (model: string) => string
+): PricingRecord | null {
+  if (!providerPricing) return null;
+  const family = getClaudeModelFamily(model, normalize);
+  if (!family) return null;
+
+  const prefix = `claude-${family}-`;
+  const familyKeys = Object.keys(providerPricing)
+    .filter((key) => normalize(key).toLowerCase().startsWith(prefix))
+    .sort((left, right) => right.localeCompare(left));
+
+  const selectedKey = familyKeys[0];
+  return selectedKey ? providerPricing[selectedKey] || null : null;
+}
+
+export function resolveModelPricingFromCatalog(
+  pricingByProvider: PricingByProvider,
+  providerAliasMap: Record<string, string>,
+  providerRaw: string,
+  model: string,
+  normalize: (model: string) => string = normalizeModelName
+): PricingRecord | null {
+  const providerPricing = resolveProviderPricing(pricingByProvider, providerAliasMap, providerRaw);
+  const modelCandidates = getPricingModelCandidates(model, normalize);
+
+  const tryFind = (models: PricingModels | null | undefined): PricingRecord | null => {
+    if (!models) return null;
+    for (const candidate of modelCandidates) {
+      const pricing = findKeyInsensitive<PricingRecord>(models, candidate);
+      if (pricing) return pricing;
+    }
+    return null;
+  };
+
+  let pricing = tryFind(providerPricing);
+  if (!pricing) pricing = findClaudeFamilyPricing(providerPricing, model, normalize);
+
+  if (!pricing) {
+    for (const models of Object.values(pricingByProvider)) {
+      const found = tryFind(models);
+      if (found) {
+        pricing = found;
+        break;
+      }
+    }
+  }
+
+  if (!pricing) {
+    for (const models of Object.values(pricingByProvider)) {
+      const found = findClaudeFamilyPricing(models, model, normalize);
+      if (found) {
+        pricing = found;
+        break;
+      }
+    }
+  }
+
+  if (!pricing && providerPricing) {
+    const lowerModel = model.toLowerCase();
+    for (const [key, value] of Object.entries(providerPricing)) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey.includes(lowerModel) || lowerModel.includes(lowerKey)) {
+        pricing = value;
+        break;
+      }
+    }
+  }
+
+  return pricing || null;
 }
 
 export function getCodexFastCostMultiplier(
@@ -139,23 +303,14 @@ export async function calculateCost(
   if (!tokens || !provider || !model) return 0;
 
   try {
-    const { getPricingForModel } = await import("@/lib/localDb");
-
-    // Try exact match first, then normalized model name
-    let pricing = await getPricingForModel(provider, model);
-    if (!pricing) {
-      const normalized = normalizeModelName(model);
-      if (normalized !== model) {
-        pricing = await getPricingForModel(provider, normalized);
-      }
-      const providerKey = normalizeServiceTier(provider);
-      if (!pricing && (providerKey === "codex" || providerKey === "cx")) {
-        const effortlessModel = stripCodexEffortSuffix(normalized);
-        if (effortlessModel !== normalized) {
-          pricing = await getPricingForModel(provider, effortlessModel);
-        }
-      }
-    }
+    const { getPricing } = await import("@/lib/localDb");
+    const pricingByProvider = (await getPricing()) as PricingByProvider;
+    const pricing = resolveModelPricingFromCatalog(
+      pricingByProvider,
+      PROVIDER_ID_TO_ALIAS,
+      provider,
+      model
+    );
     if (!pricing) return 0;
 
     const pricingRecord =
@@ -199,7 +354,10 @@ export function computeAudioCost(
   }
   const characters = toNumber(usage.characters, 0);
   if (characters > 0) {
-    const perChar = toNumber(pricing.input_cost_per_character ?? pricing.output_cost_per_character, 0);
+    const perChar = toNumber(
+      pricing.input_cost_per_character ?? pricing.output_cost_per_character,
+      0
+    );
     // Round to 10 decimals to drop binary-FP artifacts (e.g. 0.000015 * 1000).
     if (perChar > 0) return Math.round(perChar * characters * 1e10) / 1e10;
   }

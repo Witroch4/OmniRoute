@@ -6,7 +6,10 @@ import type {
   ApiKeyUsageLimitSavePayload,
 } from "./components/ApiKeyUsageLimitCard";
 
-export function useApiKeyUsageLimits(selectedApiKeyId: string | null) {
+export function useApiKeyUsageLimits(
+  selectedApiKeyId: string | null,
+  preferredProvider: string | null = null
+) {
   const [payload, setPayload] = useState<ApiKeyUsageLimitPayload | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -17,8 +20,11 @@ export function useApiKeyUsageLimits(selectedApiKeyId: string | null) {
     }
     setLoading(true);
     try {
+      const params = new URLSearchParams();
+      if (preferredProvider) params.set("provider", preferredProvider);
+      const query = params.toString();
       const response = await fetch(
-        `/api/keys/${encodeURIComponent(selectedApiKeyId)}/usage-limits`
+        `/api/keys/${encodeURIComponent(selectedApiKeyId)}/usage-limits${query ? `?${query}` : ""}`
       );
       if (!response.ok) throw new Error("Failed to load API key usage limits");
       setPayload((await response.json()) as ApiKeyUsageLimitPayload);
@@ -27,7 +33,7 @@ export function useApiKeyUsageLimits(selectedApiKeyId: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [selectedApiKeyId]);
+  }, [preferredProvider, selectedApiKeyId]);
 
   const save = useCallback(
     async (next: ApiKeyUsageLimitSavePayload) => {

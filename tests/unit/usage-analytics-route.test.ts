@@ -150,6 +150,29 @@ test("GET /api/usage/analytics resolves Codex GPT-5.5 pricing through provider a
   assertClose(body.byModel[0].cost, 0.02);
 });
 
+test("GET /api/usage/analytics uses Claude family fallback instead of first provider price", async () => {
+  await localDb.updatePricing({
+    cc: {
+      "claude-fable-5": { input: 10, cached: 10, output: 10, cache_creation: 10 },
+      "claude-sonnet-4-6": { input: 3, cached: 3, output: 3, cache_creation: 3 },
+    },
+  });
+
+  const db = core.getDbInstance();
+  db.prepare(
+    `INSERT INTO usage_history (provider, model, connection_id, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run("claude", "claude-sonnet-5", "claude-conn", 1_000_000, 0, 1, 250, new Date().toISOString());
+
+  const response = await analyticsRoute.GET(makeRequest("http://localhost/api/usage/analytics"));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assertClose(body.summary.totalCost, 3);
+  assert.equal(body.byModel[0].model, "claude-sonnet-5");
+  assertClose(body.byModel[0].cost, 3);
+});
+
 test("GET /api/usage/analytics applies Codex Fast tier multipliers and exposes tier split", async () => {
   const db = core.getDbInstance();
   const timestamp = new Date().toISOString();

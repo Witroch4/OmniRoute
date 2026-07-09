@@ -3,6 +3,12 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeys } from "@/lib/db/apiKeys";
 import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import {
+  computeCostFromPricing,
+  getCodexFastCostMultiplier,
+  normalizeModelName,
+  resolveModelPricingFromCatalog,
+} from "@/lib/usage/costCalculator";
+import {
   buildUnifiedSource,
   buildPresetUnifiedSource,
   getUsageSummary,
@@ -21,6 +27,7 @@ import {
   getPresetCostModelRows,
 } from "@/lib/db/usageAnalytics";
 import { getFallbackStats } from "@/lib/db/callLogStats";
+import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels";
 
 function getRangeStartIso(range: string): string | null {
   const end = new Date();
@@ -97,23 +104,6 @@ function appendWhereCondition(whereClause: string, condition: string): string {
   return whereClause ? `${whereClause} AND (${condition})` : `WHERE (${condition})`;
 }
 
-function findKeyInsensitive(obj: Record<string, any> | undefined | null, key: string): any {
-  if (!obj || !key) return undefined;
-  return obj[key.toLowerCase()];
-}
-
-function uniqueValues(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    result.push(normalized);
-  }
-  return result;
-}
-
 function makeApiKeyUsageGroup(apiKeyId: string, fallbackName: string): string {
   return apiKeyId ? `id:${apiKeyId}` : `name:${fallbackName}`;
 }
@@ -124,32 +114,6 @@ function addApiKeyAlias(target: Set<string>, value: unknown): void {
   if (trimmed) target.add(trimmed);
 }
 
-function stripCodexEffortSuffix(model: string): string {
-  return model.replace(/-(?:xhigh|high|medium|low|none)$/i, "");
-}
-
-function getPricingModelCandidates(
-  model: string,
-  normalizeModelName: (model: string) => string
-): string[] {
-  const normalizedModel = normalizeModelName(model);
-  const lowerModel = model.toLowerCase();
-  const lowerNormalized = normalizedModel.toLowerCase();
-  const hyphenModel = lowerModel.replace(/\./g, "-");
-  const hyphenNormalized = lowerNormalized.replace(/\./g, "-");
-  const effortBaseModel = stripCodexEffortSuffix(lowerNormalized);
-
-  return uniqueValues([
-    lowerModel,
-    lowerNormalized,
-    hyphenModel,
-    hyphenNormalized,
-    effortBaseModel,
-    effortBaseModel.replace(/\./g, "-"),
-    lowerNormalized === "codex-auto-review" ? "gpt-5.5" : null,
-  ]);
-}
-
 function resolveModelPricing(
   pricingByProvider: PricingByProvider,
   providerAliasMap: Record<string, string>,
@@ -157,80 +121,13 @@ function resolveModelPricing(
   model: string,
   normalizeModelName: (model: string) => string
 ): Record<string, unknown> | null {
-  const pLower = (providerRaw || "").toLowerCase();
-
-  let providerPricing = findKeyInsensitive(pricingByProvider, pLower);
-
-  if (!providerPricing) {
-    // providerAliasMap maps ID -> ALIAS. So if pLower is "codex", alias is "cx".
-    const alias = providerAliasMap[pLower];
-    if (alias) {
-      providerPricing = findKeyInsensitive(pricingByProvider, alias);
-    }
-  }
-
-  if (!providerPricing) {
-    // In case pLower was ALIAS and we want to try the ID (reverse search values)
-    for (const [id, alias] of Object.entries(providerAliasMap)) {
-      if (alias.toLowerCase() === pLower) {
-        providerPricing = findKeyInsensitive(pricingByProvider, id);
-        if (providerPricing) break;
-      }
-    }
-  }
-
-  if (!providerPricing) {
-    const np = pLower.replace(/-cn$/, "");
-    if (np && np !== pLower) {
-      providerPricing = findKeyInsensitive(pricingByProvider, np);
-    }
-  }
-
-  // Hardcoded known fallbacks
-  if (!providerPricing) {
-    if (pLower === "antigravity") providerPricing = findKeyInsensitive(pricingByProvider, "ag");
-  }
-
-  const modelCandidates = getPricingModelCandidates(model, normalizeModelName);
-
-  const tryFind = (prov: Record<string, unknown> | null | undefined) => {
-    if (!prov || typeof prov !== "object") return null;
-    for (const candidate of modelCandidates) {
-      const pricing = findKeyInsensitive(prov as Record<string, unknown>, candidate);
-      if (pricing) return pricing;
-    }
-    return null;
-  };
-
-  let pricing = providerPricing ? tryFind(providerPricing) : null;
-
-  if (!pricing) {
-    // Global fallback: search all providers for this exact model (helps with aliases)
-    for (const prov of Object.values(pricingByProvider)) {
-      const found = tryFind(prov as Record<string, unknown>);
-      if (found) {
-        pricing = found;
-        break;
-      }
-    }
-  }
-
-  // Last resort fallback for historical usage (e.g. "gpt-4" missing, matches "gpt-4.1" or first available)
-  if (!pricing && providerPricing && typeof providerPricing === "object") {
-    for (const [key, val] of Object.entries(providerPricing as Record<string, unknown>)) {
-      const lm = model.toLowerCase();
-      if (key.includes(lm) || lm.includes(key)) {
-        pricing = val;
-        break;
-      }
-    }
-    if (!pricing) {
-      const keys = Object.keys(providerPricing as Record<string, unknown>);
-      if (keys.length > 0) pricing = (providerPricing as Record<string, unknown>)[keys[0]];
-    }
-  }
-
-  return pricing as Record<string, unknown> | null;
+  return resolveModelPricingFromCatalog(
+    pricingByProvider,
+    providerAliasMap,
+    providerRaw,
+    model,
+    normalizeModelName
+  );
 }
 
 function computeUsageRowCost(
@@ -407,15 +304,13 @@ export async function GET(request: Request) {
       }
       pricingByProvider[providerKey.toLowerCase()] = lowerProvider;
     }
-    const { computeCostFromPricing, getCodexFastCostMultiplier, normalizeModelName } =
-      await import("@/lib/usage/costCalculator");
-    const { PROVIDER_ID_TO_ALIAS } = await import("@omniroute/open-sse/config/providerModels");
-
     const summaryRow = getUsageSummary(unifiedSource, unifiedParams) as Record<string, unknown>;
 
     const dailyRows = getDailyUsage(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
 
-    const dailyCostRows = getDailyCostRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const dailyCostRows = getDailyCostRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
     const heatmapStart = new Date();
     heatmapStart.setUTCDate(heatmapStart.getUTCDate() - 364);
@@ -437,30 +332,48 @@ export async function GET(request: Request) {
       });
     }
 
-    const heatmapRows = getHeatmapRows(heatmapConditions, heatmapParams) as Array<Record<string, unknown>>;
+    const heatmapRows = getHeatmapRows(heatmapConditions, heatmapParams) as Array<
+      Record<string, unknown>
+    >;
 
-    const modelRows = getModelUsageRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const modelRows = getModelUsageRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
-    const providerCostRows = getProviderCostRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const providerCostRows = getProviderCostRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
-    const providerRows = getProviderUsageRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const providerRows = getProviderUsageRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
     const accountCostWhereClause = whereClause
       .replace(/timestamp/g, "usage_history.timestamp")
       .replace(/api_key_/g, "usage_history.api_key_");
-    const accountCostRows = getAccountCostRows(accountCostWhereClause, params) as Array<Record<string, unknown>>;
+    const accountCostRows = getAccountCostRows(accountCostWhereClause, params) as Array<
+      Record<string, unknown>
+    >;
 
-    const accountRows = getAccountUsageRows(accountCostWhereClause, params) as Array<Record<string, unknown>>;
+    const accountRows = getAccountUsageRows(accountCostWhereClause, params) as Array<
+      Record<string, unknown>
+    >;
 
     const apiKeyWhereClause = appendWhereCondition(
       whereClause,
       "(api_key_id IS NOT NULL AND api_key_id != '') OR (api_key_name IS NOT NULL AND api_key_name != '')"
     );
-    const apiKeyRows = getApiKeyUsageRows(apiKeyWhereClause, params) as Array<Record<string, unknown>>;
+    const apiKeyRows = getApiKeyUsageRows(apiKeyWhereClause, params) as Array<
+      Record<string, unknown>
+    >;
 
-    const serviceTierRows = getServiceTierUsageRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const serviceTierRows = getServiceTierUsageRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
-    const apiKeyMetadataRows = getApiKeyMetadataRows(apiKeyWhereClause, params) as Array<Record<string, unknown>>;
+    const apiKeyMetadataRows = getApiKeyMetadataRows(apiKeyWhereClause, params) as Array<
+      Record<string, unknown>
+    >;
 
     const apiKeyMetadata = new Map<string, { latestName: string; aliases: Set<string> }>();
     for (const row of apiKeyMetadataRows) {
@@ -477,7 +390,9 @@ export async function GET(request: Request) {
       apiKeyMetadata.set(groupKey, existing);
     }
 
-    const weeklyRows = getWeeklyPatternRows(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
+    const weeklyRows = getWeeklyPatternRows(unifiedSource, unifiedParams) as Array<
+      Record<string, unknown>
+    >;
 
     const fallbackRow = getFallbackStats(whereClause, params) as Record<string, unknown>;
 
@@ -906,7 +821,9 @@ export async function GET(request: Request) {
             apiKeyParams: apiKeyParamEntries,
           });
 
-        const presetModelRows = getPresetCostModelRows(presetUnifiedSource, presetParams) as Array<Record<string, unknown>>;
+        const presetModelRows = getPresetCostModelRows(presetUnifiedSource, presetParams) as Array<
+          Record<string, unknown>
+        >;
 
         let presetTotalCost = 0;
         for (const row of presetModelRows) {

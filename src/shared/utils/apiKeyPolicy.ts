@@ -199,6 +199,42 @@ function isAnthropicMessagesRequest(request: Request): boolean {
   }
 }
 
+function normalizeUsageLimitProvider(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "cc" || normalized === "claude-code") return "claude";
+  if (normalized === "cx") return "codex";
+  return normalized;
+}
+
+function inferUsageLimitProvider(modelStr: string | null): string | null {
+  if (!modelStr || typeof modelStr !== "string") return null;
+  const trimmed = modelStr.trim();
+  if (!trimmed) return null;
+
+  if (isQuotaModelName(trimmed)) {
+    const parsed = parseQuotaModelName(trimmed);
+    return parsed?.provider ? normalizeUsageLimitProvider(parsed.provider) : null;
+  }
+
+  const parts = trimmed.split("/").filter(Boolean);
+  if (parts.length > 1) {
+    const prefix = normalizeUsageLimitProvider(parts[0]);
+    if (prefix && prefix !== "auto" && prefix !== "combo" && prefix !== "qtsd") {
+      return prefix;
+    }
+  }
+
+  const model = (parts.at(-1) || trimmed).toLowerCase();
+  if (/^claude[-_]/.test(model) || /^(sonnet|opus|haiku|fable)(?:[-_]|$)/.test(model)) {
+    return "claude";
+  }
+  if (/^(gpt|chatgpt|o\d|codex)[-_.]/.test(model)) {
+    return "codex";
+  }
+
+  return null;
+}
+
 function policyErrorResponse(
   request: Request,
   statusCode: number,
@@ -389,6 +425,10 @@ export async function enforceApiKeyPolicy(
     try {
       const usageLimitRejection = await buildApiKeyUsageLimitPolicyRejection(request, {
         id: apiKeyInfo.id,
+        allowedConnections: Array.isArray(apiKeyInfo.allowedConnections)
+          ? apiKeyInfo.allowedConnections
+          : [],
+        preferredProvider: inferUsageLimitProvider(modelStr),
         usageLimitEnabled: apiKeyInfo.usageLimitEnabled,
         dailyUsageLimitUsd: apiKeyInfo.dailyUsageLimitUsd,
         weeklyUsageLimitUsd: apiKeyInfo.weeklyUsageLimitUsd,

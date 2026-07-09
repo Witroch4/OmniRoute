@@ -314,6 +314,20 @@ test("getUsageStats avoids loading the entire usage_history table", async () => 
   });
 });
 
+test("Claude family pricing fallback does not price unknown Sonnet as Fable", async () => {
+  await localDb.updatePricing({
+    cc: {
+      "claude-fable-5": { input: 10, cached: 10, output: 10, cache_creation: 10 },
+      "claude-sonnet-4-6": { input: 3, cached: 3, output: 3, cache_creation: 3 },
+    },
+  });
+
+  assert.equal(
+    await calculateCost("claude", "claude-sonnet-5", { input: 1_000_000, output: 0 }),
+    3
+  );
+});
+
 test("getUsageStats groups renamed API key usage by stable ID", async () => {
   const db = core.getDbInstance();
   const now = new Date().toISOString();

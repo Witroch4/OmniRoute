@@ -10,6 +10,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   try {
     const { id } = await params;
+    const provider = new URL(request.url).searchParams.get("provider");
     const key = await getApiKeyById(id);
     if (!key || typeof key.id !== "string") {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
@@ -18,6 +19,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const status = await getApiKeyUsageLimitStatus({
       id: key.id,
       allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
+      preferredProvider: provider,
       usageLimitEnabled: key.usageLimitEnabled === true,
       dailyUsageLimitUsd:
         typeof key.dailyUsageLimitUsd === "number" ? key.dailyUsageLimitUsd : null,
