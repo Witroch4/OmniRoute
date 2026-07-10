@@ -17,17 +17,12 @@ import {
   type AutoCategory,
   type AutoTier,
 } from "./suffixComposition";
-import { buildFamilyCandidateFilter, type ModelFamily } from "./modelFamily";
 import { getHiddenModelsByProvider } from "@/models";
-import { filterPaidOnlyCandidates } from "./paidModelFilter";
 
-/** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos.
- * #6453: optional `family` overlay for `auto/<family>` combos (e.g. `auto/glm`) —
- * mutually exclusive with category/tier, applied instead of them when present. */
+/** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos. */
 export interface AutoComboSpec {
   category?: AutoCategory;
   tier?: AutoTier;
-  family?: ModelFamily;
 }
 
 /** Minimal connection shape needed for virtual auto-combo factory */
@@ -245,18 +240,15 @@ export async function createVirtualAutoCombo(
 
   const candidatePool: VirtualAutoComboCandidate[] = [];
   for (const conn of validConnections) {
-    // #5873: custom OpenAI-/Anthropic-compatible providers have dynamic connection
-    // IDs (`*-compatible-*`) that are never keys of the static registry. Do NOT drop
-    // them from `auto/` routing — only fall back to the registry's first model when
-    // the connection has no explicit defaultModel.
     const providerInfo = getProviderRegistry()[conn.provider];
+    if (!providerInfo) continue; // Skip unknown providers
 
     let modelId: string | undefined = conn.defaultModel;
-    if (!modelId && providerInfo) {
+    if (!modelId) {
       const firstModel = providerInfo.models[0];
       modelId = firstModel?.id;
     }
-    if (!modelId) continue; // Skip providers without a resolvable model
+    if (!modelId) continue; // Skip providers without a model
 
     // Skip models that the user has hidden in the dashboard
     const hiddenModels = hiddenModelsMap.get(conn.provider);
@@ -274,17 +266,6 @@ export async function createVirtualAutoCombo(
   candidatePool.push(
     ...getNoAuthCandidates(new Set(validConnections.map((conn) => conn.provider)), blockedProviders)
   );
-
-  // #6512 (follow-up to #6328/#6495): when the operator opts into `hidePaidModels`,
-  // exclude paid-only backends from EVERY `auto/*` candidate pool — not just the
-  // `/v1/models` listing — so auto-routing never picks a model that will 402/403.
-  // If this empties the pool the existing graceful empty-pool path below handles it
-  // (consistent with the opt-in intent). Default OFF → pool unchanged.
-  const paidFilteredPool = filterPaidOnlyCandidates(candidatePool, settings.hidePaidModels === true);
-  if (paidFilteredPool !== candidatePool) {
-    candidatePool.length = 0;
-    candidatePool.push(...paidFilteredPool);
-  }
 
   if (candidatePool.length === 0) {
     log.warn("AUTO", "No connected providers with valid credentials for virtual auto-combo");
@@ -322,40 +303,26 @@ export async function createVirtualAutoCombo(
   // connected. Operators who want the old "never break routing, lose the bias"
   // behavior can opt back in via the env var below.
   let effectivePool = candidatePool;
-  // #6453: `auto/<family>` narrows by model family instead of category/tier. The
-  // two overlays are mutually exclusive on the spec (family takes precedence when
-  // both are somehow present, which callers never do in practice).
-  const candidateFilter = spec?.family
-    ? buildFamilyCandidateFilter(spec.family)
-    : spec
-      ? buildAutoCandidateFilter(spec.category, spec.tier)
-      : null;
+  const candidateFilter = spec ? buildAutoCandidateFilter(spec.category, spec.tier) : null;
   if (candidateFilter) {
     const narrowed = candidatePool.filter((c) =>
       candidateFilter({ provider: c.provider, model: c.model })
     );
-    const label = spec?.family
-      ? `auto/${spec.family}`
-      : `auto/${spec?.category ?? ""}${spec?.tier ? `:${spec.tier}` : ""}`;
     if (narrowed.length > 0) {
       effectivePool = narrowed;
     } else if (
-      !spec?.family &&
-      (process.env.OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL === "true" ||
-        process.env.OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL === "1")
+      process.env.OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL === "true" ||
+      process.env.OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL === "1"
     ) {
-      // Opt-in legacy behavior (category/tier only): warn loudly, then keep the full pool.
+      // Opt-in legacy behavior: warn loudly, then keep the full pool.
       log.warn(
         "AUTO",
-        `${label} matched no connected models; falling back to the full pool (OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL=true)`
+        `auto/${spec?.category ?? ""}${spec?.tier ? `:${spec.tier}` : ""} matched no connected models; falling back to the full pool (OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL=true)`
       );
     } else {
-      // Family combos always degrade to an empty pool when unavailable — a family
-      // is a hard identity constraint, not a soft optimization bias, so there is
-      // no sensible "fall back to the full pool" behavior for it.
       log.warn(
         "AUTO",
-        `${label} matched no connected models; returning an empty pool.${spec?.family ? "" : ' Set OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL=true to restore the legacy "use full pool" behavior.'}`
+        `auto/${spec?.category ?? ""}${spec?.tier ? `:${spec.tier}` : ""} matched no connected models; returning an empty pool. Set OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL=true to restore the legacy "use full pool" behavior.`
       );
       effectivePool = [];
     }
