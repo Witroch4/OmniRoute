@@ -240,18 +240,15 @@ export async function createVirtualAutoCombo(
 
   const candidatePool: VirtualAutoComboCandidate[] = [];
   for (const conn of validConnections) {
-    // #5873: custom OpenAI-/Anthropic-compatible providers have dynamic connection
-    // IDs (`*-compatible-*`) that are never keys of the static registry. Do NOT drop
-    // them from `auto/` routing — only fall back to the registry's first model when
-    // the connection has no explicit defaultModel.
     const providerInfo = getProviderRegistry()[conn.provider];
+    if (!providerInfo) continue; // Skip unknown providers
 
     let modelId: string | undefined = conn.defaultModel;
-    if (!modelId && providerInfo) {
+    if (!modelId) {
       const firstModel = providerInfo.models[0];
       modelId = firstModel?.id;
     }
-    if (!modelId) continue; // Skip providers without a resolvable model
+    if (!modelId) continue; // Skip providers without a model
 
     // Skip models that the user has hidden in the dashboard
     const hiddenModels = hiddenModelsMap.get(conn.provider);
