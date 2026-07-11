@@ -75,6 +75,7 @@ export type CompatModelRow = {
   upstreamHeaders?: Record<string, string>;
   compatByProtocol?: CompatByProtocolMap;
   /** #2905: per-model upstream wire-format override. */ targetFormat?: string;
+  /** #4125: manual context-window override (tokens), when set. */ contextWindowOverride?: number;
 };
 
 export type CompatModelMap = Map<string, CompatModelRow>;
