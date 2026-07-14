@@ -363,7 +363,15 @@ export function openaiToClaudeRequest(model, body, stream) {
   if (body.tools && Array.isArray(body.tools)) {
     result.tools = body.tools
       .map((tool) => {
-        const toolData = tool.type === "function" && tool.function ? tool.function : tool;
+        // Function-shaped tools arrive in two flavors from real clients:
+        //   (a) openai-spec: { type: "function", function: { name, ... } }
+        //   (b) bare/loose:  { function: { name, ... } }   (no parent `type`)
+        // Unwrap `tool.function` whenever it is present, regardless of the
+        // parent `type` field — some OpenAI-shape clients omit the wrapper's
+        // `type: "function"` entirely. Previously that bare shape fell
+        // through to `toolData = tool` (the wrapper itself, with no `.name`),
+        // producing an empty `originalName` and silently dropping the tool.
+        const toolData = tool.function ?? tool;
         const originalName = typeof toolData.name === "string" ? toolData.name.trim() : "";
 
         if (!originalName) {

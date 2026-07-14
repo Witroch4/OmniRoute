@@ -126,10 +126,7 @@ test("Turbopack aliases @/mitm/manager to the stub ONLY when OMNIROUTE_MITM_STUB
 
     process.env.OMNIROUTE_MITM_STUB = "1";
     const { default: docker } = await loadNextConfig("mitm-docker");
-    assert.equal(
-      docker.turbopack.resolveAlias["@/mitm/manager"],
-      "./src/mitm/manager.stub.ts"
-    );
+    assert.equal(docker.turbopack.resolveAlias["@/mitm/manager"], "./src/mitm/manager.stub.ts");
   } finally {
     if (original === undefined) delete process.env.OMNIROUTE_MITM_STUB;
     else process.env.OMNIROUTE_MITM_STUB = original;
@@ -198,7 +195,11 @@ test("manager.stub.ts exports every name statically imported from @/mitm/manager
   }
   for (const m of stubSrc.matchAll(/export\s*\{([^}]*)\}/g)) {
     for (const part of m[1].split(",")) {
-      const exported = part.trim().split(/\s+as\s+/).pop()?.trim(); // `x as y` exports y
+      const exported = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim(); // `x as y` exports y
       if (exported) stubExports.add(exported);
     }
   }
@@ -269,6 +270,23 @@ test("next-intl webpack hook preserves caller config and filters known extractor
     config.ignoreWarnings[0]({ message: "Critical dependency: request is expression" }),
     false
   );
+});
+
+test("turbopack.ignoreIssue suppresses the agentSkills over-bundling warning (#6582)", async () => {
+  // src/lib/agentSkills/generator.ts joins process.cwd() with a runtime
+  // `outputDir` parameter — not a compile-time literal — so Turbopack's
+  // file-tracing analyzer can't narrow it and emits an "Overly broad
+  // patterns..." warning per entry point importing the module. The fs access
+  // is legitimate and bounded, so it's suppressed via turbopack.ignoreIssue
+  // rather than fought. This guards the config shape so the suppression rule
+  // isn't silently dropped in a future edit.
+  const { default: nextConfig } = await loadNextConfig("ignore-issue");
+  const rules = nextConfig.turbopack?.ignoreIssue;
+
+  assert.ok(Array.isArray(rules), "expected turbopack.ignoreIssue to be an array");
+  const agentSkillsRule = rules.find((rule) => String(rule.path).includes("agentSkills"));
+  assert.ok(agentSkillsRule, "expected an ignoreIssue rule targeting src/lib/agentSkills/**");
+  assert.match(String(agentSkillsRule.description), /Overly broad patterns/);
 });
 
 test("optimizePackageImports excludes the internal @omniroute/open-sse workspace (build-OOM guard)", async () => {

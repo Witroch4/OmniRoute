@@ -205,7 +205,7 @@ export function resolveDestinationPath(vaultRoot, destinationHeader) {
 export function verifyBasicAuth(authHeader, expectedUsername, expectedPassword) {
   if (!authHeader || typeof authHeader !== "string") return false;
 
-  const match = /^Basic\s+(.+)$/i.exec(authHeader.trim());
+  const match = /^Basic[ \t]+(\S+)$/i.exec(authHeader.trim()); // linear-time: no overlapping \s+/.+ backtracking (CodeQL js/polynomial-redos #708)
   if (!match) return false;
 
   let decoded;
@@ -494,8 +494,7 @@ function buildEntryHref(baseHref, relativePath, isDir) {
 function handleOptions(req, res) {
   res.writeHead(200, {
     DAV: "1, 2",
-    Allow:
-      "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, PROPFIND, LOCK, UNLOCK",
+    Allow: "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, PROPFIND, LOCK, UNLOCK",
     "MS-Author-Via": "DAV",
     "Content-Length": "0",
   });

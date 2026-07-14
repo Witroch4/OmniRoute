@@ -5,6 +5,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { assembleStandalone } from "./assembleStandalone.mjs";
+import { buildRebuildSpawnPlan } from "./electronRebuildPlan.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,24 +123,24 @@ function rebuildBetterSqlite3ForElectron(standaloneNodeModules) {
   rmSync(join(destMod, "build"), { recursive: true, force: true });
 
   console.log(`[electron] rebuilding better-sqlite3 against electron ${electronVersion} ABI…`);
-  const result = spawnSync(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    ["--yes", "node-gyp", "rebuild"],
-    {
-      cwd: destMod,
-      stdio: "inherit",
-      // Compile against the Electron headers (not Node's) so the .node lands in
-      // build/Release with the Electron NODE_MODULE_VERSION. No shell interpolation.
-      env: {
-        ...process.env,
-        npm_config_runtime: "electron",
-        npm_config_target: electronVersion,
-        npm_config_disturl: "https://electronjs.org/headers",
-        npm_config_arch: process.arch,
-        npm_config_build_from_source: "true",
-      },
-    }
-  );
+  const plan = buildRebuildSpawnPlan(process.platform);
+  const result = spawnSync(plan.command, plan.args, {
+    cwd: destMod,
+    stdio: "inherit",
+    // .cmd shims must go through a shell on Windows (CVE-2024-27980 hardening
+    // makes a shell-less spawn fail with status null); args are fixed literals.
+    shell: plan.shell,
+    // Compile against the Electron headers (not Node's) so the .node lands in
+    // build/Release with the Electron NODE_MODULE_VERSION. No shell interpolation.
+    env: {
+      ...process.env,
+      npm_config_runtime: "electron",
+      npm_config_target: electronVersion,
+      npm_config_disturl: "https://electronjs.org/headers",
+      npm_config_arch: process.arch,
+      npm_config_build_from_source: "true",
+    },
+  });
   if (result.status !== 0) {
     throw new Error(
       `[electron] better-sqlite3 rebuild against electron ${electronVersion} failed (exit ${result.status}).`

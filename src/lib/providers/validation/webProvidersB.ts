@@ -1,6 +1,7 @@
 // Web-cookie provider key validators (part B): muse-spark-web, adapta-web, claude-web, gemini-web,
-// copilot-web, t3-web, jules, inner-ai. Extracted from validation.ts (god-file decomposition) —
-// top-level functions with no dispatcher-state captures; behavior is byte-identical to the inline defs.
+// copilot-web, t3-web, jules, devin (cloud-agent), inner-ai. Extracted from validation.ts (god-file
+// decomposition) — top-level functions with no dispatcher-state captures; behavior is byte-identical
+// to the inline defs.
 import { applyCustomUserAgent } from "./headers";
 import { toValidationErrorResult, validationRead, validationWrite } from "./transport";
 import { normalizeSessionCookieHeader } from "@/lib/providers/webCookieAuth";
@@ -322,7 +323,9 @@ function extractM365CredentialParts(raw: string, providerSpecificData: Record<st
       (typeof providerSpecificData.access_token === "string"
         ? providerSpecificData.access_token
         : "") ||
-      (typeof providerSpecificData.accessToken === "string" ? providerSpecificData.accessToken : ""),
+      (typeof providerSpecificData.accessToken === "string"
+        ? providerSpecificData.accessToken
+        : ""),
     chathubPath:
       parts.chathubPath ||
       parts.userTenant ||
@@ -334,10 +337,7 @@ function extractM365CredentialParts(raw: string, providerSpecificData: Record<st
 }
 
 // ── Microsoft 365 Copilot Web token validator ──
-export async function validateCopilotM365WebProvider({
-  apiKey,
-  providerSpecificData = {},
-}: any) {
+export async function validateCopilotM365WebProvider({ apiKey, providerSpecificData = {} }: any) {
   const { accessToken, chathubPath } = extractM365CredentialParts(
     String(apiKey || ""),
     providerSpecificData
@@ -447,6 +447,38 @@ export async function validateJulesProvider({ apiKey }: { apiKey: string }) {
     return {
       valid: false,
       error: errorText.trim() || `Jules API returned ${response.status}`,
+    };
+  } catch (error: unknown) {
+    return toValidationErrorResult(error);
+  }
+}
+
+/**
+ * Devin cloud-agent (Cognition) — GET /v1/sessions with Bearer auth
+ * (see docs.devin.ai/api-reference/sessions/list-sessions). Distinct from the
+ * "devin-cli" LLM provider (ACP), which is already wired via providerRegistry.
+ */
+export async function validateDevinCloudAgentProvider({ apiKey }: { apiKey: string }) {
+  try {
+    const response = await validationWrite("https://api.devin.ai/v1/sessions?limit=1", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return { valid: false, error: "Invalid API key" };
+    }
+
+    if (response.ok) {
+      return { valid: true, error: null };
+    }
+
+    const errorText = await response.text().catch(() => "");
+    return {
+      valid: false,
+      error: errorText.trim() || `Devin API returned ${response.status}`,
     };
   } catch (error: unknown) {
     return toValidationErrorResult(error);

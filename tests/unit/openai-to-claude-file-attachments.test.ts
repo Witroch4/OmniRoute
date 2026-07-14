@@ -50,3 +50,21 @@ test("openaiToClaudeRequest maps a remote file (PDF url) block to a Claude docum
   assert.equal(doc.source.type, "url");
   assert.equal(doc.source.url, "https://example.com/a.pdf");
 });
+
+test("openaiToClaudeRequest skips a video file block (Claude has no native video input)", () => {
+  const blocks = userBlocks("claude-sonnet-4", [
+    { type: "text", text: "watch this" },
+    { type: "file", file: { filename: "clip.mp4", file_data: "data:video/mp4;base64,AAAAIGZ0" } },
+  ]);
+  const doc = blocks.find((b) => b.type === "document");
+  const img = blocks.find((b) => b.type === "image");
+  assert.ok(
+    !doc && !img,
+    "a video file must not be mislabeled as a Claude document or image block"
+  );
+  // the text part is still forwarded
+  assert.ok(
+    blocks.some((b) => b.type === "text"),
+    "the accompanying text part must still be forwarded"
+  );
+});

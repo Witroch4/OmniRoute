@@ -204,10 +204,20 @@ export async function resolveModelOrError(
 
     try {
       const virtualCombo = await createBuiltinAutoCombo(modelStr, suffix);
+      const poolSize = virtualCombo.candidatePool?.length || 0;
       log.info(
         "AUTO",
-        `"auto" provider → built-in virtual combo "${modelStr}" (${virtualCombo.candidatePool?.length || 0} candidates)`
+        `"auto" provider → built-in virtual combo "${modelStr}" (${poolSize} candidates)`
       );
+      // #6458: fail fast instead of leaking a silent 15s upstream timeout when
+      // the category/tier filter (e.g. auto/coding:pro, auto/reasoning) matches
+      // zero connected candidates. An empty virtual combo has no targets to
+      // dispatch to, so downstream combo routing stalls on an empty set.
+      if (poolSize === 0) {
+        const msg = `No connected providers match '${modelStr}'. Connect a provider whose models satisfy this category/tier, or use a different auto combo.`;
+        log.warn("AUTO", msg, { model: modelStr });
+        return { error: errorResponse(HTTP_STATUS.SERVICE_UNAVAILABLE, msg) };
+      }
       return { combo: virtualCombo, provider: "auto", model: suffix };
     } catch (err) {
       log.warn("CHAT", `Failed to create built-in auto combo "${modelStr}"`, { err });
@@ -577,6 +587,9 @@ export function handleNoCredentials(
       return modelCooldownResponse({
         model: cooldownModel,
         retryAfter: credentials.retryAfter,
+        retryAfterAt: typeof credentials.retryAfter === "string" ? credentials.retryAfter : null,
+        credentialsCoolingCount:
+          typeof credentials.connectionsCount === "number" ? credentials.connectionsCount : null,
       });
     }
 
@@ -692,7 +705,10 @@ export async function safeResolveProxy(connectionId: string, apiKeyId?: string) 
     // is dead/inactive must fail closed — egressing on the real IP leaks it. Reuse
     // the existing proxy-resolution-failure policy (blocks by default; PROXY_FAIL_OPEN
     // opts back into direct). Explicit "proxy off" is not a leak (see the guard).
-    if (!(resolved as { proxy?: unknown } | null)?.proxy && hasBlockingProxyAssignment(connectionId)) {
+    if (
+      !(resolved as { proxy?: unknown } | null)?.proxy &&
+      hasBlockingProxyAssignment(connectionId)
+    ) {
       return decideProxyResolutionFailure(
         Object.assign(
           new Error(
