@@ -322,7 +322,7 @@ export function markConnectionQuotaExhausted(connectionId: string, retryAfterMs:
  * Strip provider prefixes (e.g. "antigravity/model" → "model").
  * Ensures the model name sent to the upstream API never contains a routing prefix.
  *
- * `modelIdOverride` (#3786): when the per-request Pro-family fallback chain forces a
+ * `modelIdOverride`: when a per-request model-id fallback chain forces a
  * specific upstream id, pass it here. It is an ALREADY-RESOLVED upstream id, so it bypasses
  * the MITM/static alias resolution and is used verbatim (after prefix stripping).
  */
@@ -1043,11 +1043,11 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   /**
-   * #3786 — Drive the per-request Pro-family upstream-id FALLBACK CHAIN.
+   * Drive a per-request upstream-id fallback chain.
    *
    * The upstream silently renamed the Gemini 3.1 Pro-high id (HTTP 400 on the old id) and the
    * live id cannot be known from static analysis (competitor proxies disagree). When the
-   * resolved upstream id has a fallback chain (see ANTIGRAVITY_PRO_FALLBACK_CHAINS) we try the
+   * resolved upstream id has a fallback chain (see ANTIGRAVITY_MODEL_FALLBACK_CHAINS) we try the
    * requested id first and, ONLY on a 400, retry the next candidate until one succeeds (2xx)
    * or the chain is exhausted — then the original 400 surfaces (sanitized, hard rule #12).
    *
@@ -1058,12 +1058,12 @@ export class AntigravityExecutor extends BaseExecutor {
     await resolveAntigravityVersion();
 
     // Look up the chain by the NORMALLY-resolved upstream id (honours MITM/static aliases).
-    // If a MITM alias remapped the id away from a known Pro tier, no chain applies → fast path.
+    // If a MITM alias remapped the id away from a known chain, no fallback applies → fast path.
     const resolvedUpstreamId = await cleanModelName(input.model);
     const chain = getAntigravityModelFallbacks(resolvedUpstreamId);
 
     if (chain.length <= 1) {
-      // No fallback chain (flash, claude, plain pro, unknown) → single attempt, unchanged.
+      // No fallback chain → single attempt, unchanged.
       return this.executeOnce(input);
     }
 
@@ -1083,16 +1083,16 @@ export class AntigravityExecutor extends BaseExecutor {
       const isLast = i === chain.length - 1;
       if (!isLast) {
         input.log?.debug?.(
-          "AG_PRO_FALLBACK",
-          `400 on "${candidate}" — retrying with next Pro candidate "${chain[i + 1]}"`
+          "AG_MODEL_FALLBACK",
+          `400 on "${candidate}" — retrying with next model candidate "${chain[i + 1]}"`
         );
         continue;
       }
 
       // Chain exhausted: surface the FIRST candidate's sanitized 400.
       input.log?.warn?.(
-        "AG_PRO_FALLBACK",
-        `Pro fallback chain exhausted (all ${chain.length} candidates 400'd) for "${resolvedUpstreamId}"`
+        "AG_MODEL_FALLBACK",
+        `Model fallback chain exhausted (all ${chain.length} candidates 400'd) for "${resolvedUpstreamId}"`
       );
       return firstResult ?? result;
     }
@@ -1102,7 +1102,7 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   /**
-   * #3786 — Run the request once for a SINGLE resolved upstream model id. The Pro-family
+   * Run the request once for a SINGLE resolved upstream model id. The model-id
    * fallback chain in `execute()` calls this per candidate (`modelIdOverride`), retrying the
    * next id on a 400. `modelIdOverride === undefined` is the normal (non-chain) path and
    * preserves the prior behavior exactly. Returns the executor result plus the upstream

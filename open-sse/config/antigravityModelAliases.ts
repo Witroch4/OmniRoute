@@ -218,13 +218,35 @@ export const ANTIGRAVITY_PRO_FALLBACK_CHAINS: Readonly<Record<string, readonly s
   });
 
 /**
+ * Gemini 3.5 Flash Low is exposed as `gemini-3.5-flash-low`, but its first upstream id is
+ * the legacy `gemini-3.5-flash-extra-low`. That legacy id intermittently returns HTTP 400
+ * while the adjacent Flash ids remain healthy. Retry the live Medium upstream id first and
+ * Flash Lite only if both 3.5 ids reject the request. The public model id and static alias stay
+ * unchanged, so the normal successful request still makes exactly one upstream call.
+ */
+export const ANTIGRAVITY_FLASH_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({
+    "gemini-3.5-flash-extra-low": Object.freeze([
+      "gemini-3.5-flash-extra-low",
+      "gemini-3.5-flash-low",
+      "gemini-3.1-flash-lite",
+    ]),
+  });
+
+export const ANTIGRAVITY_MODEL_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({
+    ...ANTIGRAVITY_PRO_FALLBACK_CHAINS,
+    ...ANTIGRAVITY_FLASH_FALLBACK_CHAINS,
+  });
+
+/**
  * Return the ordered upstream-id fallback chain for `modelId` (the requested id first), or
- * `[]` when the model has no chain (flash, claude, plain pro, etc.). Pure — safe to unit test
- * and to call on every request (returns `[]` cheaply off the happy path's hot models).
+ * `[]` when the model has no chain. Pure — safe to unit test and to call on every request
+ * (returns `[]` cheaply off the happy path's hot models).
  */
 export function getAntigravityModelFallbacks(modelId: string): readonly string[] {
   if (!modelId) return [];
-  return ANTIGRAVITY_PRO_FALLBACK_CHAINS[modelId] ?? [];
+  return ANTIGRAVITY_MODEL_FALLBACK_CHAINS[modelId] ?? [];
 }
 
 export const ANTIGRAVITY_REVERSE_MODEL_ALIASES: AntigravityModelAliasMap = Object.freeze({
