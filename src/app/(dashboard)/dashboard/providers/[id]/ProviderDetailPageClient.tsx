@@ -427,8 +427,6 @@ export default function ProviderDetailPageClient() {
     providerNode,
   });
 
-  // renderModelsSection → components/ProviderModelsSection.tsx (Phase 1m)
-
   if (loading) {
     return (
       <div className="flex flex-col gap-8">
@@ -451,7 +449,6 @@ export default function ProviderDetailPageClient() {
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Header — Phase 1t.1: extracted to components/ProviderPageHeader.tsx */}
       <ProviderPageHeader
         providerId={providerId}
         providerInfo={providerInfo}
@@ -465,8 +462,6 @@ export default function ProviderDetailPageClient() {
       {providerId === "zed" && (
         <ZedImportCard fetchConnections={fetchConnections} notify={notify} />
       )}
-
-      {/* CompatibleNodeCard — Phase 1t.2: extracted to components/CompatibleNodeCard.tsx */}
       {isCompatible && providerNode && (
         <CompatibleNodeCard
           providerId={providerId}
@@ -480,12 +475,18 @@ export default function ProviderDetailPageClient() {
           t={t}
         />
       )}
-
-      {/* Connections */}
       {!isUpstreamProxyProvider && isFreeNoAuth && (
         <NoAuthProviderControls
           providerId={providerId}
           providerName={providerInfo?.name || providerId}
+          providerProxy={proxyConfig?.providers?.[providerId]}
+          onConfigureProviderProxy={() =>
+            setProxyTarget({
+              level: "provider",
+              id: providerId,
+              label: providerInfo?.name || providerId,
+            })
+          }
         />
       )}
       {!isUpstreamProxyProvider && !isFreeNoAuth && (

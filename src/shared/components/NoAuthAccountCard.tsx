@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import Card from "./Card";
 import Button from "./Button";
 import DistributeProxiesButton from "./DistributeProxiesButton";
@@ -17,6 +17,7 @@ interface NoAuthAccountCardProps {
   enabled?: boolean;
   savingEnabled?: boolean;
   onEnabledChange?: (enabled: boolean) => void;
+  providerProxyControl?: ReactNode;
 }
 
 interface Connection {
@@ -96,6 +97,7 @@ export default function NoAuthAccountCard({
   enabled = true,
   savingEnabled = false,
   onEnabledChange,
+  providerProxyControl,
 }: NoAuthAccountCardProps) {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -338,12 +340,15 @@ export default function NoAuthAccountCard({
             <p className="text-xs text-text-muted">{description}</p>
           </div>
         </div>
-        <NoAuthProviderToggle
-          className="w-full justify-end sm:w-auto"
-          enabled={enabled}
-          saving={savingEnabled}
-          onEnabledChange={onEnabledChange}
-        />
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
+          {providerProxyControl}
+          <NoAuthProviderToggle
+            className="w-full justify-end sm:w-auto"
+            enabled={enabled}
+            saving={savingEnabled}
+            onEnabledChange={onEnabledChange}
+          />
+        </div>
       </div>
 
       <div className="border-t border-border pt-3 mt-3">
@@ -377,7 +382,10 @@ export default function NoAuthAccountCard({
             className="grid max-h-72 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3"
           >
             {allAccountIds.map((id, i) => {
-              const proxy = getDisplayProxy(getEntryForFingerprint(accountProxies, id), savedProxies);
+              const proxy = getDisplayProxy(
+                getEntryForFingerprint(accountProxies, id),
+                savedProxies
+              );
               return (
                 <div
                   key={id}
