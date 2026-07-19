@@ -338,9 +338,9 @@ function getSqliteDb() {
 
 /**
  * Resolve the stored alias override for a source model: `{ model?, reasoningEffort? }`.
- * `normalizeAliasMappings` upgrades legacy plain-string mappings (every existing install)
- * into the structured shape, so both old and new saves resolve consistently. Returns
- * `null` when there is no override at all for this model (passthrough).
+ * `normalizeAliasMappings` upgrades legacy plain-string mappings into the structured
+ * shape. The route-only namespace is reserved for client-facing OmniRoute model ids;
+ * fall back to `mitmAlias` until a route-alias writer is available.
  */
 function getMappedOverride(model, agentId = "antigravity") {
   return standaloneRoutingShim.resolveMappedOverride(model, agentId, {

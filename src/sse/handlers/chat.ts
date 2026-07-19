@@ -31,7 +31,7 @@ import {
   HTTP_STATUS,
   ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
 } from "@omniroute/open-sse/config/constants.ts";
-import { getTargetFormat } from "@omniroute/open-sse/services/provider.ts";
+import { getTargetFormat, detectFormatFromUrl } from "@omniroute/open-sse/services/provider.ts";
 import {
   getModelsByProviderId,
   getModelTargetFormat,
@@ -253,6 +253,8 @@ export async function handleChat(
   // reasoning_effort / reasoning / object-shaped thinking always wins (backward compatible).
   body = normalizeReasoningRequest(body);
 
+  const sourceFormat = detectFormatFromUrl(body, request.url);
+
   // Early guard: an invalid `messages` field is rejected here with a clear
   // OmniRoute-level 400 before any routing or upstream call (#5110, #6402).
   // Without this guard, schema-invalid bodies fell through to model resolution
@@ -261,22 +263,20 @@ export async function handleChat(
   //   - present-but-non-array (null, number, string, object) → 400 (#6402)
   //   - empty array → 400 ("at least one message is required") (#5110)
   //   - missing entirely, when the Responses-API `input` discriminator is also
-  //     absent → 400 (#6402). Responses-API requests use `input` (not `messages`)
-  //     and are still unaffected.
-  {
-    const b = body as { messages?: unknown; input?: unknown };
-    if ("messages" in b && !Array.isArray(b.messages)) {
-      log.warn("CHAT", "Rejecting request with non-array messages");
-      return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array");
-    }
-    if (Array.isArray(b.messages) && b.messages.length === 0) {
-      log.warn("CHAT", "Rejecting request with empty messages array");
-      return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: at least one message is required");
-    }
-    if (!("messages" in b) && !("input" in b)) {
-      log.warn("CHAT", "Rejecting request with missing messages");
-      return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array, received undefined");
-    }
+  //     absent → 400 (#6402). Responses-API requests use `input` (not `messages`),
+  //     and Antigravity requests use a cloudcode `request` envelope.
+  const msgBody = body as { messages?: unknown; input?: unknown };
+  if ("messages" in msgBody && !Array.isArray(msgBody.messages)) {
+    log.warn("CHAT", "Rejecting request with non-array messages");
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array");
+  }
+  if (Array.isArray(msgBody.messages) && msgBody.messages.length === 0) {
+    log.warn("CHAT", "Rejecting request with empty messages array");
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: at least one message is required");
+  }
+  if (!("messages" in msgBody) && !("input" in msgBody) && sourceFormat !== "antigravity") {
+    log.warn("CHAT", "Rejecting request with missing messages");
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array, received undefined");
   }
 
   // Reject non-string `model` before it reaches downstream code that calls
