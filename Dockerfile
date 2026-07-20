@@ -79,7 +79,8 @@ RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
 # build from 17min to 9min on the same 32-core box. Webpack stays available as the
 # escape hatch: `--build-arg`/-e OMNIROUTE_USE_TURBOPACK=0.
 # See docs/ops/QUALITY_GATE_PLAYBOOK.md Parte 6.
-ENV OMNIROUTE_USE_TURBOPACK=1
+ARG OMNIROUTE_USE_TURBOPACK=1
+ENV OMNIROUTE_USE_TURBOPACK=${OMNIROUTE_USE_TURBOPACK}
 
 # Docker containers cannot run the MITM/Agent-Bridge stack (no host DNS/cert
 # access), so keep @/mitm/manager on the graceful stub (#3390). This flag is
