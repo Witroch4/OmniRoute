@@ -172,7 +172,7 @@ test("buildUsageCommandText formats API key USD limits as personal percentages",
   );
 });
 
-test("buildUsageCommandText scales provider quota remaining by configured cutoffs", async () => {
+test("buildUsageCommandText collapses every window to 0% once a provider window is cut off", async () => {
   const text = await buildUsageCommandText(
     {
       id: "key-cutoff",
@@ -220,12 +220,99 @@ test("buildUsageCommandText scales provider quota remaining by configured cutoff
     [
       "Provider quota",
       "Session",
-      "100% left",
+      "0% left",
       "⏱ reset in 4h 4m",
       "",
       "Weekly",
       "0% left",
       "⏱ reset in 1d 0h 44m",
+    ].join("\n")
+  );
+});
+
+test("buildUsageCommandText caps personal quota at 0% while a provider window is cut off", async () => {
+  // Live scenario: session healthy (98% real, above the 10% cutoff) but weekly
+  // below the 10% cutoff → provider is cut off. The API view must read 0% on
+  // every numeric line (session included, and the key's personal weekly), while
+  // a line with no configured limit stays "Unavailable".
+  const text = await buildUsageCommandText(
+    {
+      id: "key-cut",
+      name: "cut",
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 50,
+      allowedConnections: ["conn-claude"],
+    },
+    {
+      now: () => NOW,
+      getApiKeyUsageLimitStatus: async () => ({
+        enabled: true,
+        dailyLimitUsd: null,
+        weeklyLimitUsd: 50,
+        dailySpentUsd: 0,
+        weeklySpentUsd: 0,
+        dailyWindowStartIso: new Date(NOW - 18 * 60 * 60_000).toISOString(),
+        dailyResetAtIso: new Date(NOW + 6 * 60 * 60_000).toISOString(),
+        weeklyWindowStartIso: new Date(NOW - 4 * 24 * 60 * 60_000).toISOString(),
+        weeklyResetAtIso: new Date(NOW + 3 * 24 * 60 * 60_000).toISOString(),
+        dailyExceeded: false,
+        weeklyExceeded: false,
+      }),
+      getProviderConnectionById: async () => ({
+        id: "conn-claude",
+        provider: "claude",
+        isActive: true,
+        quotaWindowThresholds: { "session (5h)": 10, "weekly (7d)": 10 },
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "session (5h)": {
+            used: 2,
+            total: 100,
+            resetAt: new Date(NOW + 3 * 60 * 60_000).toISOString(),
+          },
+          "weekly (7d)": {
+            used: 93,
+            total: 100,
+            resetAt: new Date(NOW + 3 * 24 * 60 * 60_000).toISOString(),
+          },
+        },
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+      isValidApiKey: async () => true,
+      getApiKeyMetadata: async () => null,
+      getQuotaPolicy: async () => ({
+        defaultThresholdPercent: 0,
+        providerWindowDefaults: {},
+      }),
+    },
+    { preferredProvider: "claude" }
+  );
+
+  assert.equal(
+    text,
+    [
+      "Personal quota",
+      "Daily",
+      "Unavailable",
+      "⏱ reset in 6h 0m",
+      "",
+      "Weekly",
+      "0% left",
+      "⏱ reset in 3d 0h 0m",
+      "",
+      "Provider quota",
+      "Session",
+      "0% left",
+      "⏱ reset in 3h 0m",
+      "",
+      "Weekly",
+      "0% left",
+      "⏱ reset in 3d 0h 0m",
     ].join("\n")
   );
 });

@@ -486,17 +486,36 @@ export function buildApiKeyUsageLimitText(
   ].join("\n");
 }
 
+// The om-usage (API) surface caps each "left" percentage at the provider's
+// effective remaining after cutoff (capLeftPercent). A provider that is cut off
+// on any window then reads as 0% across every quota line — personal included —
+// instead of advertising personal quota the caller cannot actually spend, since
+// nothing routes while the provider is below its cutoff. capLeftPercent === null
+// leaves the value untouched (callers that want the raw personal quota).
+function formatLeftPercentWithCap(
+  usedPercent: number | null,
+  capLeftPercent: number | null
+): string {
+  if (usedPercent === null || !Number.isFinite(usedPercent)) return "Unavailable";
+  let left = 100 - clampPercent(usedPercent);
+  if (capLeftPercent !== null && Number.isFinite(capLeftPercent)) {
+    left = Math.min(left, capLeftPercent);
+  }
+  return `${Math.round(clampPercent(left))}% left`;
+}
+
 export function buildApiKeyUsageLimitPercentText(
   status: ApiKeyUsageLimitStatus,
-  now = Date.now()
+  now = Date.now(),
+  capLeftPercent: number | null = null
 ): string {
   return [
     "Daily",
-    formatLeftPercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd)),
+    formatLeftPercentWithCap(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd), capLeftPercent),
     `⏱ reset in ${formatResetIn(status.dailyResetAtIso, now)}`,
     "",
     "Weekly",
-    formatLeftPercent(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd)),
+    formatLeftPercentWithCap(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd), capLeftPercent),
     `⏱ reset in ${formatResetIn(status.weeklyResetAtIso, now)}`,
   ].join("\n");
 }

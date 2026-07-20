@@ -506,22 +506,46 @@ function selectUsageSnapshot(
   return selectBestUsageSnapshot(snapshots);
 }
 
+function quotaRealRemaining(match: QuotaMatch | null): number | null {
+  const usedPercent = getQuotaUsedPercent(match?.quota ?? null);
+  return usedPercent === null || !Number.isFinite(usedPercent)
+    ? null
+    : 100 - Math.max(0, Math.min(100, usedPercent));
+}
+
+// A single window's remaining after its cutoff — 0 once it drops below the
+// cutoff, otherwise the proportional remaining above it.
+function windowEffectiveRemaining(
+  match: QuotaMatch | null,
+  snapshot: UsageSnapshot,
+  policy: UsageCommandQuotaPolicy
+): number | null {
+  if (!match) return null;
+  const cutoff = resolveQuotaCutoffPercent(snapshot, match.key, policy);
+  return effectiveRemainingPercent(quotaRealRemaining(match), cutoff);
+}
+
+// Caps a remaining percentage at the provider cap. The cap is 0 only when the
+// provider is cut off (some window below its cutoff); otherwise it's null and
+// the value passes through untouched. A line with no data stays "Unavailable".
+function capRemainingPercent(remaining: number | null, cap: number | null): number | null {
+  if (remaining === null) return null;
+  if (cap === null || !Number.isFinite(cap)) return remaining;
+  return Math.min(remaining, cap);
+}
+
 function appendQuotaBlock(
   lines: string[],
   label: string,
   match: QuotaMatch | null,
   snapshot: UsageSnapshot,
   policy: UsageCommandQuotaPolicy,
-  now: number
+  now: number,
+  providerCap: number | null
 ) {
   lines.push(label);
-  const usedPercent = getQuotaUsedPercent(match?.quota ?? null);
-  const realRemaining =
-    usedPercent === null || !Number.isFinite(usedPercent)
-      ? null
-      : 100 - Math.max(0, Math.min(100, usedPercent));
-  const cutoff = match ? resolveQuotaCutoffPercent(snapshot, match.key, policy) : 0;
-  lines.push(formatLeftPercent(effectiveRemainingPercent(realRemaining, cutoff)));
+  const effective = windowEffectiveRemaining(match, snapshot, policy);
+  lines.push(formatLeftPercent(capRemainingPercent(effective, providerCap)));
   lines.push(`⏱ reset in ${formatResetIn(getResetAt(match?.quota ?? null), now)}`);
 }
 
@@ -532,6 +556,28 @@ export async function buildUsageCommandText(
 ): Promise<string> {
   const resolvedDeps = await normalizeDeps(deps);
   const sections: string[] = [];
+
+  const snapshot = selectUsageSnapshot(
+    await collectUsageSnapshots(metadata, resolvedDeps),
+    selection
+  );
+  const policy = snapshot ? await resolvedDeps.getQuotaPolicy() : null;
+
+  // A provider is "cut off" once ANY window drops to/below its cutoff
+  // (effective remaining 0). While cut off nothing routes through it, so the
+  // API/@@om-usage view collapses every line to 0% — including the key's own
+  // personal quota, which can't be spent while the provider is unavailable.
+  // When no window is cut off, each line keeps showing its own cutoff-adjusted
+  // remaining. The admin dashboard is unaffected and still shows raw per-window
+  // real values.
+  const sessionMatch = snapshot ? findQuota(snapshot.quotas, "session") : null;
+  const weeklyMatch = snapshot ? findQuota(snapshot.quotas, "weekly") : null;
+  const sessionEffective =
+    snapshot && policy ? windowEffectiveRemaining(sessionMatch, snapshot, policy) : null;
+  const weeklyEffective =
+    snapshot && policy ? windowEffectiveRemaining(weeklyMatch, snapshot, policy) : null;
+  const providerCap = sessionEffective === 0 || weeklyEffective === 0 ? 0 : null;
+
   if (metadata.usageLimitEnabled === true) {
     const usageMetadata: UsageCommandApiKeyMetadata = {
       ...metadata,
@@ -541,25 +587,21 @@ export async function buildUsageCommandText(
       now: resolvedDeps.now,
     });
     const now = resolvedDeps.now();
-    sections.push(["Personal quota", buildApiKeyUsageLimitPercentText(status, now)].join("\n"));
+    sections.push(
+      ["Personal quota", buildApiKeyUsageLimitPercentText(status, now, providerCap)].join("\n")
+    );
   }
 
-  const snapshot = selectUsageSnapshot(
-    await collectUsageSnapshots(metadata, resolvedDeps),
-    selection
-  );
-
-  if (!snapshot) {
+  if (!snapshot || !policy) {
     sections.push(["Provider quota", "No cached usage data available."].join("\n"));
     return sections.join("\n\n");
   }
 
   const now = resolvedDeps.now();
-  const policy = await resolvedDeps.getQuotaPolicy();
   const lines = ["Provider quota"];
-  appendQuotaBlock(lines, "Session", findQuota(snapshot.quotas, "session"), snapshot, policy, now);
+  appendQuotaBlock(lines, "Session", sessionMatch, snapshot, policy, now, providerCap);
   lines.push("");
-  appendQuotaBlock(lines, "Weekly", findQuota(snapshot.quotas, "weekly"), snapshot, policy, now);
+  appendQuotaBlock(lines, "Weekly", weeklyMatch, snapshot, policy, now, providerCap);
   sections.push(lines.join("\n"));
   return sections.join("\n\n");
 }
