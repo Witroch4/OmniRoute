@@ -14,7 +14,7 @@
  * - Optional client-supplied continuity via body (`notion_thread_id`/`thread_id`)
  *   or the `X-Notion-Thread-Id` header (via `ExecuteInput.clientHeaders`).
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -439,10 +439,10 @@ export function readClientThreadId(
 export function hashNotionCallerCookie(cookie: string): string {
   const raw = (cookie || "").trim();
   if (!raw) return "anon";
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < raw.length; i++) {
-    hash ^= raw.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
+  // SHA-256 (128-bit prefix) rather than a 32-bit FNV digest: this hash is a
+  // SECURITY boundary (per-caller cache isolation), so it must be collision-
+  // resistant — a 32-bit space is birthday-crackable, letting an attacker craft
+  // a cookie that lands in a victim's namespace. crypto SHA-256 makes both
+  // accidental and crafted collisions infeasible; the raw cookie is never stored.
+  return createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
