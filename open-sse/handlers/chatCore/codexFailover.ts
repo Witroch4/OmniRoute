@@ -51,6 +51,31 @@ export function buildCodexAllExhaustedError(opts: {
   return { retryAfterSeconds, body, message };
 }
 
+/**
+ * Build the SSE body that surfaces "all Codex accounts exhausted" IN-BAND on a
+ * streaming request.
+ *
+ * A streaming Codex client (codex-rs) decides whether to retry from the HTTP
+ * status *before* reading the body, so a bare 429 makes it retry blindly and end
+ * with `exceeded retry limit, last status: 429` — the body is never shown. The
+ * `/v1/responses` transport instead surfaces errors as a `response.failed` SSE
+ * event (see codex.ts `failController`), so a 200 `text/event-stream` carrying a
+ * single `response.failed` event makes the client render the real reason and
+ * stop retrying. Mirrors the framing OmniRoute already emits for upstream stream
+ * failures. Pure for trivial unit testing.
+ */
+export function buildCodexExhaustedStreamBody(message: string): string {
+  const payload = JSON.stringify({
+    type: "response.failed",
+    response: {
+      id: null,
+      status: "failed",
+      error: { code: "codex_all_accounts_exhausted", message },
+    },
+  });
+  return `event: response.failed\ndata: ${payload}\n\ndata: [DONE]\n\n`;
+}
+
 export async function markCodexScopeRateLimited(params: {
   failedConnectionId: string;
   model: string | null;

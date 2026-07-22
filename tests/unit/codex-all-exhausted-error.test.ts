@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCodexAllExhaustedError } from "../../open-sse/handlers/chatCore/codexFailover.ts";
+import {
+  buildCodexAllExhaustedError,
+  buildCodexExhaustedStreamBody,
+} from "../../open-sse/handlers/chatCore/codexFailover.ts";
 
 /**
  * Fix A — when Codex account-rotation failover has no account left, the client
@@ -50,4 +53,19 @@ test("A: a past reset timestamp is treated as unknown (no negative Retry-After)"
   const out = buildCodexAllExhaustedError({ retryAfter: resetAt, now: NOW });
   assert.equal(out.retryAfterSeconds, 60);
   assert.equal(JSON.parse(out.body).error.reset_at, undefined);
+});
+
+test("A(stream): exhausted body is a terminal response.failed SSE event the CLI renders", () => {
+  const msg = "All Codex accounts have reached their usage limit. Earliest reset after 137h 25m.";
+  const sse = buildCodexExhaustedStreamBody(msg);
+  // Must be an SSE `response.failed` event (what codex-rs surfaces) + a [DONE].
+  assert.match(sse, /^event: response\.failed\ndata: /);
+  assert.ok(sse.includes("data: [DONE]\n\n"));
+  // The data line must be valid JSON carrying the human reason.
+  const dataLine = sse.split("\n").find((l) => l.startsWith("data: {"))!;
+  const parsed = JSON.parse(dataLine.slice("data: ".length));
+  assert.equal(parsed.type, "response.failed");
+  assert.equal(parsed.response.status, "failed");
+  assert.equal(parsed.response.error.code, "codex_all_accounts_exhausted");
+  assert.equal(parsed.response.error.message, msg);
 });

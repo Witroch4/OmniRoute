@@ -28,6 +28,7 @@ import {
 import {
   markCodexScopeRateLimited,
   buildCodexAllExhaustedError,
+  buildCodexExhaustedStreamBody,
 } from "./chatCore/codexFailover.ts";
 import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
@@ -2544,26 +2545,37 @@ export async function handleChatCore({
                   } catch {
                     // best-effort — original 429 body is small
                   }
+                  if (stream) {
+                    // Streaming clients (codex-rs) retry on the HTTP status before
+                    // reading the body, so a bare 429 loops into "exceeded retry
+                    // limit". Deliver the reason IN-BAND as a `response.failed` SSE
+                    // event on a 200 stream so the client renders it and stops.
+                    releaseAccountSemaphore();
+                    const sseHeaders = new Headers();
+                    sseHeaders.set("content-type", "text/event-stream; charset=utf-8");
+                    sseHeaders.set("cache-control", "no-cache, no-transform");
+                    sseHeaders.set("connection", "keep-alive");
+                    sseHeaders.set("retry-after", String(exhausted.retryAfterSeconds));
+                    return {
+                      ...res,
+                      response: new Response(buildCodexExhaustedStreamBody(exhausted.message), {
+                        status: 200,
+                        statusText: "OK",
+                        headers: sseHeaders,
+                      }),
+                      _executionCredentials: execCreds,
+                    };
+                  }
                   const exhaustedHeaders = new Headers(normalizeHeaders(res.response.headers));
                   exhaustedHeaders.set("retry-after", String(exhausted.retryAfterSeconds));
                   exhaustedHeaders.set("content-type", "application/json");
-                  const exhaustedRes = {
+                  return {
                     ...res,
                     response: new Response(exhausted.body, {
                       status: 429,
                       statusText: res.response.statusText || "Too Many Requests",
                       headers: exhaustedHeaders,
                     }),
-                  };
-                  if (stream) {
-                    releaseAccountSemaphore();
-                    return {
-                      ...exhaustedRes,
-                      _executionCredentials: execCreds,
-                    };
-                  }
-                  return {
-                    ...exhaustedRes,
                     _accountSemaphoreRelease: releaseAccountSemaphore,
                     _executionCredentials: execCreds,
                   };
