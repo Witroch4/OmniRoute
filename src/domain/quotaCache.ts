@@ -301,8 +301,11 @@ export function getQuotaCache(connectionId: string): QuotaCacheEntry | null {
   return cache.get(connectionId) || null;
 }
 
-function hydrateQuotaCacheFromSnapshots(connectionId: string): QuotaCacheEntry | null {
-  if (cache.has(connectionId)) return cache.get(connectionId) || null;
+function hydrateQuotaCacheFromSnapshots(
+  connectionId: string,
+  force = false
+): QuotaCacheEntry | null {
+  if (!force && cache.has(connectionId)) return cache.get(connectionId) || null;
 
   let snapshots;
   try {
@@ -383,8 +386,23 @@ export function isAccountQuotaExhausted(connectionId: string): boolean {
     return false;
   }
 
-  // Exhausted entries without resetAt expire after fixed TTL
   const age = now - entry.fetchedAt;
+
+  // Stale-exhausted re-validation: an exhausted entry can carry a far-future
+  // `nextResetAt` — e.g. the long "session"/plan reset window a Codex account
+  // reports (observed ~30 days out). Because the TTL escape below only fires
+  // when `nextResetAt` is absent, such an entry blocks the account until that
+  // far reset even after it has actually recovered — forcing traffic onto an
+  // exhausted lower-priority account (a priority-1 Codex key stayed blocked for
+  // ~27 days while its session window was back at 100%). Once the entry is older
+  // than the refresh window, re-read the latest persisted snapshot (updated by
+  // the background quota refresh) and trust that over the stale in-memory flag.
+  if (age > EXHAUSTED_REFRESH_MS) {
+    const fresh = hydrateQuotaCacheFromSnapshots(connectionId, true);
+    if (fresh && !fresh.exhausted) return false;
+  }
+
+  // Exhausted entries without resetAt expire after fixed TTL
   if (!entry.nextResetAt && age > EXHAUSTED_TTL_MS) return false;
 
   return true;

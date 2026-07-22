@@ -25,7 +25,10 @@ import {
   resolveCompressionHeader,
   isStripReasoningRequested,
 } from "./chatCore/headers.ts";
-import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+import {
+  markCodexScopeRateLimited,
+  buildCodexAllExhaustedError,
+} from "./chatCore/codexFailover.ts";
 import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
@@ -2515,16 +2518,52 @@ export async function handleChatCore({
                 ).catch(() => null);
 
                 if (!nextCreds || nextCreds.allRateLimited) {
-                  log?.warn?.("CODEX_FAILOVER", "No more codex accounts available — returning 429");
+                  // `getProviderCredentials` already computed the earliest reset
+                  // across the exhausted accounts — surface it instead of the bare
+                  // upstream 429 (which makes the Codex client retry blindly until
+                  // "exceeded retry limit"). Rebuild the 429 with a clear body and a
+                  // bounded Retry-After so the client backs off with the real reason.
+                  const exhaustedRetryAfter =
+                    nextCreds && "retryAfter" in nextCreds
+                      ? (nextCreds as { retryAfter?: string | null }).retryAfter
+                      : null;
+                  const exhaustedRetryAfterHuman =
+                    nextCreds && "retryAfterHuman" in nextCreds
+                      ? (nextCreds as { retryAfterHuman?: string | null }).retryAfterHuman
+                      : null;
+                  const exhausted = buildCodexAllExhaustedError({
+                    retryAfter: exhaustedRetryAfter,
+                    retryAfterHuman: exhaustedRetryAfterHuman,
+                  });
+                  log?.warn?.(
+                    "CODEX_FAILOVER",
+                    `No more codex accounts available — returning 429 (${exhausted.message})`
+                  );
+                  try {
+                    await res.response.body?.cancel();
+                  } catch {
+                    // best-effort — original 429 body is small
+                  }
+                  const exhaustedHeaders = new Headers(normalizeHeaders(res.response.headers));
+                  exhaustedHeaders.set("retry-after", String(exhausted.retryAfterSeconds));
+                  exhaustedHeaders.set("content-type", "application/json");
+                  const exhaustedRes = {
+                    ...res,
+                    response: new Response(exhausted.body, {
+                      status: 429,
+                      statusText: res.response.statusText || "Too Many Requests",
+                      headers: exhaustedHeaders,
+                    }),
+                  };
                   if (stream) {
                     releaseAccountSemaphore();
                     return {
-                      ...res,
+                      ...exhaustedRes,
                       _executionCredentials: execCreds,
                     };
                   }
                   return {
-                    ...res,
+                    ...exhaustedRes,
                     _accountSemaphoreRelease: releaseAccountSemaphore,
                     _executionCredentials: execCreds,
                   };
