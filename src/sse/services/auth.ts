@@ -127,6 +127,13 @@ interface CooldownInspectionState {
   retryableModelCooldownMs: number | null;
 }
 
+function bypassesQuotaPreflightCooldown(
+  connection: Pick<ProviderConnectionView, "lastErrorSource">,
+  bypassQuotaPolicy: boolean
+): boolean {
+  return bypassQuotaPolicy && connection.lastErrorSource === "quota_preflight";
+}
+
 const MIN_QUOTA_THRESHOLD_PERCENT = 1;
 const MAX_QUOTA_THRESHOLD_PERCENT = 100;
 const NON_RETRYABLE_MODEL_LOCKOUT_REASONS = new Set(["not_found", "not_found_local"]);
@@ -1230,7 +1237,13 @@ export async function getProviderCredentials(
         return false;
       }
       if (!allowSuppressedConnections) {
-        if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) return false;
+        if (
+          !allowRateLimitedConnections &&
+          isAccountUnavailable(c.rateLimitedUntil) &&
+          !bypassesQuotaPreflightCooldown(c, bypassQuotaPolicy)
+        ) {
+          return false;
+        }
         if (isTerminalConnectionStatus(c)) return false;
         if (provider === "codex" && isCodexScopeUnavailable(c, requestedModel)) return false;
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
@@ -1929,7 +1942,18 @@ export async function markAccountUnavailable(
     const existingCooldownMs = conn?.rateLimitedUntil
       ? cooldownUntilMs(conn.rateLimitedUntil)
       : NaN;
-    if (Number.isFinite(existingCooldownMs) && existingCooldownMs > Date.now()) {
+    // An existing cooldown created by an internal quota-preflight cutoff must NOT
+    // suppress a genuine provider response (429/403/…): the upstream signal is
+    // authoritative and has to overwrite the preflight origin, otherwise the
+    // quota-preflight bypass would keep passing this connection into a provider
+    // that is really throttling it. Real (provider-sourced) cooldowns still
+    // dedupe normally to preserve the anti-thundering-herd behavior.
+    const existingIsPreflightOnly = conn?.lastErrorSource === "quota_preflight";
+    if (
+      Number.isFinite(existingCooldownMs) &&
+      existingCooldownMs > Date.now() &&
+      !existingIsPreflightOnly
+    ) {
       log.info(
         "AUTH",
         `${connectionId.slice(0, 8)} already marked unavailable (until ${conn?.rateLimitedUntil}), skipping duplicate mark`
@@ -2206,6 +2230,12 @@ export async function markAccountUnavailable(
     const baseUpdate = {
       lastError: errorMsg,
       lastErrorType: providerErrorType,
+      // Tag the origin as a real provider response (429/5xx/etc.), NOT preflight.
+      // This overwrites any stale lastErrorSource="quota_preflight" left by an
+      // earlier internal-cutoff block, so the quota-preflight bypass (which keys
+      // on lastErrorSource) can never mistake a genuine provider cooldown for a
+      // preflight one and stampede an already-throttled upstream.
+      lastErrorSource: "provider_response",
       errorCode: status,
       lastErrorAt: new Date().toISOString(),
       backoffLevel: newBackoffLevel ?? backoffLevel,

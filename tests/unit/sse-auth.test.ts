@@ -228,6 +228,72 @@ test("getProviderCredentials enforces generic quota policy unless explicitly byp
   assert.equal(bypassed.connectionId, connection.id);
 });
 
+test("getProviderCredentials bypasses a persisted quota-preflight cooldown without clearing it", async () => {
+  const retryAfter = futureIso();
+  const connection = await seedConnection("openai", {
+    name: "quota-preflight-cooldown",
+    testStatus: "unavailable",
+    rateLimitedUntil: retryAfter,
+    lastError: "Quota preflight blocked: 0% left",
+    lastErrorType: "quota_exhausted",
+    lastErrorSource: "quota_preflight",
+    errorCode: 429,
+  });
+
+  const blocked = await auth.getProviderCredentials("openai");
+  const bypassed = await auth.getProviderCredentials("openai", null, null, null, {
+    bypassQuotaPolicy: true,
+  });
+  const persisted = await providersDb.getProviderConnectionById(connection.id);
+
+  assert.equal(blocked.allRateLimited, true);
+  assert.equal(bypassed.connectionId, connection.id);
+  assert.equal(persisted?.lastErrorSource, "quota_preflight");
+  assert.equal(persisted?.rateLimitedUntil, retryAfter);
+});
+
+test("getProviderCredentials keeps a real provider cooldown blocked when quota policy is bypassed", async () => {
+  const retryAfter = futureIso();
+  await seedConnection("openai", {
+    name: "provider-cooldown",
+    testStatus: "unavailable",
+    rateLimitedUntil: retryAfter,
+    lastError: "Upstream provider returned 429",
+    lastErrorType: "rate_limit",
+    lastErrorSource: "provider_response",
+    errorCode: 429,
+  });
+
+  const bypassed = await auth.getProviderCredentials("openai", null, null, null, {
+    bypassQuotaPolicy: true,
+  });
+
+  assert.equal(bypassed.allRateLimited, true);
+  assert.equal(bypassed.retryAfter, retryAfter);
+});
+
+test("a real 429 overwrites a stale quota_preflight source so bypass can no longer pass it", async () => {
+  // Reproduces the production sequence: a connection is first blocked by an
+  // internal quota-preflight cutoff (lastErrorSource="quota_preflight"), a
+  // bypass request is allowed through, and the upstream then answers a genuine
+  // 429. markAccountUnavailable must re-tag the origin as provider_response so
+  // the next bypass request respects the real cooldown instead of stampeding.
+  const connection = await seedConnection("openai", {
+    name: "preflight-then-real-429",
+    testStatus: "unavailable",
+    rateLimitedUntil: futureIso(),
+    lastError: "Quota preflight blocked: 0% left",
+    lastErrorType: "quota_exhausted",
+    lastErrorSource: "quota_preflight",
+    errorCode: 429,
+  });
+
+  await auth.markAccountUnavailable(connection.id, 429, "rate limited", "openai");
+
+  const persisted = await providersDb.getProviderConnectionById(connection.id);
+  assert.equal(persisted?.lastErrorSource, "provider_response");
+});
+
 test("getProviderCredentialsWithQuotaPreflight persists exhausted accounts until reset and selects a healthy sibling", async () => {
   const resetAt = futureIso(120_000);
   const blocked = await seedConnection("openai", {
