@@ -43,8 +43,11 @@ export function buildCodexAllExhaustedError(opts: {
   const body = JSON.stringify({
     error: {
       message,
+      // `insufficient_quota` (not a custom code) so a Codex client that reads
+      // this JSON classifies it as a non-retryable quota error, matching the
+      // streaming `response.failed` path.
       type: "insufficient_quota",
-      code: "codex_all_accounts_exhausted",
+      code: "insufficient_quota",
       ...(hasReset ? { reset_at: opts.retryAfter } : {}),
     },
   });
@@ -70,7 +73,14 @@ export function buildCodexExhaustedStreamBody(message: string): string {
     response: {
       id: null,
       status: "failed",
-      error: { code: "codex_all_accounts_exhausted", message },
+      // The `code` MUST be `insufficient_quota`: codex-rs classifies a
+      // response.failed error by its `code` and only treats
+      // context_length_exceeded / insufficient_quota / usage_not_included as
+      // NON-retryable (surfaced to the user). Every other code — including a
+      // custom one — falls into its default `Retryable` branch and loops into
+      // "exceeded retry limit". `insufficient_quota` → QuotaExceeded → the client
+      // shows the usage-limit message and stops retrying.
+      error: { type: "insufficient_quota", code: "insufficient_quota", message },
     },
   });
   return `event: response.failed\ndata: ${payload}\n\ndata: [DONE]\n\n`;

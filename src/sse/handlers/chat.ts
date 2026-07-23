@@ -23,6 +23,7 @@ import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { isSelfInflictedUpstreamTimeout } from "@omniroute/open-sse/handlers/chatCore/cooldownClassification.ts";
+import { buildCodexExhaustedStreamBody } from "@omniroute/open-sse/handlers/chatCore/codexFailover.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
 import { resolveRequestAutoControls } from "@omniroute/open-sse/services/autoCombo/requestControls.ts";
@@ -1293,6 +1294,48 @@ async function handleSingleModelChat(
           breaker._onFailure();
         }
 
+        const lastFailedConnectionId =
+          excludedConnectionIds.size > 0
+            ? Array.from(excludedConnectionIds)[excludedConnectionIds.size - 1]
+            : null;
+
+        // Streaming Codex (codex-rs) retries on a 429 HTTP status before reading
+        // the body, so the plain 429 from handleNoCredentials loops into
+        // "exceeded retry limit". When all Codex accounts are unavailable on a
+        // streaming request, deliver the reason IN-BAND as a `response.failed`
+        // SSE event (code `insufficient_quota` → the client treats it as a
+        // non-retryable quota error and shows the usage-limit message).
+        if (body?.stream === true && provider === "codex" && credentials?.allRateLimited) {
+          const reason =
+            (typeof credentials.lastError === "string" && credentials.lastError) ||
+            (typeof lastError === "string" && lastError) ||
+            "All Codex accounts have reached their usage limit";
+          const human =
+            typeof credentials.retryAfterHuman === "string" && credentials.retryAfterHuman
+              ? ` (${credentials.retryAfterHuman})`
+              : "";
+          const sseHeaders = new Headers();
+          sseHeaders.set("content-type", "text/event-stream; charset=utf-8");
+          sseHeaders.set("cache-control", "no-cache, no-transform");
+          sseHeaders.set("connection", "keep-alive");
+          if (typeof credentials.retryAfter === "string") {
+            const secs = Math.ceil(
+              (new Date(credentials.retryAfter).getTime() - Date.now()) / 1000
+            );
+            if (Number.isFinite(secs) && secs > 0) {
+              sseHeaders.set("retry-after", String(Math.min(3600, secs)));
+            }
+          }
+          return withSelectedConnectionHeader(
+            new Response(buildCodexExhaustedStreamBody(`${reason}${human}`), {
+              status: 200,
+              statusText: "OK",
+              headers: sseHeaders,
+            }),
+            lastFailedConnectionId
+          );
+        }
+
         const noCredsRes = handleNoCredentials(
           credentials,
           excludedConnectionIds.size > 0 ? Array.from(excludedConnectionIds)[0] : null,
@@ -1301,10 +1344,6 @@ async function handleSingleModelChat(
           lastError,
           lastStatus
         );
-        const lastFailedConnectionId =
-          excludedConnectionIds.size > 0
-            ? Array.from(excludedConnectionIds)[excludedConnectionIds.size - 1]
-            : null;
         return withSelectedConnectionHeader(noCredsRes, lastFailedConnectionId);
       }
 

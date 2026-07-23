@@ -23,7 +23,7 @@ test("A: near reset surfaces exact Retry-After seconds + reset_at + human reason
   });
   assert.equal(out.retryAfterSeconds, 120);
   const parsed = JSON.parse(out.body);
-  assert.equal(parsed.error.code, "codex_all_accounts_exhausted");
+  assert.equal(parsed.error.code, "insufficient_quota");
   assert.equal(parsed.error.type, "insufficient_quota");
   assert.equal(parsed.error.reset_at, resetAt);
   assert.match(parsed.error.message, /reset after 2m 0s/);
@@ -66,6 +66,10 @@ test("A(stream): exhausted body is a terminal response.failed SSE event the CLI 
   const parsed = JSON.parse(dataLine.slice("data: ".length));
   assert.equal(parsed.type, "response.failed");
   assert.equal(parsed.response.status, "failed");
-  assert.equal(parsed.response.error.code, "codex_all_accounts_exhausted");
+  // MUST be `insufficient_quota` — codex-rs only treats
+  // context_length_exceeded / insufficient_quota / usage_not_included as
+  // NON-retryable; any other code loops into "exceeded retry limit".
+  assert.equal(parsed.response.error.code, "insufficient_quota");
+  assert.equal(parsed.response.error.type, "insufficient_quota");
   assert.equal(parsed.response.error.message, msg);
 });
