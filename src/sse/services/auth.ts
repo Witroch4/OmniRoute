@@ -899,15 +899,17 @@ async function markQuotaPreflightAccountUnavailable(
   requestedModel: string | null
 ): Promise<string> {
   const unavailableUntil = quotaPreflightUnavailableUntil(preflight.resetAt ?? null);
-  const percentLabel = Number.isFinite(preflight.quotaPercent)
-    ? `${Math.round((preflight.quotaPercent as number) * 100)}%`
-    : "exhausted";
+  // NEVER surface the provider's real used-quota percent to the client. A preflight
+  // block always means the window's remaining quota hit its cutoff (effective 0%
+  // left), so we report a masked, cutoff-consistent "0% left" — mirroring the
+  // @@om-usage API surface (see f9a006774). The raw percentUsed stays internal
+  // (admin dashboard / server logs), never in the client-facing lastError.
   const modelLabel = requestedModel ? ` for ${requestedModel}` : "";
 
   await updateProviderConnection(connectionId, {
     rateLimitedUntil: unavailableUntil,
     testStatus: "unavailable",
-    lastError: `Quota preflight blocked${modelLabel}: ${percentLabel}`,
+    lastError: `Quota preflight blocked${modelLabel}: 0% left`,
     lastErrorType: "quota_exhausted",
     lastErrorSource: "quota_preflight",
     errorCode: 429,
