@@ -373,7 +373,7 @@ async function getProviderWeeklyWindow(
   };
 }
 
-async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promise<number> {
+export async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promise<number> {
   if (!apiKeyId) return 0;
   const db = getDbInstance();
   const rows = db

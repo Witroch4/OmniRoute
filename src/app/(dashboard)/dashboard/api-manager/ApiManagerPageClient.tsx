@@ -25,6 +25,7 @@ import { SELF_ACCOUNT_QUOTA_SCOPE, SELF_USAGE_SCOPE } from "@/shared/constants/s
 import { extractApiErrorMessage } from "@/shared/http/apiErrorMessage";
 import { hasProviderQuotaBypassScope } from "@/shared/constants/apiKeyPolicyScopes";
 import { UsageLimitSettings } from "./components/UsageLimitSettings";
+import { MinSpendGuaranteeSettings } from "./components/MinSpendGuaranteeSettings";
 import { ChaosModeAccessToggle } from "./components/ChaosModeAccessToggle";
 import { BypassProviderQuotaToggle } from "./components/BypassProviderQuotaToggle";
 
@@ -131,6 +132,8 @@ interface ApiKey {
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
+  minSpendGuaranteeEnabled?: boolean;
+  minSpendGuaranteeUsd?: number | null;
   allowedQuotas?: string[] | null;
   createdAt: string;
 }
@@ -796,7 +799,9 @@ export default function ApiManagerPageClient() {
     dailyUsageLimitUsd: number | null,
     weeklyUsageLimitUsd: number | null,
     blockedModels: string[],
-    chaosModeEnabled: boolean
+    chaosModeEnabled: boolean,
+    minSpendGuaranteeEnabled: boolean,
+    minSpendGuaranteeUsd: number | null
   ) => {
     if (!editingKey || !editingKey.id) return;
 
@@ -868,6 +873,8 @@ export default function ApiManagerPageClient() {
           dailyUsageLimitUsd,
           weeklyUsageLimitUsd,
           chaosModeEnabled,
+          minSpendGuaranteeEnabled,
+          minSpendGuaranteeUsd,
         }),
       });
 
@@ -1652,7 +1659,9 @@ const PermissionsModal = memo(function PermissionsModal({
     dailyUsageLimitUsd: number | null,
     weeklyUsageLimitUsd: number | null,
     blockedModels: string[],
-    chaosModeEnabled: boolean
+    chaosModeEnabled: boolean,
+    minSpendGuaranteeEnabled: boolean,
+    minSpendGuaranteeUsd: number | null
   ) => void;
 }) {
   const t = useTranslations("apiManager");
@@ -1748,6 +1757,14 @@ const PermissionsModal = memo(function PermissionsModal({
   const [weeklyUsageLimitUsd, setWeeklyUsageLimitUsd] = useState(
     typeof apiKey?.weeklyUsageLimitUsd === "number" && apiKey.weeklyUsageLimitUsd > 0
       ? String(apiKey.weeklyUsageLimitUsd)
+      : ""
+  );
+  const [minSpendGuaranteeEnabled, setMinSpendGuaranteeEnabled] = useState(
+    apiKey?.minSpendGuaranteeEnabled === true
+  );
+  const [minSpendGuaranteeUsd, setMinSpendGuaranteeUsd] = useState(
+    typeof apiKey?.minSpendGuaranteeUsd === "number" && apiKey.minSpendGuaranteeUsd > 0
+      ? String(apiKey.minSpendGuaranteeUsd)
       : ""
   );
   const getModelDisplayName = useCallback(
@@ -1944,7 +1961,9 @@ const PermissionsModal = memo(function PermissionsModal({
       parseUsdLimitInput(dailyUsageLimitUsd),
       parseUsdLimitInput(weeklyUsageLimitUsd),
       blockedModels,
-      chaosModeEnabled
+      chaosModeEnabled,
+      minSpendGuaranteeEnabled,
+      parseUsdLimitInput(minSpendGuaranteeUsd)
     );
   }, [
     onSave,
@@ -1984,6 +2003,8 @@ const PermissionsModal = memo(function PermissionsModal({
     blockedClaudeCodeFamilies,
     initialBlockedModels,
     chaosModeEnabled,
+    minSpendGuaranteeEnabled,
+    minSpendGuaranteeUsd,
     apiKey?.scopes,
     t,
   ]);
@@ -2570,6 +2591,12 @@ const PermissionsModal = memo(function PermissionsModal({
             onEnabledChange={setUsageLimitEnabled}
             onDailyLimitUsdChange={setDailyUsageLimitUsd}
             onWeeklyLimitUsdChange={setWeeklyUsageLimitUsd}
+          />
+          <MinSpendGuaranteeSettings
+            enabled={minSpendGuaranteeEnabled}
+            guaranteeUsd={minSpendGuaranteeUsd}
+            onEnabledChange={setMinSpendGuaranteeEnabled}
+            onGuaranteeUsdChange={setMinSpendGuaranteeUsd}
           />
         </div>
 

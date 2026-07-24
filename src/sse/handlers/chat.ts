@@ -95,6 +95,7 @@ import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
+import { isMinSpendGuaranteeActive } from "../../lib/usage/minSpendGuarantee";
 import { cloneLogPayload } from "@/lib/logPayloads";
 import { handleInternalUsageCommand } from "@/lib/usage/internalUsageCommand";
 import {
@@ -442,7 +443,18 @@ export async function handleChat(
     return policy.rejection;
   }
   const apiKeyInfo = policy.apiKeyInfo;
-  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
+  // Route past the provider cutoff when the bypass scope grants it OR the
+  // min-spend guarantee is still below its weekly floor (spends past the
+  // cutoff until the guaranteed minimum is met, then reverts to the cutoff).
+  const minSpendGuaranteeActive = await isMinSpendGuaranteeActive(apiKeyInfo);
+  const bypassProviderQuotaPolicy =
+    hasProviderQuotaBypassScope(apiKeyInfo?.scopes) || minSpendGuaranteeActive;
+  if (minSpendGuaranteeActive && apiKeyInfo?.id) {
+    log.info(
+      "QUOTA",
+      `min-spend guarantee active for key ${String(apiKeyInfo.id).slice(0, 8)} — bypassing cutoff until floor met`
+    );
+  }
   telemetry.endPhase();
 
   // Guardrail pre-call pipeline — prompt injection, PII masking, and future custom rules.
@@ -1098,7 +1110,11 @@ async function handleSingleModelChat(
     return runtimeOptions.providerId;
   })();
   const forceLiveComboTest = runtimeOptions.forceLiveComboTest === true;
-  const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
+  // See the min-spend guarantee note on the primary handler above: an unmet
+  // weekly floor forces selection past the cutoff, independent of the scope.
+  const bypassProviderQuotaPolicy =
+    hasProviderQuotaBypassScope(apiKeyInfo?.scopes) ||
+    (await isMinSpendGuaranteeActive(apiKeyInfo));
   const hasForcedConnection =
     typeof runtimeOptions.forcedConnectionId === "string" &&
     runtimeOptions.forcedConnectionId.trim().length > 0;

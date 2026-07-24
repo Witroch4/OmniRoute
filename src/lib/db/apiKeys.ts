@@ -14,6 +14,11 @@ import {
   hasUsageLimitUpdate,
   parseApiKeyUsageLimitFields,
 } from "./apiKeyUsageLimitFields";
+import {
+  appendMinSpendGuaranteeUpdates,
+  hasMinSpendGuaranteeUpdate,
+  parseApiKeyMinSpendFields,
+} from "./apiKeyMinSpendFields";
 import { setNoLog } from "../compliance/noLog";
 import { resolveModelAlias } from "@omniroute/open-sse/services/modelDeprecation.ts";
 import { getSyncedAvailableModelsByConnection, getCustomModels, getModelIsHidden } from "./models";
@@ -97,6 +102,10 @@ interface ApiKeyMetadata {
   dailyUsageLimitUsd: number | null;
   weeklyUsageLimitUsd: number | null;
   chaosModeEnabled: boolean;
+  // Minimum-spend guarantee: floor that lets the key spend at least N USD per
+  // rolling weekly window, routing past the provider quota cutoff if needed.
+  minSpendGuaranteeEnabled: boolean;
+  minSpendGuaranteeUsd: number | null;
 }
 
 interface ApiKeyRow extends JsonRecord {
@@ -138,6 +147,10 @@ interface ApiKeyRow extends JsonRecord {
   weeklyUsageLimitUsd?: unknown;
   chaos_mode_enabled?: unknown;
   chaosModeEnabled?: unknown;
+  min_spend_guarantee_enabled?: unknown;
+  minSpendGuaranteeEnabled?: unknown;
+  min_spend_guarantee_usd?: unknown;
+  minSpendGuaranteeUsd?: unknown;
 }
 
 interface StatementLike<TRow = unknown> {
@@ -185,6 +198,8 @@ interface ApiKeyView extends JsonRecord {
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
   chaosModeEnabled?: boolean;
+  minSpendGuaranteeEnabled?: boolean;
+  minSpendGuaranteeUsd?: number | null;
 }
 
 // LRU cache for API key validation (valid keys only)
@@ -398,7 +413,7 @@ function getPreparedStatements(db: ApiKeysDbLike): ApiKeysStatements {
       "SELECT id, expires_at, revoked_at, is_active, is_banned FROM api_keys WHERE key = ? OR key_hash = ?"
     );
     _stmtGetKeyMetadata = db.prepare<ApiKeyRow>(
-      "SELECT id, name, machine_id, allowed_models, blocked_models, allowed_combos, allowed_connections, allowed_quotas, no_log, auto_resolve, is_active, access_schedule, max_requests_per_day, max_requests_per_minute, throttle_delay_ms, max_sessions, revoked_at, expires_at, ip_allowlist, scopes, rate_limits, is_banned, key_hash, allowed_endpoints, stream_default_mode, disable_non_public_models, allow_usage_command, usage_limit_enabled, daily_usage_limit_usd, weekly_usage_limit_usd, chaos_mode_enabled, proxy_id FROM api_keys WHERE key = ? OR key_hash = ?"
+      "SELECT id, name, machine_id, allowed_models, blocked_models, allowed_combos, allowed_connections, allowed_quotas, no_log, auto_resolve, is_active, access_schedule, max_requests_per_day, max_requests_per_minute, throttle_delay_ms, max_sessions, revoked_at, expires_at, ip_allowlist, scopes, rate_limits, is_banned, key_hash, allowed_endpoints, stream_default_mode, disable_non_public_models, allow_usage_command, usage_limit_enabled, daily_usage_limit_usd, weekly_usage_limit_usd, chaos_mode_enabled, min_spend_guarantee_enabled, min_spend_guarantee_usd, proxy_id FROM api_keys WHERE key = ? OR key_hash = ?"
     );
     _stmtInsertKey = db.prepare(
       "INSERT INTO api_keys (id, name, key, machine_id, allowed_models, no_log, created_at, key_prefix, key_hash, scopes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -453,6 +468,7 @@ export async function getApiKeys() {
     camelRow.allowUsageCommand = parseAllowUsageCommand((camelRow as JsonRecord).allowUsageCommand);
     camelRow.chaosModeEnabled = parseChaosModeEnabled((camelRow as JsonRecord).chaosModeEnabled);
     Object.assign(camelRow, parseApiKeyUsageLimitFields(camelRow));
+    Object.assign(camelRow, parseApiKeyMinSpendFields(camelRow));
     if (typeof camelRow.id === "string" && camelRow.id.length > 0) {
       setNoLog(camelRow.id, camelRow.noLog === true);
     }
@@ -557,6 +573,7 @@ export async function getApiKeyById(id: string) {
   camelRow.allowUsageCommand = parseAllowUsageCommand((camelRow as JsonRecord).allowUsageCommand);
   camelRow.chaosModeEnabled = parseChaosModeEnabled((camelRow as JsonRecord).chaosModeEnabled);
   Object.assign(camelRow, parseApiKeyUsageLimitFields(camelRow));
+  Object.assign(camelRow, parseApiKeyMinSpendFields(camelRow));
   if (typeof camelRow.id === "string" && camelRow.id.length > 0) {
     setNoLog(camelRow.id, camelRow.noLog === true);
   }
@@ -683,6 +700,8 @@ export async function updateApiKeyPermissions(
         dailyUsageLimitUsd?: number | null;
         weeklyUsageLimitUsd?: number | null;
         chaosModeEnabled?: boolean;
+        minSpendGuaranteeEnabled?: boolean;
+        minSpendGuaranteeUsd?: number | null;
       }
 ) {
   const db = getDbInstance() as ApiKeysDbLike;
@@ -722,6 +741,10 @@ export async function updateApiKeyPermissions(
           weeklyUsageLimitUsd: (update as { weeklyUsageLimitUsd?: number | null })
             .weeklyUsageLimitUsd,
           chaosModeEnabled: (update as { chaosModeEnabled?: boolean }).chaosModeEnabled,
+          minSpendGuaranteeEnabled: (update as { minSpendGuaranteeEnabled?: boolean })
+            .minSpendGuaranteeEnabled,
+          minSpendGuaranteeUsd: (update as { minSpendGuaranteeUsd?: number | null })
+            .minSpendGuaranteeUsd,
         };
 
   if (
@@ -749,7 +772,8 @@ export async function updateApiKeyPermissions(
     normalized.disableNonPublicModels === undefined &&
     normalized.allowUsageCommand === undefined &&
     normalized.chaosModeEnabled === undefined &&
-    !hasUsageLimitUpdate(normalized as Record<string, unknown>)
+    !hasUsageLimitUpdate(normalized as Record<string, unknown>) &&
+    !hasMinSpendGuaranteeUpdate(normalized as Record<string, unknown>)
   ) {
     return false;
   }
@@ -783,6 +807,8 @@ export async function updateApiKeyPermissions(
     dailyUsageLimitUsd?: number | null;
     weeklyUsageLimitUsd?: number | null;
     chaosModeEnabled?: number;
+    minSpendGuaranteeEnabled?: number;
+    minSpendGuaranteeUsd?: number | null;
   } = { id };
 
   if (normalized.name !== undefined) {
@@ -892,6 +918,7 @@ export async function updateApiKeyPermissions(
   }
 
   appendUsageLimitUpdates(normalized as Record<string, unknown>, updates, params);
+  appendMinSpendGuaranteeUpdates(normalized as Record<string, unknown>, updates, params);
 
   const maxSessionsUpdate = (normalized as Record<string, unknown>).maxSessions;
   if (maxSessionsUpdate !== undefined) {
@@ -1278,6 +1305,8 @@ export async function getApiKeyMetadata(
       dailyUsageLimitUsd: null,
       weeklyUsageLimitUsd: null,
       chaosModeEnabled: false,
+      minSpendGuaranteeEnabled: false,
+      minSpendGuaranteeUsd: null,
     };
   }
 
@@ -1355,6 +1384,7 @@ export async function getApiKeyMetadata(
       (record as JsonRecord).chaos_mode_enabled ?? (record as JsonRecord).chaosModeEnabled
     ),
     ...parseApiKeyUsageLimitFields(record as JsonRecord),
+    ...parseApiKeyMinSpendFields(record as JsonRecord),
   };
 
   if (!metadata.id) {

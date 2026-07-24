@@ -48,4 +48,12 @@ export const API_KEY_COLUMN_FALLBACKS = [
     name: "chaos_mode_enabled",
     definition: "chaos_mode_enabled INTEGER NOT NULL DEFAULT 0",
   },
+  {
+    name: "min_spend_guarantee_enabled",
+    definition: "min_spend_guarantee_enabled INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    name: "min_spend_guarantee_usd",
+    definition: "min_spend_guarantee_usd REAL",
+  },
 ] as const;
