@@ -563,20 +563,28 @@ export async function buildUsageCommandText(
   );
   const policy = snapshot ? await resolvedDeps.getQuotaPolicy() : null;
 
-  // A provider is "cut off" once ANY window drops to/below its cutoff
-  // (effective remaining 0). While cut off nothing routes through it, so the
-  // API/@@om-usage view collapses every line to 0% — including the key's own
-  // personal quota, which can't be spent while the provider is unavailable.
-  // When no window is cut off, each line keeps showing its own cutoff-adjusted
-  // remaining. The admin dashboard is unaffected and still shows raw per-window
-  // real values.
+  // Cut-off cascades by window coarseness, not globally. A COARSER (longer)
+  // window dropping to/below its cutoff (effective remaining 0) makes every
+  // FINER window — and the key's personal quota — unusable for that whole
+  // period, so those collapse to 0%. But a FINER window (the session) hitting
+  // its cutoff does NOT exhaust the weekly window: the session returns in a
+  // couple hours while the week keeps its budget. So the Weekly line keeps
+  // showing its own cutoff-adjusted remaining even while the session is cut
+  // off — otherwise a 2h session cooldown reads as a bogus "0% left, resets in
+  // 6d" weekly lockout. The cutoff scaling already masks the provider's real
+  // weekly quota (never the raw value). The admin dashboard is unaffected and
+  // still shows raw per-window real values.
   const sessionMatch = snapshot ? findQuota(snapshot.quotas, "session") : null;
   const weeklyMatch = snapshot ? findQuota(snapshot.quotas, "weekly") : null;
-  const sessionEffective =
-    snapshot && policy ? windowEffectiveRemaining(sessionMatch, snapshot, policy) : null;
   const weeklyEffective =
     snapshot && policy ? windowEffectiveRemaining(weeklyMatch, snapshot, policy) : null;
-  const providerCap = sessionEffective === 0 || weeklyEffective === 0 ? 0 : null;
+  // Weekly is the coarsest window we surface: nothing longer can cap it.
+  const weeklyCap = null;
+  // The session line and the personal quota can't be spent for the rest of the
+  // week only once the WEEKLY window itself is cut off.
+  const weeklyCutOff = weeklyEffective === 0;
+  const sessionCap = weeklyCutOff ? 0 : null;
+  const personalCap = weeklyCutOff ? 0 : null;
 
   if (metadata.usageLimitEnabled === true) {
     const usageMetadata: UsageCommandApiKeyMetadata = {
@@ -588,7 +596,7 @@ export async function buildUsageCommandText(
     });
     const now = resolvedDeps.now();
     sections.push(
-      ["Personal quota", buildApiKeyUsageLimitPercentText(status, now, providerCap)].join("\n")
+      ["Personal quota", buildApiKeyUsageLimitPercentText(status, now, personalCap)].join("\n")
     );
   }
 
@@ -599,9 +607,9 @@ export async function buildUsageCommandText(
 
   const now = resolvedDeps.now();
   const lines = ["Provider quota"];
-  appendQuotaBlock(lines, "Session", sessionMatch, snapshot, policy, now, providerCap);
+  appendQuotaBlock(lines, "Session", sessionMatch, snapshot, policy, now, sessionCap);
   lines.push("");
-  appendQuotaBlock(lines, "Weekly", weeklyMatch, snapshot, policy, now, providerCap);
+  appendQuotaBlock(lines, "Weekly", weeklyMatch, snapshot, policy, now, weeklyCap);
   sections.push(lines.join("\n"));
   return sections.join("\n\n");
 }

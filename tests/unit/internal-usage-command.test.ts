@@ -172,7 +172,71 @@ test("buildUsageCommandText formats API key USD limits as personal percentages",
   );
 });
 
-test("buildUsageCommandText collapses every window to 0% once a provider window is cut off", async () => {
+test("buildUsageCommandText keeps the weekly line calculated when only the session is cut off", async () => {
+  // Live scenario: session below its cutoff (2% remaining, cutoff 11% → session
+  // effective 0, resets in ~2h) but weekly healthy (60% remaining, cutoff 12%).
+  // A finer window (session) being cut off must NOT drag the coarser weekly line
+  // to 0% — that would read as a bogus 6-day lockout. Weekly shows its own
+  // cutoff-adjusted remaining (masked; never the provider's raw weekly quota).
+  const text = await buildUsageCommandText(
+    {
+      id: "key-session-cut",
+      name: "session-cut",
+      allowedConnections: ["conn-claude"],
+    },
+    {
+      now: () => NOW,
+      getProviderConnectionById: async () => ({
+        id: "conn-claude",
+        provider: "claude",
+        isActive: true,
+        quotaWindowThresholds: { "session (5h)": 11, "weekly (7d)": 12 },
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "session (5h)": {
+            used: 98,
+            total: 100,
+            resetAt: new Date(NOW + 2 * 60 * 60_000).toISOString(),
+          },
+          "weekly (7d)": {
+            used: 40,
+            total: 100,
+            resetAt: new Date(NOW + 6 * 24 * 60 * 60_000).toISOString(),
+          },
+        },
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+      isValidApiKey: async () => true,
+      getApiKeyMetadata: async () => null,
+      getQuotaPolicy: async () => ({
+        defaultThresholdPercent: 0,
+        providerWindowDefaults: {},
+      }),
+    }
+  );
+
+  // Weekly real remaining 60%, cutoff 12% → (60-12)/(100-12)*100 ≈ 54.5 → 55%.
+  assert.equal(
+    text,
+    [
+      "Provider quota",
+      "Session",
+      "0% left",
+      "⏱ reset in 2h 0m",
+      "",
+      "Weekly",
+      "55% left",
+      "⏱ reset in 6d 0h 0m",
+    ].join("\n")
+  );
+});
+
+test("buildUsageCommandText collapses every window to 0% once the weekly (coarsest) window is cut off", async () => {
   const text = await buildUsageCommandText(
     {
       id: "key-cutoff",
