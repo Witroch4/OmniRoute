@@ -19,10 +19,18 @@ const FABRICATED_KIRO_IDS = [
   "claude-sonnet-4.6", // Kiro's Sonnet is 4.5, not 4.6
 ];
 
-// Ids proven to return 200 on the VPS (or a real, plan-gated Kiro model).
+// Ids proven to return 200 on production (2026-07-25 live re-validation).
+//
+// "claude-sonnet-5" was removed: re-tested live against two real Amazon Q
+// connections (one with fully healthy quota) and it 400'd "Invalid model" on
+// both, every time — it is not plan-gated, Kiro's current catalog simply has
+// no "Sonnet 5". The live Kiro app's own model picker confirmed this: it lists
+// "Claude Sonnet 4.5" and a separate "Claude Sonnet 4" (regular hybrid-
+// reasoning tier), no "Sonnet 5". "claude-sonnet-4" was added in its place,
+// confirmed 200 on the same connection that rejected "claude-sonnet-5".
 const REAL_KIRO_IDS = [
-  "claude-sonnet-5", // real model, plan-gated per account (kept)
-  "claude-sonnet-4.5", // proven 200 (replaces the fabricated 4.6)
+  "claude-sonnet-4.5", // proven 200
+  "claude-sonnet-4", // proven 200 (2026-07-25, replaces the removed sonnet-5)
   "claude-haiku-4.5", // proven 200
   "deepseek-3.2", // proven 200
   "glm-5", // proven 200

@@ -3,40 +3,41 @@ import assert from "node:assert/strict";
 
 import { kiroProvider } from "../../open-sse/config/providers/registry/kiro/index.ts";
 
-const { getNextFamilyFallback } = await import("../../open-sse/services/modelFamilyFallback.ts");
-
 // Regression for the port of decolua/9router#2267 ("claude-sonnet-5 is not supported"),
 // upstream PR diegosouzapw/OmniRoute#5796.
 //
 // The Kiro provider's OAuth model catalog lives in `registry/kiro/index.ts` `models[]`.
 // That list is both the model selector's source and the fallback for the live
-// CodeWhisperer ListAvailableModels fetch (`kiroModels.ts::toFallbackResult`). Because
-// `claude-sonnet-5` — a real, shipping Anthropic model already served by Kiro — was
-// missing from it, the model could not be selected or routed on the Kiro provider even
-// though the account had access. The fix adds the single model entry (mirroring the
-// existing Claude entries), with the 1M-context / 128K-output capability Kiro serves it at.
+// CodeWhisperer ListAvailableModels fetch (`kiroModels.ts::toFallbackResult`). Back when
+// #2267 was filed, `claude-sonnet-5` was believed to be a real, shipping model already
+// served by Kiro but missing from this list, so it was added (mirroring the existing
+// Claude entries) with the 1M-context / 128K-output capability Kiro was believed to serve
+// it at.
+//
+// 2026-07-25: live-tested against two real Amazon Q/Kiro connections (one with fully
+// healthy quota) and `claude-sonnet-5` 400'd "Invalid model" on both, every time — Kiro's
+// current catalog has no "Sonnet 5" at all (confirmed against the live Kiro app's own
+// model picker: "Claude Sonnet 4.5" and a separate "Claude Sonnet 4" regular tier, no
+// "Sonnet 5"). It was removed from the registry and replaced with `claude-sonnet-4`,
+// confirmed 200 on the same connection that rejected `claude-sonnet-5`. This test now
+// guards the corrected entry instead.
 
-test("kiro registry exposes claude-sonnet-5", () => {
+test("kiro registry exposes claude-sonnet-4 (not the removed claude-sonnet-5)", () => {
   const ids = kiroProvider.models.map((m) => m.id);
   assert.ok(
-    ids.includes("claude-sonnet-5"),
-    `expected kiro registry to include claude-sonnet-5, got: ${ids.join(", ")}`
+    ids.includes("claude-sonnet-4"),
+    `expected kiro registry to include claude-sonnet-4, got: ${ids.join(", ")}`
   );
-});
-
-test("kiro claude-sonnet-5 declares the 1M-context / 128K-output capability", () => {
-  const sonnet5 = kiroProvider.models.find((m) => m.id === "claude-sonnet-5");
-  assert.ok(sonnet5, "claude-sonnet-5 must be present in the kiro registry");
-  assert.equal(sonnet5.name, "Claude Sonnet 5");
-  assert.equal(sonnet5.contextLength, 1000000);
-  assert.equal(sonnet5.maxOutputTokens, 128000);
-});
-
-test("claude-sonnet-5 degrades to the Sonnet family, not Opus", () => {
-  // Sonnet 5 is Sonnet-tier: its first fallback must be a cheaper Sonnet, never an Opus.
-  const next = getNextFamilyFallback("kiro/claude-sonnet-5", new Set(["kiro/claude-sonnet-5"]));
   assert.ok(
-    next && /claude-sonnet-4/.test(next),
-    `expected claude-sonnet-5 to fall back within the Sonnet family, got: ${next}`
+    !ids.includes("claude-sonnet-5"),
+    `claude-sonnet-5 does not exist in Kiro's catalog (live-verified 2026-07-25) and must not reappear, got: ${ids.join(", ")}`
   );
+});
+
+test("kiro claude-sonnet-4 declares the same capability shape as claude-sonnet-4.5", () => {
+  const sonnet4 = kiroProvider.models.find((m) => m.id === "claude-sonnet-4");
+  assert.ok(sonnet4, "claude-sonnet-4 must be present in the kiro registry");
+  assert.equal(sonnet4.name, "Claude Sonnet 4");
+  assert.equal(sonnet4.contextLength, 200000);
+  assert.equal(sonnet4.maxOutputTokens, 64000);
 });

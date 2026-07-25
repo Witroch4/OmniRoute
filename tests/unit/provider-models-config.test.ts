@@ -107,13 +107,18 @@ test("Kiro registry exposes the current CLI model lineup with context windows", 
   const kiroModels = getProviderModels("kr");
   const byId = new Map(kiroModels.map((model) => [model.id, model]));
 
-  // Kiro's real upstream Claude lineup (#6170): Sonnet 5 / Sonnet 4.5 / Haiku 4.5.
+  // Kiro's real upstream Claude lineup: Sonnet 4.5 / Sonnet 4 / Haiku 4.5.
   // The Opus 4.x and Sonnet 4.6 ids were fabricated (copied from the Anthropic
-  // catalog) and returned upstream 400 "Invalid model" — removed.
-  assert.ok(byId.has("claude-sonnet-5"));
-  assert.equal(byId.get("claude-sonnet-5")?.contextLength, 1000000);
+  // catalog) and returned upstream 400 "Invalid model" — removed (#6170).
+  // "claude-sonnet-5" was also removed (2026-07-25): live-verified to 400 on
+  // two real Amazon Q/Kiro connections — Kiro's catalog has no "Sonnet 5",
+  // only "Sonnet 4.5" and a separate "Sonnet 4" regular tier. "claude-sonnet-4"
+  // was added in its place, confirmed 200 live.
   assert.ok(byId.has("claude-sonnet-4.5"));
+  assert.ok(byId.has("claude-sonnet-4"));
+  assert.equal(byId.get("claude-sonnet-4")?.contextLength, 200000);
   assert.ok(byId.has("claude-haiku-4.5"));
+  assert.equal(byId.has("claude-sonnet-5"), false);
   assert.equal(byId.has("claude-opus-4.7"), false);
   assert.equal(byId.has("claude-sonnet-4.6"), false);
   assert.equal(byId.has("claude-sonnet-4-6"), false);

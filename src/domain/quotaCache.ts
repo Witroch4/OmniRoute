@@ -318,7 +318,6 @@ function hydrateQuotaCacheFromSnapshots(
   const quotas: Record<string, QuotaInfo> = {};
   let provider = "";
   let fetchedAt = 0;
-  let exhausted = false;
   let windowDurationMs: number | null = null;
 
   for (const snapshot of snapshots) {
@@ -339,7 +338,6 @@ function hydrateQuotaCacheFromSnapshots(
       ),
       resetAt: camelSnapshot.nextResetAt ?? snapshot.next_reset_at ?? null,
     };
-    exhausted = exhausted || (camelSnapshot.isExhausted ?? snapshot.is_exhausted) === 1;
     const snapshotWindowDurationMs =
       camelSnapshot.windowDurationMs ?? snapshot.window_duration_ms ?? null;
     if (snapshotWindowDurationMs && snapshotWindowDurationMs > 0) {
@@ -351,6 +349,15 @@ function hydrateQuotaCacheFromSnapshots(
   }
 
   if (Object.keys(quotas).length === 0) return null;
+
+  // Reuse the same all-windows-drained rule the live setQuotaCache() path uses
+  // (isExhausted below), instead of OR-ing each snapshot row's own is_exhausted
+  // flag. A connection with several independent quota windows (e.g. Amazon Q's base
+  // "credit" pool plus a separate time-limited "credit_freetrial" allowance) was
+  // getting marked fully exhausted — and excluded from routing — as soon as ANY ONE
+  // window drained, even while another window on the same connection still had
+  // headroom.
+  const exhausted = isExhausted(quotas);
 
   const entry: QuotaCacheEntry = {
     connectionId,

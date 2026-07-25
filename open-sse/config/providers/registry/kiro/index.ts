@@ -20,18 +20,25 @@ export const kiroProvider: RegistryEntry = {
   // Fabricated ids (auto-kiro, claude-opus-4.x, claude-fable-5, claude-sonnet-4.6)
   // were removed after live VPS validation: Kiro offers no Opus/Fable, its Sonnet
   // is 4.5 (not 4.6), and there is no "auto" model id (it was sent verbatim and
-  // 400'd). claude-sonnet-5 is a real Kiro model but plan-gated per account —
-  // kept so entitled accounts can use it. See kiro cluster #6112/#6113/#6099.
+  // 400'd). See kiro cluster #6112/#6113/#6099.
+  //
+  // 2026-07-25: "claude-sonnet-5" was re-validated live against a real Amazon Q
+  // connection with healthy quota and consistently 400'd "Invalid model" — it is
+  // not plan-gated, it simply does not exist in Kiro's current catalog (the live
+  // Kiro app model picker lists "Claude Sonnet 4.5" and a separate "Claude Sonnet
+  // 4" — a regular hybrid-reasoning tier — with no "Sonnet 5" entry at all).
+  // Replaced with "claude-sonnet-4", confirmed live (200 OK) on the same account
+  // that rejected "claude-sonnet-5".
   models: [
-    {
-      id: "claude-sonnet-5",
-      name: "Claude Sonnet 5",
-      contextLength: 1000000,
-      maxOutputTokens: 128000,
-    },
     {
       id: "claude-sonnet-4.5",
       name: "Claude Sonnet 4.5",
+      contextLength: 200000,
+      maxOutputTokens: 64000,
+    },
+    {
+      id: "claude-sonnet-4",
+      name: "Claude Sonnet 4",
       contextLength: 200000,
       maxOutputTokens: 64000,
     },

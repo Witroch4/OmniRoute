@@ -88,14 +88,27 @@ export function getLatestQuotaSnapshotsForConnection(connectionId: string): Quot
   const db = getDbInstance() as unknown as DbLike;
 
   try {
+    // One row per window_key via its own MAX(created_at), not a single
+    // `ORDER BY created_at DESC LIMIT 200` over the whole connection. A window that
+    // gets re-fetched every few minutes (e.g. a short-lived quota window under
+    // active recheck) can produce far more than 200 rows on its own, which pushed a
+    // quiet window's last known value out of a fixed-size scan entirely — the
+    // rehydrated cache then only ever saw the noisy window and treated the whole
+    // connection as exhausted even when the quiet window still had headroom.
     const rows = db
       .prepare(
-        `SELECT * FROM quota_snapshots
-         WHERE connection_id = ?
-         ORDER BY created_at DESC
-         LIMIT 200`
+        `SELECT qs.* FROM quota_snapshots qs
+         INNER JOIN (
+           SELECT window_key, MAX(created_at) AS max_created_at
+           FROM quota_snapshots
+           WHERE connection_id = ?
+           GROUP BY window_key
+         ) latest
+           ON latest.window_key = qs.window_key
+           AND latest.max_created_at = qs.created_at
+         WHERE qs.connection_id = ?`
       )
-      .all(connectionId);
+      .all(connectionId, connectionId);
     const latestByWindow = new Map<string, QuotaSnapshotRow>();
 
     for (const row of rows) {

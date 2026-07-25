@@ -706,11 +706,17 @@ test("provider models route returns the expanded local catalog for Kiro", async 
   assert.equal(body.source, "local_catalog");
   const kiroIds = new Set(body.models.map((model) => model.id)); // #6170: real upstream lineup
   assert.ok(
-    kiroIds.has("claude-sonnet-5") &&
+    kiroIds.has("claude-sonnet-4") &&
       kiroIds.has("claude-sonnet-4.5") &&
       kiroIds.has("claude-haiku-4.5")
   );
-  assert.equal(kiroIds.has("claude-opus-4.7") || kiroIds.has("claude-sonnet-4.6"), false); // fabricated ids removed
+  // claude-sonnet-5 removed 2026-07-25: live-verified 400 "Invalid model" on Kiro.
+  assert.equal(
+    kiroIds.has("claude-opus-4.7") ||
+      kiroIds.has("claude-sonnet-4.6") ||
+      kiroIds.has("claude-sonnet-5"),
+    false
+  ); // fabricated / removed ids
 });
 
 test("provider models route returns the local catalog for new built-in chat-openai-compat providers", async () => {
