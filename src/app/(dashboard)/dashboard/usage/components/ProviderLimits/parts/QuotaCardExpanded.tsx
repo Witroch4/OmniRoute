@@ -254,7 +254,7 @@ export default function QuotaCardExpanded({
         </button>
       )}
 
-      <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-border/40">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-border/40">
         {refreshedLabel && (
           <span
             className={`text-[10px] tabular-nums ${
@@ -269,7 +269,7 @@ export default function QuotaCardExpanded({
             {tr("updatedShort", "Updated")} {refreshedLabel}
           </span>
         )}
-        <div className="flex items-center gap-1.5 ml-auto">
+        <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto">
           {canRedeemResetCredit && (
             <button
               type="button"
@@ -278,7 +278,7 @@ export default function QuotaCardExpanded({
                 e.stopPropagation();
                 onRedeemResetCredit?.();
               }}
-              className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border border-primary/40 text-primary bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md border border-primary/40 text-primary bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               <span
                 className={`material-symbols-outlined text-[12px] ${
@@ -297,7 +297,7 @@ export default function QuotaCardExpanded({
               e.stopPropagation();
               onOpenCutoff();
             }}
-            className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
+            className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
               hasCutoffOverrides ? "border-primary/40 text-primary" : "border-border"
             }`}
           >
@@ -310,7 +310,7 @@ export default function QuotaCardExpanded({
               e.stopPropagation();
               onOpenCost();
             }}
-            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border border-border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] cursor-pointer"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md border border-border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] cursor-pointer"
           >
             <span className="material-symbols-outlined text-[12px]">bar_chart</span>
             USD Cost
@@ -322,7 +322,7 @@ export default function QuotaCardExpanded({
               e.stopPropagation();
               onRefresh();
             }}
-            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border border-border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-medium px-2 py-1 rounded-md border border-border bg-bg-subtle hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             <span
               className={`material-symbols-outlined text-[12px] ${loading ? "animate-spin" : ""}`}
