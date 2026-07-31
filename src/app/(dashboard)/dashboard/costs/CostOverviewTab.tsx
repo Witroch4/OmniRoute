@@ -110,8 +110,21 @@ interface UsageAnalyticsServiceTierRow {
   usageSavingsTokens?: number;
 }
 
+/**
+ * A (provider, model) pair with no pricing row. `missing` means every request
+ * for it is being costed at $0 — so every number on this page, and any USD
+ * quota derived from them, is under-reported until the model is cataloged.
+ */
+interface UsageAnalyticsPricingGap {
+  provider: string;
+  model: string;
+  totalTokens: number;
+  source: "missing" | "family_anchor";
+}
+
 interface UsageAnalyticsPayload {
   summary: UsageAnalyticsSummary;
+  pricingGaps?: UsageAnalyticsPricingGap[];
   byProvider: UsageAnalyticsProviderRow[];
   byModel: UsageAnalyticsModelRow[];
   byApiKey: UsageAnalyticsApiKeyRow[];
@@ -521,6 +534,8 @@ export default function CostOverviewTab() {
           </div>
         </div>
       </Card>
+
+      <PricingGapAlert gaps={analytics?.pricingGaps} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard
@@ -1490,5 +1505,77 @@ function CostBreakdownTable({
         </table>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Red banner for models whose cost cannot be computed.
+ *
+ * A missing pricing row is invisible by construction: the request succeeds, the
+ * tokens are recorded, and the cost is quietly counted as $0 — deflating this
+ * page, the `domain_cost_history` ledger, and every USD quota derived from it.
+ * That is how a key spent ~$580 against a $380 weekly cap while its quota
+ * reported "99% left". Since pricing ships hardcoded in the repo, a newly
+ * released model stays uncosted until someone notices — so make it impossible
+ * not to notice.
+ */
+function PricingGapAlert({ gaps }: { gaps?: UsageAnalyticsPricingGap[] }) {
+  const t = useTranslations("costs");
+  const locale = useLocale();
+
+  if (!gaps?.length) return null;
+
+  const missing = gaps.filter((gap) => gap.source === "missing");
+  const anchored = gaps.filter((gap) => gap.source === "family_anchor");
+  const numberFormatter = new Intl.NumberFormat(locale);
+
+  const renderRows = (rows: UsageAnalyticsPricingGap[], tone: "red" | "amber") => (
+    <ul className="mt-2 flex flex-col gap-1">
+      {rows.map((gap) => (
+        <li
+          key={`${gap.provider}/${gap.model}`}
+          className="flex flex-wrap items-baseline justify-between gap-2 text-xs"
+        >
+          <span className="font-mono text-text-main">
+            {gap.provider}/{gap.model}
+          </span>
+          <span className={tone === "red" ? "text-red-300/80" : "text-amber-300/80"}>
+            {numberFormatter.format(gap.totalTokens)} {t("pricingGapTokens")}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      {missing.length > 0 && (
+        <Card className="p-4 border-red-500/40 bg-red-500/10">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-red-400 text-xl shrink-0">error</span>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-bold text-red-400">{t("pricingGapTitle")}</h3>
+              <p className="text-xs text-red-200/80 mt-1">{t("pricingGapBody")}</p>
+              {renderRows(missing, "red")}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {anchored.length > 0 && (
+        <Card className="p-4 border-amber-500/40 bg-amber-500/10">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-amber-400 text-xl shrink-0">
+              warning
+            </span>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-bold text-amber-400">{t("pricingAnchorTitle")}</h3>
+              <p className="text-xs text-amber-200/80 mt-1">{t("pricingAnchorBody")}</p>
+              {renderRows(anchored, "amber")}
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
   );
 }

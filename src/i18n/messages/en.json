@@ -2927,7 +2927,12 @@
     "noMatchingCostRows": "No matching cost rows",
     "noMatchingCostRowsDescription": "Adjust the search text, grouping, or selected time window.",
     "showingCostRows": "Showing {shown} of {total} matching rows.",
-    "showingTopCostRows": "Showing {shown} of {total} matching rows (top 50)."
+    "showingTopCostRows": "Showing {shown} of {total} matching rows (top 50).",
+    "pricingGapTitle": "Models with no price configured",
+    "pricingGapBody": "Requests for these models are being counted as $0. Every total on this page — and any USD quota derived from it — is under-reported until they are priced. Add a row in src/shared/constants/pricing/.",
+    "pricingAnchorTitle": "Models priced by their Claude tier",
+    "pricingAnchorBody": "These models have no price row of their own and are being billed at their Claude tier rate. The cost is right as long as the tier price holds — add an explicit row once the official price is published.",
+    "pricingGapTokens": "tokens"
   },
   "endpoint": {
     "title": "API Endpoint",

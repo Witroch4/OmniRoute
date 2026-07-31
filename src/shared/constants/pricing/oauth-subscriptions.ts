@@ -19,6 +19,15 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 50.0,
       cache_creation: 12.5,
     },
+    // Same rates as Opus 4.8 — Claude Opus 5 is a drop-in upgrade at the Opus
+    // tier price ($5 / $25 per MTok, cache read 0.1x, 5m cache write 1.25x).
+    "claude-opus-5": {
+      input: 5.0,
+      output: 25.0,
+      cached: 0.5,
+      reasoning: 25.0,
+      cache_creation: 6.25,
+    },
     "claude-opus-4-8": {
       input: 5.0,
       output: 25.0,

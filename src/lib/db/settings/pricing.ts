@@ -5,7 +5,7 @@
 import { getDbInstance } from "../core";
 import { backupDbFile } from "../backup";
 import { invalidateDbCache } from "../readCache";
-import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels.ts";
+import { reportMissingPricing, resolveModelPricing } from "@/lib/usage/pricingResolution";
 import { type JsonRecord, toRecord } from "./shared";
 
 type PricingModels = Record<string, JsonRecord>;
@@ -120,56 +120,20 @@ export async function getPricingWithSources(): Promise<{
   };
 }
 
+/**
+ * Look up per-MTok pricing for a (provider, model) pair.
+ *
+ * Delegates to the shared resolver so this path — the provider-window cost
+ * modal, the API-key USD quota, and the `domain_cost_history` writer — agrees
+ * with the cost dashboard. Previously it did an exact lookup only, so a model
+ * missing from the catalog resolved to `null` and every one of its requests
+ * was costed at $0 (see `lib/usage/pricingResolution`).
+ */
 export async function getPricingForModel(provider: string, model: string) {
   const pricing = await getPricing();
-
-  const findKeyInsensitive = <T>(
-    obj: Record<string, T> | undefined | null,
-    key: string
-  ): T | undefined => {
-    if (!obj || !key) return undefined;
-    const lowerKey = key.toLowerCase();
-    for (const [k, v] of Object.entries(obj)) {
-      if (k.toLowerCase() === lowerKey) return v;
-    }
-    return undefined;
-  };
-
-  const pLower = (provider || "").toLowerCase();
-  let providerPricing = findKeyInsensitive<PricingModels>(pricing, pLower);
-
-  if (!providerPricing) {
-    const alias = findKeyInsensitive<string>(PROVIDER_ID_TO_ALIAS, pLower);
-    if (alias) providerPricing = findKeyInsensitive(pricing, alias);
-  }
-
-  if (!providerPricing) {
-    for (const [id, mappedAlias] of Object.entries(PROVIDER_ID_TO_ALIAS)) {
-      if (typeof mappedAlias === "string" && mappedAlias.toLowerCase() === pLower) {
-        providerPricing = findKeyInsensitive(pricing, id);
-        if (providerPricing) break;
-      }
-    }
-  }
-
-  if (!providerPricing) {
-    const np = pLower.replace(/-cn$/, "");
-    if (np && np !== pLower) {
-      providerPricing = findKeyInsensitive(pricing, np);
-    }
-  }
-
-  if (!providerPricing) return null;
-
-  const mLower = (model || "").toLowerCase();
-  let modelPricing = findKeyInsensitive<JsonRecord>(providerPricing, mLower);
-
-  if (!modelPricing) {
-    const hyphenModel = mLower.replace(/\./g, "-");
-    modelPricing = findKeyInsensitive(providerPricing, hyphenModel);
-  }
-
-  return modelPricing || null;
+  const resolution = resolveModelPricing(pricing, provider, model);
+  reportMissingPricing(provider, model, resolution.source);
+  return (resolution.pricing as JsonRecord | null) || null;
 }
 
 export async function updatePricing(pricingData: PricingByProvider) {
