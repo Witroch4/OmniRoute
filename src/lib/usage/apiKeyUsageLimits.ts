@@ -175,7 +175,8 @@ function normalizeProvider(value: unknown): string {
   return normalized;
 }
 
-function findWeeklyQuotaResetAt(quotas: unknown, nowMs: number): string | null {
+/** Every parseable `resetAt` (ms) advertised by a weekly, non-sonnet quota window. */
+function collectWeeklyQuotaResetAts(quotas: unknown): number[] {
   const quotaEntries: Array<[string, Record<string, unknown>]> = [];
   if (Array.isArray(quotas)) {
     for (const item of quotas) {
@@ -194,6 +195,7 @@ function findWeeklyQuotaResetAt(quotas: unknown, nowMs: number): string | null {
     }
   }
 
+  const resetAts: number[] = [];
   for (const [name, quota] of quotaEntries) {
     const label = normalizeQuotaName(`${name} ${typeof quota.name === "string" ? quota.name : ""}`);
     if (!label) continue;
@@ -201,12 +203,86 @@ function findWeeklyQuotaResetAt(quotas: unknown, nowMs: number): string | null {
     if (!isWeekly || label.includes("sonnet")) continue;
     const resetAt = typeof quota.resetAt === "string" && quota.resetAt.trim() ? quota.resetAt : "";
     const resetMs = Date.parse(resetAt);
-    if (Number.isFinite(resetMs) && resetMs > nowMs) {
-      return new Date(resetMs).toISOString();
-    }
+    if (Number.isFinite(resetMs)) resetAts.push(resetMs);
   }
+  return resetAts;
+}
 
+function findWeeklyQuotaResetAt(quotas: unknown, nowMs: number): string | null {
+  for (const resetMs of collectWeeklyQuotaResetAts(quotas)) {
+    if (resetMs > nowMs) return new Date(resetMs).toISOString();
+  }
   return null;
+}
+
+/**
+ * True when the cache advertises a weekly window whose reset instant has already
+ * elapsed — i.e. the provider has rolled into a new week but this entry still
+ * describes the previous one.
+ */
+function hasElapsedWeeklyQuota(quotas: unknown, nowMs: number): boolean {
+  return collectWeeklyQuotaResetAts(quotas).some((resetMs) => resetMs <= nowMs);
+}
+
+/**
+ * Latest weekly reset OmniRoute has actually observed for `connectionId`, taken
+ * from `quota_snapshots`.
+ *
+ * The provider-limits cache is the primary source for the weekly window, but it
+ * only advances when a live usage fetch succeeds. Anthropic's OAuth usage
+ * endpoint answers `429` under load (`markClaudeOauthUsage429`) and both
+ * `fetchAndPersistProviderLimits` and `syncAllProviderLimits` deliberately keep
+ * the PREVIOUS entry on a failed fetch rather than wiping it. So after a real
+ * weekly reset the cached `resetAt` can stay pinned in the past indefinitely,
+ * `findWeeklyQuotaResetAt` returns null, and the caller silently degrades to a
+ * rolling 7d window that still counts spend from the week the provider already
+ * reset — keeping a USD-limited API key blocked at >100% forever.
+ *
+ * `quota_snapshots` does not have that failure mode: it is written from real
+ * response headers on every request, so it observes the reset immediately.
+ */
+function getSnapshotWeeklyResetAt(connectionId: string, nowMs: number): string | null {
+  if (!connectionId) return null;
+
+  try {
+    const row = getDbInstance()
+      .prepare(
+        `
+        SELECT next_reset_at as nextResetAt
+        FROM quota_snapshots
+        WHERE connection_id = @connectionId
+          AND LOWER(window_key) LIKE '%weekly%'
+          AND LOWER(window_key) NOT LIKE '%sonnet%'
+          AND next_reset_at IS NOT NULL
+          AND created_at <= @nowIso
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `
+      )
+      .get({ connectionId, nowIso: new Date(nowMs).toISOString() }) as
+      { nextResetAt?: string | null } | undefined;
+
+    const resetMs = Date.parse(row?.nextResetAt ?? "");
+    return Number.isFinite(resetMs) && resetMs > nowMs ? new Date(resetMs).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Weekly reset for a connection: the cached provider window when it is still
+ * current, otherwise the newer reset observed in `quota_snapshots`.
+ *
+ * The snapshot path is deliberately gated on the cache having held an ELAPSED
+ * weekly window: a connection whose cache never advertised a weekly quota must
+ * not gain one here (that would hand keys a provider-anchored window they never
+ * had, changing the window for providers unrelated to this bug).
+ */
+function resolveWeeklyResetAt(quotas: unknown, connectionId: string, nowMs: number): string | null {
+  const cachedResetAt = findWeeklyQuotaResetAt(quotas, nowMs);
+  if (cachedResetAt) return cachedResetAt;
+  if (!hasElapsedWeeklyQuota(quotas, nowMs)) return null;
+  return getSnapshotWeeklyResetAt(connectionId, nowMs);
 }
 
 function connectionFromValue(value: unknown): { id: string; provider: string } | null {
@@ -325,8 +401,9 @@ async function getProviderWeeklyWindow(
     for (const connectionId of allowedConnections) {
       const connection = connectionFromValue(await deps.getProviderConnectionById(connectionId));
       if (!connection) continue;
-      const resetAt = findWeeklyQuotaResetAt(
+      const resetAt = resolveWeeklyResetAt(
         deps.getProviderLimitsCache(connection.id)?.quotas,
+        connection.id,
         nowMs
       );
       if (resetAt) {
@@ -344,7 +421,7 @@ async function getProviderWeeklyWindow(
     for (const rawConnection of connections) {
       const connection = connectionFromValue(rawConnection);
       if (!connection) continue;
-      const resetAt = findWeeklyQuotaResetAt(caches[connection.id]?.quotas, nowMs);
+      const resetAt = resolveWeeklyResetAt(caches[connection.id]?.quotas, connection.id, nowMs);
       if (resetAt) {
         resetCandidates.push({
           connectionId: connection.id,
@@ -511,11 +588,17 @@ export function buildApiKeyUsageLimitPercentText(
 ): string {
   return [
     "Daily",
-    formatLeftPercentWithCap(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd), capLeftPercent),
+    formatLeftPercentWithCap(
+      getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd),
+      capLeftPercent
+    ),
     `⏱ reset in ${formatResetIn(status.dailyResetAtIso, now)}`,
     "",
     "Weekly",
-    formatLeftPercentWithCap(getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd), capLeftPercent),
+    formatLeftPercentWithCap(
+      getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd),
+      capLeftPercent
+    ),
     `⏱ reset in ${formatResetIn(status.weeklyResetAtIso, now)}`,
   ].join("\n");
 }

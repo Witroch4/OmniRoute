@@ -434,3 +434,184 @@ test("buildApiKeyUsageLimitRejection uses 400 so Claude Code does not trigger lo
 
   assert.equal(response.status, 400);
 });
+
+/**
+ * Regression: a stale provider-limits cache must not silently demote the weekly
+ * window to a rolling 7d one.
+ *
+ * Production incident (2026-07-30): Anthropic's OAuth usage endpoint kept
+ * answering 429, so the Claude provider-limits cache stayed pinned to the
+ * PREVIOUS week (`fetchAndPersistProviderLimits` keeps the prior entry on a
+ * failed fetch instead of wiping it). Its `weekly (7d)` resetAt elapsed,
+ * `findWeeklyQuotaResetAt` returned null, and the weekly USD window fell back to
+ * `now - 7d` — which still contained the spend of the week the provider had
+ * already reset. A key limited to $390/week stayed blocked at 113% with zero
+ * requests since the reset. `quota_snapshots` had already observed the reset.
+ */
+test("weekly window follows the observed quota reset when the provider-limits cache is stale", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+    },
+  });
+
+  const created = await apiKeysDb.createApiKey("Stale Cache Key", "machine-limit-stale");
+  await apiKeysDb.updateApiKeyPermissions(created.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 20,
+  });
+
+  // Spent in the week the provider has since reset — must NOT count anymore.
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    apiKeyId: created.id,
+    apiKeyName: "Stale Cache Key",
+    tokens: { input: 30_000_000, output: 0 },
+    success: true,
+    timestamp: "2026-06-19T12:00:00.000Z",
+  });
+  // Spent after the reset — the only spend the new window may see.
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    apiKeyId: created.id,
+    apiKeyName: "Stale Cache Key",
+    tokens: { input: 3_000_000, output: 0 },
+    success: true,
+    timestamp: "2026-06-20T13:30:00.000Z",
+  });
+
+  const db = core.getDbInstance();
+  const insertSnapshot = db.prepare(`
+    INSERT INTO quota_snapshots (
+      provider, connection_id, window_key, remaining_percentage, is_exhausted,
+      next_reset_at, window_duration_ms, raw_data, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  // Last observation of the old window (nearly drained), then the reset.
+  insertSnapshot.run(
+    "claude",
+    "conn-claude",
+    "weekly (7d)",
+    2,
+    0,
+    "2026-06-20T13:00:00.000Z",
+    null,
+    null,
+    "2026-06-19T22:54:00.000Z"
+  );
+  insertSnapshot.run(
+    "claude",
+    "conn-claude",
+    "weekly (7d)",
+    100,
+    0,
+    "2026-06-27T13:00:00.000Z",
+    null,
+    null,
+    "2026-06-20T13:05:00.000Z"
+  );
+
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, allowedConnections: ["conn-claude"] },
+    {
+      now: () => Date.parse("2026-06-20T14:30:00.000Z"),
+      getProviderConnectionById: async () => ({
+        id: "conn-claude",
+        provider: "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      // Frozen cache: its weekly reset already elapsed and never advanced.
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" },
+          "weekly (7d)": { used: 98, total: 100, resetAt: "2026-06-20T13:00:00.000Z" },
+        },
+        message: null,
+        fetchedAt: "2026-06-20T02:24:00.000Z",
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.equal(
+    status.weeklyResetAtIso,
+    "2026-06-27T13:00:00.000Z",
+    "weekly reset must come from the observed snapshot, not stay unknown"
+  );
+  assert.equal(
+    status.weeklyWindowStartIso,
+    "2026-06-20T13:05:00.000Z",
+    "weekly window must start at the observed reset, not now-7d"
+  );
+  assert.equal(status.weeklySpentUsd, 3, "only post-reset spend counts");
+  assert.equal(status.weeklyExceeded, false);
+});
+
+test("a connection whose cache never advertised a weekly window does not gain one from snapshots", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+    },
+  });
+
+  const created = await apiKeysDb.createApiKey("Session Only Key", "machine-limit-session");
+  await apiKeysDb.updateApiKeyPermissions(created.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 20,
+  });
+
+  core
+    .getDbInstance()
+    .prepare(
+      `
+      INSERT INTO quota_snapshots (
+        provider, connection_id, window_key, remaining_percentage, is_exhausted,
+        next_reset_at, window_duration_ms, raw_data, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+    )
+    .run(
+      "claude",
+      "conn-session",
+      "weekly (7d)",
+      100,
+      0,
+      "2026-06-27T13:00:00.000Z",
+      null,
+      null,
+      "2026-06-20T13:05:00.000Z"
+    );
+
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, allowedConnections: ["conn-session"] },
+    {
+      now: () => Date.parse("2026-06-20T14:30:00.000Z"),
+      getProviderConnectionById: async () => ({
+        id: "conn-session",
+        provider: "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Pro",
+        quotas: { "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" } },
+        message: null,
+        fetchedAt: "2026-06-20T14:00:00.000Z",
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.equal(status.weeklyResetAtIso, null);
+  assert.equal(status.weeklyWindowStartIso, "2026-06-13T14:30:00.000Z");
+});
