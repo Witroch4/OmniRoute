@@ -585,6 +585,10 @@ export async function handleChatCore({
     effectiveServiceTier,
     startTime,
     log,
+    // Confidentiality (review round 2): a replayed idempotent hit must reflect THIS
+    // request's own redirect state — see checkIdempotencyCache's doc comment.
+    billedProvider,
+    billedModel,
   });
   if (idempotencyHit) {
     return idempotencyHit;
@@ -979,6 +983,11 @@ export async function handleChatCore({
     log,
     persistAttemptLogs,
     apiKeyId: apiKeyInfo?.id ?? undefined,
+    // Confidentiality (review round 2): a semantic-cache HIT must reflect THIS
+    // request's own redirect state, not whatever wrote the entry — see
+    // checkSemanticCache's doc comment.
+    billedProvider,
+    billedModel,
   });
   if (cacheHit) {
     return cacheHit;

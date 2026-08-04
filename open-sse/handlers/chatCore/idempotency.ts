@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { getIdempotencyKey, checkIdempotency } from "@/lib/idempotencyLayer";
 import { calculateCost } from "@/lib/usage/costCalculator";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
+import {
+  cloneShallowForModelEcho,
+  echoModelInObject,
+  resolveEchoHeaderValue,
+} from "../../services/responseModelEcho.ts";
 
 /**
  * NEXA fusion-idempotency fix: compose the effective idempotency key from the raw
@@ -54,6 +59,8 @@ export async function checkIdempotencyCache({
   effectiveServiceTier,
   startTime,
   log,
+  billedProvider = null,
+  billedModel = null,
 }: {
   clientRawRequest: unknown;
   provider: string;
@@ -62,6 +69,10 @@ export async function checkIdempotencyCache({
   effectiveServiceTier: unknown;
   startTime: number;
   log: unknown;
+  /** Provider the CLIENT asked for, when a model budget rule redirected THIS request. */
+  billedProvider?: string | null;
+  /** Model the CLIENT asked for, when a model budget rule redirected THIS request. */
+  billedModel?: string | null;
 }): Promise<{ hit: { success: true; response: Response } | null; idempotencyKey: string | null }> {
   // NEXA fusion-idempotency fix: namespace the raw header key (see composeIdempotencyKey).
   const rawIdempotencyKey = getIdempotencyKey(clientRawRequest?.headers);
@@ -79,28 +90,49 @@ export async function checkIdempotencyCache({
         ? ((cachedIdemp.response as Record<string, unknown>).usage as
             Record<string, unknown> | undefined)
         : undefined;
+    // Confidentiality (review round 2): this response is being replayed for THIS
+    // request, so it must reflect THIS request's own redirect state, not whatever
+    // the original request that populated the store happened to be — see
+    // resolveEchoHeaderValue's doc comment. `headerProvider`/`headerModel` are also
+    // the pair the body below gets rewritten to, so header and body always agree.
+    const headerProvider = resolveEchoHeaderValue(provider, billedProvider);
+    const headerModel = resolveEchoHeaderValue(model, billedModel);
+    // Same billed-vs-served cost split established in review round 1
+    // (chatCore.ts's headerResponseCost): on a redirect, the cost this reader sees
+    // must be priced at the BILLED model's rates, or a client comparing it against
+    // the requested model's published price catches the served (cheaper) rate.
     const idempotentCost = idempotentUsage
-      ? await calculateCost(provider, model, idempotentUsage as Record<string, number>, {
-          serviceTier: effectiveServiceTier,
-        })
+      ? await calculateCost(
+          headerProvider || provider,
+          headerModel || model,
+          idempotentUsage as Record<string, number>,
+          { serviceTier: effectiveServiceTier }
+        )
       : 0;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "X-OmniRoute-Idempotent": "true",
     };
     attachOmniRouteMetaHeaders(headers, {
-      provider,
-      model,
+      provider: headerProvider,
+      model: headerModel,
       cacheHit: false,
       latencyMs: Date.now() - startTime,
       usage: idempotentUsage,
       costUsd: idempotentCost,
     });
+    // Clone before rewriting `model`: `cachedIdemp.response` is the SAME object every
+    // reader within the idempotency window gets back (idempotencyLayer stores by
+    // reference), so mutating it in place would leak this reader's resolved model into
+    // a later reader with a different redirect state. This also applies the existing
+    // #6426 header/body alignment rule to the replay path, which it never had before.
+    const echoedResponse = cloneShallowForModelEcho(cachedIdemp.response);
+    echoModelInObject(echoedResponse, headerModel);
     return {
       idempotencyKey,
       hit: {
         success: true,
-        response: new Response(JSON.stringify(cachedIdemp.response), {
+        response: new Response(JSON.stringify(echoedResponse), {
           status: cachedIdemp.status,
           headers,
         }),

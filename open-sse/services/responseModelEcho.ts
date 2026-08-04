@@ -106,6 +106,32 @@ export function echoModelInObject(obj: unknown, echoModel: string | null | undef
 }
 
 /**
+ * Shallow-clone just the parts of a response object that {@link echoModelInObject}
+ * may mutate — the top-level `model` field and the one-level-deep `response.model`
+ * field (Responses API shape) — leaving everything else (choices, usage, output, …)
+ * as shared references with the input.
+ *
+ * Cache/idempotency reads hand back an object that is SHARED across every caller
+ * that reads the same entry (the in-memory LRU value, or the same idempotency-store
+ * Map entry within the dedup window): `echoModelInObject` mutates in place, so
+ * calling it directly on that shared object would leak one reader's resolved model
+ * (billed, on a redirect) into every OTHER reader of the same cached entry — INCLUDING
+ * a reader with a DIFFERENT redirect state (e.g. a client that asked for the served
+ * model directly and was never redirected at all). This clone is the minimum needed
+ * to make `echoModelInObject` safe to call on a cached value without corrupting it
+ * for the next reader.
+ */
+export function cloneShallowForModelEcho<T>(value: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const clone: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  const nested = clone.response;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    clone.response = { ...(nested as Record<string, unknown>) };
+  }
+  return clone as T;
+}
+
+/**
  * Rewrite the `model` field inside a single SSE line. Only `data: {json}` lines that
  * carry a string `model` are rewritten; `data: [DONE]`, comments, event lines, and
  * unparseable payloads pass through untouched.
