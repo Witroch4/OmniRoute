@@ -573,22 +573,44 @@ export async function getApiKeyFamilyRealSpendSince(
 }
 
 /**
- * Start of the API key's current weekly window: the observed provider reset when
- * one is known, otherwise a rolling 7 days. Shared by the key's USD quota and by
- * model budget rules so both reset as a single event.
+ * The single definition of the weekly-window fallback chain: the observed provider
+ * reset when one is known, otherwise a rolling 7 days. Pure — takes an
+ * already-fetched `weeklyWindow` rather than fetching one itself, so callers that
+ * already paid for a `getProviderWeeklyWindow` lookup never pay for it twice.
  */
-export async function getApiKeyWeeklyWindowStartIso(
-  metadata: ApiKeyUsageLimitMetadata,
-  deps: ApiKeyUsageLimitDeps = {},
-  now: number = Date.now()
-): Promise<string> {
-  const resolvedDeps = await resolveDeps(deps);
-  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+function resolveWeeklyWindowStartIso(
+  weeklyWindow: { resetAtIso: string | null; windowStartIso: string | null },
+  now: number
+): string {
   if (weeklyWindow.windowStartIso) return weeklyWindow.windowStartIso;
   if (weeklyWindow.resetAtIso) {
     return new Date(Date.parse(weeklyWindow.resetAtIso) - WEEK_MS).toISOString();
   }
   return getRollingWeekStartIso(now);
+}
+
+/**
+ * Start of the API key's current weekly window: the observed provider reset when
+ * one is known, otherwise a rolling 7 days. Shared by the key's USD quota and by
+ * model budget rules so both reset as a single event.
+ *
+ * Pass `precomputedWeeklyWindow` when the caller already fetched
+ * `getProviderWeeklyWindow` for this metadata/now (e.g. `getApiKeyUsageLimitStatus`,
+ * which also needs `resetAtIso`) to avoid a second round of connection lookups.
+ * Callers without one (e.g. the model budget rules) get it fetched here.
+ */
+export async function getApiKeyWeeklyWindowStartIso(
+  metadata: ApiKeyUsageLimitMetadata,
+  deps: ApiKeyUsageLimitDeps = {},
+  now: number = Date.now(),
+  precomputedWeeklyWindow?: { resetAtIso: string | null; windowStartIso: string | null }
+): Promise<string> {
+  if (precomputedWeeklyWindow) {
+    return resolveWeeklyWindowStartIso(precomputedWeeklyWindow, now);
+  }
+  const resolvedDeps = await resolveDeps(deps);
+  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  return resolveWeeklyWindowStartIso(weeklyWindow, now);
 }
 
 export async function getApiKeyUsageLimitStatus(
@@ -601,7 +623,12 @@ export async function getApiKeyUsageLimitStatus(
   const dailyResetAtIso = getFortalezaDayResetIso(now);
   const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
   const weeklyResetAtIso = weeklyWindow.resetAtIso;
-  const weeklyWindowStartIso = await getApiKeyWeeklyWindowStartIso(metadata, resolvedDeps, now);
+  const weeklyWindowStartIso = await getApiKeyWeeklyWindowStartIso(
+    metadata,
+    resolvedDeps,
+    now,
+    weeklyWindow
+  );
   const dailyLimitUsd = normalizeLimitUsd(metadata.dailyUsageLimitUsd);
   const weeklyLimitUsd = normalizeLimitUsd(metadata.weeklyUsageLimitUsd);
   const enabled = metadata.usageLimitEnabled === true;
