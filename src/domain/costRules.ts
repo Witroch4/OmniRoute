@@ -237,11 +237,15 @@ function getActiveBudgetLimit(budget: NormalizedBudgetConfig): number {
   return budget.dailyLimitUsd;
 }
 
-function getBudgetWindowTotal(apiKeyId: string, periodStartAt: number): number {
+function getBudgetWindowTotal(
+  apiKeyId: string,
+  periodStartAt: number,
+  basis: CostBasis = "real"
+): number {
   try {
     return (
-      loadCostTotal(apiKeyId, periodStartAt) +
-      spendBatchWriter.getPendingCostTotal(apiKeyId, periodStartAt)
+      loadCostTotal(apiKeyId, periodStartAt, { basis }) +
+      spendBatchWriter.getPendingCostTotal(apiKeyId, periodStartAt, Number.POSITIVE_INFINITY, basis)
     );
   } catch {
     return 0;
@@ -436,9 +440,18 @@ export function syncAllBudgetSchedules(now = Date.now()) {
  *
  * @param {string} apiKeyId
  * @param {number} [additionalCost=0] - Projected cost to check
+ * @param {CostBasis} [basis="real"] - "real" (default, unchanged behavior) enforces the
+ *   cap against OmniRoute's actual upstream spend at the SERVED model's rates —
+ *   used by every existing caller (admin-only /api/usage/budget[/bulk] routes, the
+ *   dormant policyEngine.ts). "normalized" enforces it against what the API key is
+ *   BILLED (client-facing rate) instead — required for any caller that stops a live
+ *   request on behalf of the client (`enforceApiKeyPolicy`'s Check 4) or emits a
+ *   client-visible warning (`apiKeySelfService.ts`), so the cap fires at the same
+ *   number the client's own `usedUsd`/`usedPercent` already reports (migration 127 /
+ *   Finding 2's follow-up).
  * @returns {{ allowed: boolean, reason?: string, dailyUsed: number, dailyLimit: number, warningReached: boolean, remaining: number, periodUsed: number, activeLimitUsd: number, resetInterval: BudgetResetInterval | null, resetTime: string | null, budgetResetAt: number | null, lastBudgetResetAt: number | null, periodStartAt: number | null }}
  */
-export function checkBudget(apiKeyId: string, additionalCost = 0) {
+export function checkBudget(apiKeyId: string, additionalCost = 0, basis: CostBasis = "real") {
   const budget = getBudget(apiKeyId);
   if (!budget) {
     return {
@@ -458,7 +471,7 @@ export function checkBudget(apiKeyId: string, additionalCost = 0) {
   }
 
   const window = getBudgetWindow(budget.resetInterval, budget.resetTime);
-  const periodUsed = getBudgetWindowTotal(apiKeyId, window.periodStartAt);
+  const periodUsed = getBudgetWindowTotal(apiKeyId, window.periodStartAt, basis);
   const projectedTotal = periodUsed + additionalCost;
   const activeLimitUsd = getActiveBudgetLimit(budget);
   const warningReached =

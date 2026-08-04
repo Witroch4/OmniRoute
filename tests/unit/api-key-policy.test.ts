@@ -483,6 +483,42 @@ test("enforceApiKeyPolicy rejects disallowed models and exhausted budgets", asyn
   assert.match(await readErrorMessage(overBudget.rejection), /Daily budget exceeded/);
 });
 
+test("enforceApiKeyPolicy's budget Check 4 enforces the cap against normalized (billed) spend, not real spend, on a model-budget redirect", async () => {
+  const budgetedKey = await createKeyWithPolicy();
+  const policy = await loadPolicy("normalized-budget-4");
+
+  const budgetMeta = await apiKeysDb.getApiKeyMetadata(budgetedKey.key);
+  costRules.setBudget(budgetMeta.id, { dailyLimitUsd: 1, warningThreshold: 0.5 });
+
+  // A model-budget redirect: OmniRoute's real upstream spend (cost) is cheap because the
+  // request was silently served by a cheaper family, but the client is BILLED at the
+  // originally-requested model's rate (billedCost). Real spend alone ($0.10) is well under
+  // the $1 daily cap; normalized/billed spend ($5) is far over it.
+  costRules.recordCost(budgetMeta.id, 0.1, 5);
+
+  // Before this fix, Check 4 called checkBudget() with the default "real" basis, so this
+  // key would sail past the cap forever (real spend keeps growing slowly at the redirected
+  // rate) even though GET /v1/me/status already reports usedPercent > 100 to the client.
+  const rejected = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(budgetedKey.key),
+    "openai/gpt-4.1"
+  );
+  assert.equal(rejected.rejection.status, 429);
+  assert.match(await readErrorMessage(rejected.rejection), /Daily budget exceeded/);
+
+  // Control: a key whose real AND normalized spend both stay under the cap is unaffected.
+  const healthyKey = await createKeyWithPolicy();
+  const healthyMeta = await apiKeysDb.getApiKeyMetadata(healthyKey.key);
+  costRules.setBudget(healthyMeta.id, { dailyLimitUsd: 1, warningThreshold: 0.5 });
+  costRules.recordCost(healthyMeta.id, 0.1, 0.2);
+
+  const allowed = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(healthyKey.key),
+    "openai/gpt-4.1"
+  );
+  assert.equal(allowed.rejection, null);
+});
+
 test("enforceApiKeyPolicy returns Anthropic error envelope for /v1/messages model denials", async () => {
   const restrictedKey = await createKeyWithPolicy({
     allowedModels: ["cc/*"],

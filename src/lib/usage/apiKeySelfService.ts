@@ -35,7 +35,11 @@ type GetCostSummaryFn = (
   apiKeyId: string,
   options?: { basis?: "real" | "normalized" }
 ) => CostSummaryLike;
-type CheckBudgetFn = (apiKeyId: string) => unknown;
+type CheckBudgetFn = (
+  apiKeyId: string,
+  additionalCost?: number,
+  basis?: "real" | "normalized"
+) => unknown;
 type GetDbInstanceFn = () => DbLike;
 type GetProviderConnectionByIdFn = (connectionId: string) => Promise<unknown>;
 type GetProviderConnectionsFn = (filters?: Record<string, unknown>) => Promise<unknown[]>;
@@ -392,11 +396,15 @@ export async function buildApiKeySelfServiceStatus(
   // Finding 2 (final-review): this route authenticates with the API key itself
   // (self:usage scope) — it is client-facing, so it must report what the client is
   // BILLED, not what the traffic actually cost OmniRoute at the served model's rates.
-  // "real" stays the default for every other consumer of getCostSummary (checkBudget's
-  // own domain_budgets enforcement below, and the admin-only /api/usage/budget[/bulk]
-  // routes) — see migration 127 / costRules.getCostSummary's doc comment.
+  // "real" stays the default for the admin-only /api/usage/budget[/bulk] routes and
+  // the dormant policyEngine.ts — see migration 127 / costRules.getCostSummary's doc
+  // comment. The `checkBudget` call below is also normalized (Finding 2 follow-up):
+  // its return value is unused here, but its side effect (persisting/logging a
+  // threshold warning) must trip at the same normalized number `summary` reports,
+  // matching the real request-time enforcement gate (`enforceApiKeyPolicy`'s Check 4,
+  // apiKeyPolicy.ts) which now also checks normalized spend.
   const summary = resolvedDeps.getCostSummary(metadata.id, { basis: "normalized" });
-  resolvedDeps.checkBudget(metadata.id);
+  resolvedDeps.checkBudget(metadata.id, 0, "normalized");
 
   const cost = buildCostStatus(summary, resolvedDeps.now());
   const tokens = aggregateTokens(

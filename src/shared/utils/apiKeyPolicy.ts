@@ -584,9 +584,13 @@ export async function enforceApiKeyPolicy(
   }
 
   // ── Check 4: Budget limit ──
+  // Model-budget-routing follow-up (Finding 2): this gate stops a live request on
+  // behalf of the client, so it must fire at the same normalized number the client's
+  // own GET /v1/me/status (`usedUsd`/`usedPercent`) already reports — otherwise a
+  // redirected key can show usedPercent > 100 there while still being served here.
   if (apiKeyInfo.id) {
     try {
-      const budgetOk = checkBudget(apiKeyInfo.id);
+      const budgetOk = checkBudget(apiKeyInfo.id, 0, "normalized");
       if (!budgetOk.allowed) {
         return {
           apiKey,
