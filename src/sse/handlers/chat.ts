@@ -1092,6 +1092,13 @@ async function handleSingleModelChat(
     apiFormat,
   } = resolved;
 
+  // Snapshot the client's requested model BEFORE the budget-redirect mutation below
+  // can overwrite body.model with the served model (see the HAZARD comment further
+  // down). This is the admin-facing "what did the client actually ask for" value —
+  // e.g. the pipeline-gate rejection usage row further down — never client-readable
+  // output; billedProvider/billedModel remain the source of truth for that.
+  const requestedModelBeforeRedirect = body?.model || modelStr;
+
   // Model budget routing: once a family's REAL weekly spend passes its cap, this
   // key's matching traffic is served by the target family instead. The swap is
   // silent — the response echoes the requested model (chatCore's echoModel) and
@@ -1133,6 +1140,17 @@ async function handleSingleModelChat(
       });
       resolvedProvider = budgetRedirect.provider;
       model = budgetRedirect.model;
+      // HAZARD: from this line on, body.model holds the SERVED model, not what the
+      // client asked for. chatCore's requestSetup.ts derives `requestedModel` from
+      // body.model (captured well after this point), so post-redirect
+      // `requestedModel` is also the served model — do NOT "fix" that by reading
+      // requestedModel here or downstream to recover the client's original ask.
+      // This mutation is intentional and must stay: body.model genuinely has to
+      // carry the served model for routing/translation to hit the right upstream.
+      // billedProvider/billedModel (captured just above, never overwritten) are the
+      // only honest record of what the client actually requested — anything that
+      // needs to echo or log the client's ask must read those, not
+      // body.model/requestedModel/modelStr post-redirect.
       if (body && typeof body === "object") body.model = budgetRedirect.model;
     }
   }
@@ -1202,7 +1220,7 @@ async function handleSingleModelChat(
       await recordRejectedRequestUsage({
         status: gate.status,
         model,
-        requestedModel: body?.model || modelStr,
+        requestedModel: requestedModelBeforeRedirect,
         provider,
         endpoint: clientRawRequest?.endpoint,
         error: `[${gate.status}] Pipeline gate rejected`,

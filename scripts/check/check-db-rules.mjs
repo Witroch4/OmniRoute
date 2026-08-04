@@ -41,6 +41,8 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "_rowTypes", // type-only: 5 importers internos em db/ (AgentBridge/Inspector row types)
   "accessTokens", // intentionally-internal: 4 rotas /api/cli/* (connect, whoami, tokens, tokens/[id]) + server/authz/accessTokenAuth.ts via import direto "@/lib/db/accessTokens" (Rule #2)
   "apiKeyColumnFallbacks", // db-internal: importado só por db/apiKeys.ts (API_KEY_COLUMN_FALLBACKS — fallbacks de coluna split do apiKeys.ts)
+  "apiKeyMinSpendFields", // db-internal: importado só por db/apiKeys.ts (parseApiKeyMinSpendFields/ApiKeyMinSpendGuaranteeFields — helpers de campo de garantia de spend mínimo; mig 123). PRE-EXISTING: módulo já existia na branch antes da Task 6 de model-budget-routing; a entrada no allowlist só nunca tinha sido adicionada (achado + corrigido na revisão da Task 6, fix-round 1, 2026-08-04 — não introduzido por essa task)
+  "apiKeyModelBudgetRules", // intentionally-internal: consumido via import direto "@/lib/db/apiKeyModelBudgetRules" fora de db/ por src/lib/usage/modelBudgetRouting.ts (Rule #2). Módulo novo da feature de model-budget-routing (Task 4); entrada adicionada na revisão da Task 6 (fix-round 1, 2026-08-04)
   "apiKeyUsageLimitFields", // db-internal: importado só por db/apiKeys.ts (helpers de campo de limite de uso split do apiKeys.ts; mig 101)
   "caseMapping", // db-internal: importado só por db/core.ts (toSnakeCase/toCamelCase/objToSnake — column-mapping snake↔camel split do core.ts, #4947)
   "cleanup", // intentionally-internal: 3 API routes (purge-quota-snapshots, purge-call-logs, purge-detailed-logs)
