@@ -1075,6 +1075,7 @@ export async function deleteApiKey(id: string) {
 
   db.prepare("DELETE FROM domain_budgets WHERE api_key_id = ?").run(id);
   db.prepare("DELETE FROM domain_cost_history WHERE api_key_id = ?").run(id);
+  db.prepare("DELETE FROM api_key_model_budget_rules WHERE api_key_id = ?").run(id);
   setNoLog(id, false);
 
   // Invalidate caches since a key was removed
