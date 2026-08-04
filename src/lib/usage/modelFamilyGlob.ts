@@ -32,6 +32,25 @@ export function matchesFamilyGlob(modelId: string, glob: string): boolean {
 }
 
 /**
+ * Whether `glob` would match `modelId` the way the spend query actually matches it:
+ * `apiKeyUsageLimits.ts`'s `getApiKeyFamilyRealSpendSince` runs `LOWER(model) GLOB
+ * @familyGlob` against the FULL stored model id, with no provider-prefix stripping --
+ * unlike {@link matchesFamilyGlob} above, which strips up to the first `/` before
+ * matching (see its own review-round note, carried into this final review as Finding 5).
+ *
+ * For a provider whose registry ids carry an internal slash (cline's
+ * "anthropic/claude-sonnet-4.6", cloudflare-ai's "@cf/meta/...") a source glob with no
+ * leading wildcard can match the BARE id (so the ladder decides a rule applies) while
+ * never matching the FULL id the spend query scans -- spend then always reads 0, the
+ * rule never exhausts, and the cap silently never fires. Used only to detect and warn
+ * about that mismatch; not part of the matching decision itself.
+ */
+export function matchesFamilyGlobAgainstFullId(modelId: string, glob: string): boolean {
+  if (!modelId || !glob) return false;
+  return globToRegExp(glob).test(modelId.trim().toLowerCase());
+}
+
+/**
  * Resolve a family glob to a concrete model id on `provider`, by taking the
  * first registry member that matches. Registry order is newest-first within a
  * family (verified in open-sse/config/providers/registry/claude/index.ts, where

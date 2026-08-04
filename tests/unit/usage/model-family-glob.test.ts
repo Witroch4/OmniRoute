@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   matchesFamilyGlob,
+  matchesFamilyGlobAgainstFullId,
   resolveFamilyTargetModel,
 } from "../../../src/lib/usage/modelFamilyGlob.ts";
 
@@ -40,4 +41,30 @@ test("target resolution returns null when the glob matches nothing", () => {
 
 test("target resolution returns null for an unknown provider", () => {
   assert.equal(resolveFamilyTargetModel("not-a-provider", "claude-sonnet-*"), null);
+});
+
+// Final-review Finding 5: matchesFamilyGlobAgainstFullId mirrors the spend query's SQL
+// GLOB (apiKeyUsageLimits.ts's getApiKeyFamilyRealSpendSince), which matches the FULL
+// stored model id with no provider-prefix stripping — unlike matchesFamilyGlob above.
+test("matchesFamilyGlobAgainstFullId does NOT strip the provider prefix, unlike matchesFamilyGlob", () => {
+  assert.equal(matchesFamilyGlobAgainstFullId("cc/claude-opus-4-8", "claude-opus-*"), false);
+  assert.equal(matchesFamilyGlob("cc/claude-opus-4-8", "claude-opus-*"), true);
+});
+
+test("matchesFamilyGlobAgainstFullId matches a slash-bearing id when the glob spans the prefix", () => {
+  assert.equal(
+    matchesFamilyGlobAgainstFullId("anthropic/claude-sonnet-4.6", "*claude-sonnet-*"),
+    true
+  );
+});
+
+test("matchesFamilyGlobAgainstFullId matches a model id with no slash exactly like matchesFamilyGlob", () => {
+  for (const model of ["claude-opus-4-8", "claude-opus-5"]) {
+    assert.equal(matchesFamilyGlobAgainstFullId(model, "claude-opus-*"), true, model);
+    assert.equal(
+      matchesFamilyGlobAgainstFullId(model, "claude-opus-*"),
+      matchesFamilyGlob(model, "claude-opus-*"),
+      model
+    );
+  }
 });

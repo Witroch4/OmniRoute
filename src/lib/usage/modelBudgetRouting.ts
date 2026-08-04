@@ -17,7 +17,11 @@ import {
   getApiKeyWeeklyWindowStartIso,
   type ApiKeyUsageLimitMetadata,
 } from "./apiKeyUsageLimits";
-import { matchesFamilyGlob, resolveFamilyTargetModel } from "./modelFamilyGlob";
+import {
+  matchesFamilyGlob,
+  matchesFamilyGlobAgainstFullId,
+  resolveFamilyTargetModel,
+} from "./modelFamilyGlob";
 
 const MAX_HOPS = 4;
 const CACHE_TTL_MS = 60_000;
@@ -47,10 +51,17 @@ export interface ModelBudgetRoutingDeps {
 type CacheEntry = { exhausted: boolean; expiresAt: number };
 const spendCache = new Map<string, CacheEntry>();
 const inertRulesWarned = new Set<string>();
+// Finding 5 (final review): warn once per rule when matchesFamilyGlob (bare-id match,
+// decides eligibility) and the spend query's SQL GLOB (full stored id, no stripping)
+// structurally disagree -- see matchesFamilyGlobAgainstFullId's doc comment. Fails safe
+// (spend reads 0, rule never exhausts, never a failed request) but silently, so this is
+// the only signal an operator gets that a configured rule can never advance.
+const structuralSpendMismatchWarned = new Set<string>();
 
 export function clearModelBudgetRoutingCacheForTests(): void {
   spendCache.clear();
   inertRulesWarned.clear();
+  structuralSpendMismatchWarned.clear();
 }
 
 function cacheKey(apiKeyId: string, ruleId: string): string {
@@ -138,6 +149,22 @@ export async function resolveModelBudgetRedirect(
         matchesFamilyGlob(model, candidate.sourceFamily)
     );
     if (!rule) break;
+
+    // Finding 5: the rule matched by its bare model id, but the spend query scans the
+    // FULL stored id. When those structurally disagree (a slash-bearing model id and a
+    // source glob with no leading wildcard spanning the prefix), the family's real spend
+    // will always read 0 and this rule can never exhaust -- warn once so it doesn't go
+    // completely silent.
+    if (
+      model.includes("/") &&
+      !matchesFamilyGlobAgainstFullId(model, rule.sourceFamily) &&
+      !structuralSpendMismatchWarned.has(rule.id)
+    ) {
+      structuralSpendMismatchWarned.add(rule.id);
+      warn(
+        `rule ${rule.id} matched "${model}" by its bare id, but the spend query matches the FULL stored model id (getApiKeyFamilyRealSpendSince's SQL GLOB) and never will for this provider's slash-bearing ids — real spend on this family will always read 0, so this rule can never exhaust`
+      );
+    }
 
     const sinceIso = await ensureSinceIso();
     if (!(await isRuleExhausted(rule, apiKeyId, sinceIso, getFamilySpend, now))) break;

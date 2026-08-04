@@ -184,3 +184,98 @@ test("a key with a rule that doesn't match this request never fetches the window
   );
   assert.equal(spendQueried, 0);
 });
+
+// Final-review Finding 5: matchesFamilyGlob (decides eligibility here) strips a model id
+// down to its bare form before matching; the REAL spend query (apiKeyUsageLimits.ts's
+// getApiKeyFamilyRealSpendSince) runs `LOWER(model) GLOB @familyGlob` against the FULL
+// stored id, with no stripping. For a provider whose registry id itself carries a slash
+// (cline's "anthropic/claude-sonnet-4.6"), a no-leading-wildcard source glob like
+// "claude-sonnet-*" matches the bare id but can never match the full one — real spend on
+// that family reads 0 forever and the rule never exhausts. Fails safe (never a bad
+// request), but silently — this locks the warn-once signal that is the only thing that
+// makes the misconfiguration visible.
+test("a slash-bearing model id that structurally can never match the spend query warns once per rule", async () => {
+  clearModelBudgetRoutingCacheForTests();
+  const warnings: string[] = [];
+  const deps = {
+    ...depsWith(
+      [
+        rule({
+          sourceProvider: "cline",
+          sourceFamily: "claude-sonnet-*",
+          targetProvider: "cline",
+          targetFamily: "claude-haiku-*",
+        }),
+      ],
+      { "claude-sonnet-*": 100 }
+    ),
+    warn: (message: string) => warnings.push(message),
+  };
+  const input = {
+    apiKeyId: "key-1",
+    provider: "cline",
+    model: "anthropic/claude-sonnet-4.6",
+  };
+
+  const first = await resolveModelBudgetRedirect(input, deps);
+  const second = await resolveModelBudgetRedirect(input, deps);
+
+  // The redirect itself still fires (matchesFamilyGlob matched, and the mocked
+  // getFamilySpend here returns 100 regardless of the real SQL query's actual
+  // behavior) — this test is about the WARNING, not about breaking the redirect.
+  assert.ok(first, "matchesFamilyGlob still decides eligibility off the bare id");
+  assert.ok(second);
+  assert.equal(warnings.length, 1, "must warn exactly once per rule, not once per call");
+  assert.match(warnings[0], /rule-claude-sonnet-\*/);
+  assert.match(warnings[0], /anthropic\/claude-sonnet-4\.6/);
+});
+
+test("a slash-bearing model id that DOES structurally match the spend query does not warn", async () => {
+  clearModelBudgetRoutingCacheForTests();
+  const warnings: string[] = [];
+  const deps = {
+    ...depsWith(
+      [
+        rule({
+          sourceProvider: "cline",
+          sourceFamily: "*claude-sonnet-*",
+          targetProvider: "cline",
+          targetFamily: "claude-haiku-*",
+        }),
+      ],
+      { "*claude-sonnet-*": 100 }
+    ),
+    warn: (message: string) => warnings.push(message),
+  };
+
+  // A leading wildcard spans the "anthropic/" prefix, so the SQL GLOB against the
+  // FULL id would match too — no structural mismatch, no warning.
+  await resolveModelBudgetRedirect(
+    { apiKeyId: "key-1", provider: "cline", model: "anthropic/claude-sonnet-4.6" },
+    deps
+  );
+
+  assert.equal(warnings.length, 0);
+});
+
+test("a non-slash-bearing model id never warns, even with a narrow glob", async () => {
+  clearModelBudgetRoutingCacheForTests();
+  const warnings: string[] = [];
+  const deps = {
+    ...depsWith([rule({ sourceFamily: "claude-opus-*", targetFamily: "claude-sonnet-*" })], {
+      "claude-opus-*": 100,
+    }),
+    warn: (message: string) => warnings.push(message),
+  };
+
+  await resolveModelBudgetRedirect(
+    { apiKeyId: "key-1", provider: "cc", model: "claude-opus-4-8" },
+    deps
+  );
+
+  assert.equal(
+    warnings.length,
+    0,
+    "the common case (no slash in the stored model id) is unaffected"
+  );
+});
