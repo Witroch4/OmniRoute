@@ -148,6 +148,27 @@ const nextConfig = {
   // accept for image-bearing requests; tune via env if a deployment needs
   // more.
   experimental: {
+    // Build-worker count. Next defaults to one worker per host CPU, and that
+    // count comes from os.cpus(), which reports the HOST's CPUs and ignores the
+    // container's cgroup limit — so capping the builder container's CPUs does
+    // not reduce workers, it only throttles them.
+    //
+    // That matters for the arm64 QEMU cross-build: every build worker opens the
+    // SQLite database, and on teardown better-sqlite3's native Statement
+    // destructor runs under the emulator, where it aborts:
+    //   Statement::~Statement() [better_sqlite3.node]
+    //   node::RemoveEnvironmentCleanupHook → Assertion failed: (env) != nullptr
+    //   qemu: uncaught target signal 6 (Aborted)
+    // With 24 concurrent workers this reliably kills `next build` ~20-30 min in.
+    // Setting OMNIROUTE_BUILD_CPUS=1 collapses it to a single worker, which
+    // removes the concurrent native teardown entirely.
+    //
+    // Unset (the default) leaves Next's own heuristic untouched, so native
+    // amd64/arm64 builds keep their full parallelism and nothing changes for
+    // anyone who does not opt in.
+    ...(process.env.OMNIROUTE_BUILD_CPUS
+      ? { cpus: Math.max(1, Number(process.env.OMNIROUTE_BUILD_CPUS) || 1) }
+      : {}),
     serverActions: {
       bodySizeLimit: process.env.OMNIROUTE_SERVER_ACTIONS_BODY_LIMIT || "50mb",
     },

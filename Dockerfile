@@ -99,6 +99,14 @@ ENV OMNIROUTE_MITM_STUB=1
 ARG OMNIROUTE_BUILD_MEMORY_MB=4096
 ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 
+# Build-worker count (see next.config.mjs experimental.cpus for the full story).
+# Unset by default, so Next keeps its own one-worker-per-host-CPU heuristic.
+# Set to 1 for the arm64 QEMU cross-build, where concurrent workers tearing down
+# better-sqlite3's native Statement destructor under the emulator abort the build:
+#   `--build-arg OMNIROUTE_BUILD_CPUS=1`
+ARG OMNIROUTE_BUILD_CPUS=
+ENV OMNIROUTE_BUILD_CPUS=${OMNIROUTE_BUILD_CPUS}
+
 COPY . ./
 RUN --mount=type=cache,id=next-cache,target=/app/.build/next/cache \
   mkdir -p /app/data && npm run build
