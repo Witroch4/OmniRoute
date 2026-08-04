@@ -73,3 +73,18 @@ test("guarantee is inactive without an api key id", async () => {
   );
   assert.equal(active, false);
 });
+
+test("the guarantee measures real spend, not normalized", async () => {
+  const bases: unknown[] = [];
+  await isMinSpendGuaranteeActive(
+    { id: "key-1", minSpendGuaranteeEnabled: true, minSpendGuaranteeUsd: 50 },
+    NOW,
+    {
+      getSpendSince: async (_id: string, _since: string, options?: { basis?: string }) => {
+        bases.push(options?.basis);
+        return 10;
+      },
+    }
+  );
+  assert.deepEqual(bases, ["real"]);
+});

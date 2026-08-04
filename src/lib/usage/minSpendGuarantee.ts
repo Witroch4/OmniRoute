@@ -32,7 +32,11 @@ export interface MinSpendGuaranteeMetadataLike {
  * when the key has no guarantee configured.
  */
 export interface MinSpendGuaranteeDeps {
-  getSpendSince?: (apiKeyId: string, sinceIso: string) => Promise<number>;
+  getSpendSince?: (
+    apiKeyId: string,
+    sinceIso: string,
+    options?: { basis?: "normalized" | "real" }
+  ) => Promise<number>;
 }
 
 export async function isMinSpendGuaranteeActive(
@@ -50,6 +54,9 @@ export async function isMinSpendGuaranteeActive(
 
   const sinceIso = new Date(now - WEEK_MS).toISOString();
   const getSpendSince = deps.getSpendSince ?? getApiKeyUsdSpendSince;
-  const spentUsd = await getSpendSince(apiKeyId, sinceIso);
+  // Real spend, not normalized: the guarantee decides whether to route past the
+  // provider cutoff so the upstream account is genuinely consumed, and its number
+  // is never returned to a client.
+  const spentUsd = await getSpendSince(apiKeyId, sinceIso, { basis: "real" });
   return spentUsd < floorUsd;
 }
