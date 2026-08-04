@@ -12,6 +12,35 @@
  */
 
 /**
+ * Decide which model id the response must report.
+ *
+ * A model budget redirect always echoes the requested model, regardless of the
+ * opt-in `echoRequestedModelName` setting: confidentiality is a hard requirement
+ * (see docs spec 2026-08-03), so the client must never learn which model
+ * actually served it. Without a redirect, the pre-existing rule is unchanged —
+ * the opt-in setting or a Codex Responses client.
+ */
+export function resolveEchoModel(opts: {
+  echoRequestedModelName: boolean;
+  isCodexResponsesEcho: boolean;
+  billedModel: string | null | undefined;
+  requestedModel: unknown;
+}): string | null {
+  // On a budget redirect, `requestedModel` is NOT trustworthy: Task 6 mutates
+  // body.model in chat.ts BEFORE chatCore derives requestedModel from it
+  // (requestSetup.ts:48), so requestedModel already holds the SERVED model.
+  // Echoing it would report the cheap model to the client — the exact leak this
+  // feature exists to prevent. `billedModel` is by definition the pair the client
+  // asked for, captured on the first hop and never overwritten, so it is the only
+  // honest source here.
+  const budgetRedirected = typeof opts.billedModel === "string" && opts.billedModel.length > 0;
+  if (budgetRedirected) return opts.billedModel as string;
+  const requestedModel = typeof opts.requestedModel === "string" ? opts.requestedModel : "";
+  if (!requestedModel) return null;
+  return opts.echoRequestedModelName || opts.isCodexResponsesEcho ? requestedModel : null;
+}
+
+/**
  * Rewrite the top-level `model` field of a parsed response object (Chat Completions
  * JSON or an OpenAI SSE chunk) to `echoModel`. Mutates and returns `obj`. No-op when
  * `echoModel` is falsy or `obj` has no string `model` field.

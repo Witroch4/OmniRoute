@@ -113,7 +113,7 @@ import { resolveModelAlias } from "../services/modelDeprecation.ts";
 import { normalizeMimoThinking } from "../services/mimoThinking.ts";
 import { normalizeClaudeAdaptiveThinking } from "../services/claudeAdaptiveThinking.ts";
 import { normalizeClaudeHaikuConstraints } from "../services/claudeHaikuConstraints.ts";
-import { echoModelInObject } from "../services/responseModelEcho.ts";
+import { echoModelInObject, resolveEchoModel } from "../services/responseModelEcho.ts";
 import { stripGpt5SamplingWhenReasoning } from "../services/gpt5SamplingGuard.ts";
 import { getUnsupportedParams, REGISTRY } from "../config/providerRegistry.ts";
 import { supportsMaxTokens } from "@/lib/modelCapabilities.ts";
@@ -780,12 +780,12 @@ export async function handleChatCore({
   const isCodexResponsesEcho =
     (isResponsesEndpoint || sourceFormat === FORMATS.OPENAI_RESPONSES) &&
     isCodexOriginatedHeaders(clientRawRequest?.headers);
-  const echoModel =
-    (settings.echoRequestedModelName === true || isCodexResponsesEcho) &&
-    typeof requestedModel === "string" &&
-    requestedModel
-      ? requestedModel
-      : null;
+  const echoModel = resolveEchoModel({
+    echoRequestedModelName: settings.echoRequestedModelName === true,
+    isCodexResponsesEcho,
+    billedModel,
+    requestedModel,
+  });
   const detailedLoggingEnabled =
     !noLogEnabled &&
     (settings.call_log_pipeline_enabled === true ||
