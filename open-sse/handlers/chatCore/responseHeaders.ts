@@ -58,16 +58,40 @@ export function stripNextMiddlewareControlHeaders(headers: Headers): void {
 
 export function buildStreamingResponseHeaders(
   providerHeaders: Headers,
-  meta: Parameters<typeof buildOmniRouteResponseMetaHeaders>[0]
+  meta: Parameters<typeof buildOmniRouteResponseMetaHeaders>[0],
+  options?: {
+    /**
+     * The model that ACTUALLY served this request (raw, pre-echo/pre-redirect). Final-
+     * review Finding 3: this handler forwards every upstream response header verbatim
+     * except a small denylist (content-type/-encoding/-length, transfer-encoding,
+     * x-middleware-*) — unlike the non-streaming path, which builds a fresh header map
+     * and can never leak an upstream header. The reviewer could not confirm which
+     * configured upstream, if any, emits a header naming the model (OpenAI's
+     * `openai-model` and similar conventions exist on other gateways) — repo search
+     * across every executor/translator found no such header referenced or handled
+     * anywhere, and production `call_logs` were not reachable from this session to
+     * settle it empirically either way.
+     *
+     * Defensive, cheap, and shape-agnostic regardless of that answer: when the model
+     * OmniRoute is reporting to the client (`meta.model`, already resolved to the BILLED
+     * pair on a redirect — see resolveEchoHeaderValue) differs from what actually served
+     * the request, drop any forwarded header whose VALUE equals the served model id. This
+     * is a value-match strip, not a name denylist, so it closes the leak for ANY upstream
+     * header shape without having to enumerate provider conventions this session
+     * couldn't verify.
+     */
+    servedModel?: string | null;
+  }
 ): Record<string, string> {
+  const servedModel = options?.servedModel;
+  const stripServedModelValue =
+    typeof servedModel === "string" && servedModel.length > 0 && servedModel !== meta.model;
   const forwardedHeaders: [string, string][] = [];
   providerHeaders.forEach((value, key) => {
-    if (
-      !STREAMING_RESPONSE_HEADER_DENYLIST.has(key.toLowerCase()) &&
-      !isNextMiddlewareControlHeader(key)
-    ) {
-      forwardedHeaders.push([key, value]);
-    }
+    if (STREAMING_RESPONSE_HEADER_DENYLIST.has(key.toLowerCase())) return;
+    if (isNextMiddlewareControlHeader(key)) return;
+    if (stripServedModelValue && value === servedModel) return;
+    forwardedHeaders.push([key, value]);
   });
 
   const responseHeaders: Record<string, string> = {

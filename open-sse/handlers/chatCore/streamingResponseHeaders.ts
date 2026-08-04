@@ -18,18 +18,27 @@ export function assembleStreamingResponseHeaders(
     model: string | null | undefined;
     pendingRequestId: string;
     compressionResponseMeta?: string | null | undefined;
+    /** Finding 3: the model that actually served this request, raw/pre-echo — passed
+     * through so buildStreamingResponseHeaders can strip a forwarded upstream header
+     * whose value would otherwise contradict `model` above. Omitted/equal to `model`
+     * (the common, non-redirected case) is a no-op — see its doc comment. */
+    servedModel?: string | null;
   },
   buildStreamingResponseHeaders: typeof defaultBuildStreaming = defaultBuildStreaming
 ): Record<string, string> {
   const responseHeaders: Record<string, string> = {
-    ...buildStreamingResponseHeaders(args.providerHeaders, {
-      provider: args.provider,
-      model: args.model,
-      cacheHit: false,
-      latencyMs: 0,
-      usage: null,
-      costUsd: 0,
-    }),
+    ...buildStreamingResponseHeaders(
+      args.providerHeaders,
+      {
+        provider: args.provider,
+        model: args.model,
+        cacheHit: false,
+        latencyMs: 0,
+        usage: null,
+        costUsd: 0,
+      },
+      { servedModel: args.servedModel }
+    ),
     "x-omniroute-request-id": args.pendingRequestId,
   };
   if (args.compressionResponseMeta) {

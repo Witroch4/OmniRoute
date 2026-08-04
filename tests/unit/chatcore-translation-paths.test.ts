@@ -2415,6 +2415,72 @@ test("buildStreamingResponseHeaders drops upstream compression and framing heade
   assert.equal(headers.get("X-OmniRoute-Cache"), "MISS");
 });
 
+// Final-review Finding 3: buildStreamingResponseHeaders forwards every upstream header
+// verbatim except the small denylist above -- unlike the non-streaming path, which builds
+// a fresh map and can never leak one. Whether any CONFIGURED upstream actually emits a
+// header naming the model could not be settled from this repo (no executor/translator
+// references one, and production call_logs were unreachable this session) -- so this is a
+// defensive, shape-agnostic strip: any forwarded header whose VALUE equals the model that
+// actually served the request gets dropped when that value would contradict what
+// OmniRoute is reporting (X-OmniRoute-Model, already resolved to the billed pair on a
+// redirect). See responseHeaders.ts's doc comment on the `servedModel` option.
+test("buildStreamingResponseHeaders strips a forwarded header whose VALUE names the served model on a redirect", () => {
+  const headers = new Headers(
+    buildStreamingResponseHeaders(
+      new Headers({
+        "Content-Type": "text/event-stream",
+        // Hypothetical upstream header naming the SERVED (cheap) model -- the exact
+        // shape the reviewer could not confirm any provider sends, hence a value match
+        // rather than a name denylist.
+        "X-Hypothetical-Upstream-Model": "claude-sonnet-5",
+        "X-Upstream-Trace": "trace-1",
+      }),
+      {
+        provider: "cc",
+        // Already resolved to the BILLED pair by resolveEchoHeaderValue at the real
+        // call site -- see chatCore.ts's assembleStreamingResponseHeaders call.
+        model: "claude-opus-4-8",
+        cacheHit: false,
+        latencyMs: 0,
+        usage: null,
+        costUsd: 0,
+      },
+      { servedModel: "claude-sonnet-5" }
+    )
+  );
+
+  assert.equal(headers.get("X-Hypothetical-Upstream-Model"), null, "leaked the served model");
+  // A header whose value merely happens to equal the served model is stripped even if
+  // its NAME has nothing to do with models -- this is intentionally value-match, not a
+  // name-based rule, so it survives any upstream convention.
+  assert.equal(headers.get("X-Upstream-Trace"), "trace-1", "unrelated header untouched");
+  assert.equal(headers.get("X-OmniRoute-Cache"), "MISS");
+});
+
+test("buildStreamingResponseHeaders leaves headers untouched when servedModel matches the reported model (no redirect)", () => {
+  const headers = new Headers(
+    buildStreamingResponseHeaders(
+      new Headers({
+        "Content-Type": "text/event-stream",
+        "X-Hypothetical-Upstream-Model": "gpt-4o-mini",
+      }),
+      {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        cacheHit: false,
+        latencyMs: 0,
+        usage: null,
+        costUsd: 0,
+      },
+      { servedModel: "gpt-4o-mini" }
+    )
+  );
+
+  // servedModel === meta.model: nothing was redirected/echoed, so this must stay
+  // byte-identical to before Finding 3's fix.
+  assert.equal(headers.get("X-Hypothetical-Upstream-Model"), "gpt-4o-mini");
+});
+
 test("chatCore strips upstream compression and length headers from streaming responses", async () => {
   const upstreamPayload = `data: ${JSON.stringify({
     id: "chatcmpl-stream-headers",

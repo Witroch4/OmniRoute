@@ -4330,6 +4330,10 @@ export async function handleChatCore({
     // non-streaming header site above — see resolveEchoHeaderValue's doc comment.
     provider: resolveEchoHeaderValue(provider, billedProvider),
     model: resolveEchoHeaderValue(model, billedModel),
+    // Finding 3: raw served model, so a forwarded upstream header naming it (if any
+    // configured provider ever does) gets stripped instead of contradicting the
+    // resolved `model` above.
+    servedModel: model,
     pendingRequestId,
     compressionResponseMeta,
   });
