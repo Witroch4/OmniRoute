@@ -61,6 +61,10 @@ type TrafficType = "production" | "shadow";
 
 type ExecuteChatWithBreakerOptions = {
   trafficType?: TrafficType;
+  /** Provider the CLIENT asked for, when a model budget rule redirected the request. */
+  billedProvider?: string | null;
+  /** Model the CLIENT asked for, when a model budget rule redirected the request. */
+  billedModel?: string | null;
   [key: string]: any;
 };
 
@@ -395,6 +399,8 @@ export async function executeChatWithBreaker({
   trafficType = "production",
   correlationId = null,
   modelPinned = false,
+  billedProvider = null,
+  billedModel = null,
 }: ExecuteChatWithBreakerOptions): Promise<{ result: any; tlsFingerprintUsed: boolean }> {
   let tlsFingerprintUsed = false;
   const normalizedTrafficType: TrafficType =
@@ -432,6 +438,8 @@ export async function executeChatWithBreaker({
             trafficType: normalizedTrafficType,
             correlationId,
             modelPinned,
+            billedProvider,
+            billedModel,
             onCredentialsRefreshed: async (newCreds: any) => {
               await updateProviderCredentials(credentials.connectionId, {
                 accessToken: newCreds.accessToken,

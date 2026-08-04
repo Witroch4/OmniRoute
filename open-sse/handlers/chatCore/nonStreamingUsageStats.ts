@@ -22,6 +22,10 @@ export type RecordNonStreamingUsageStatsContext = {
   provider: string | null | undefined;
   connectionId: string | null | undefined;
   model: string | null | undefined;
+  /** Provider the CLIENT asked for, when a model budget rule redirected the request. */
+  billedProvider?: string | null | undefined;
+  /** Model the CLIENT asked for, when a model budget rule redirected the request. */
+  billedModel?: string | null | undefined;
   startTime: number;
   apiKeyInfo: { id?: string | null; name?: string | null } | null | undefined;
   effectiveServiceTier: EffectiveServiceTier;
@@ -44,6 +48,8 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
   saveRequestUsage({
     provider: provider || "unknown",
     model: model || "unknown",
+    billedProvider: ctx.billedProvider || null,
+    billedModel: ctx.billedModel || null,
     tokens: usage,
     status: "200",
     success: true,

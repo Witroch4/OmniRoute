@@ -96,6 +96,7 @@ import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
 import { isMinSpendGuaranteeActive } from "../../lib/usage/minSpendGuarantee";
+import { resolveModelBudgetRedirect } from "../../lib/usage/modelBudgetRouting";
 import { cloneLogPayload } from "@/lib/logPayloads";
 import { handleInternalUsageCommand } from "@/lib/usage/internalUsageCommand";
 import {
@@ -1082,7 +1083,7 @@ async function handleSingleModelChat(
     });
   }
 
-  const {
+  let {
     provider: resolvedProvider,
     model,
     sourceFormat,
@@ -1090,6 +1091,52 @@ async function handleSingleModelChat(
     extendedContext,
     apiFormat,
   } = resolved;
+
+  // Model budget routing: once a family's REAL weekly spend passes its cap, this
+  // key's matching traffic is served by the target family instead. The swap is
+  // silent — the response echoes the requested model (chatCore's echoModel) and
+  // the request is billed at the requested model's rates (billed_* on
+  // usage_history). It has to run here, before credential selection: a rule may
+  // point at a different provider, and once getProviderCredentialsWithQuotaPreflight
+  // has picked a connection it is too late to change providers.
+  let billedProvider: string | null = null;
+  let billedModel: string | null = null;
+  if (apiKeyInfo?.id) {
+    const budgetRedirect = await resolveModelBudgetRedirect({
+      apiKeyId: apiKeyInfo.id,
+      provider: resolvedProvider,
+      model,
+      usageLimitMetadata: {
+        id: apiKeyInfo.id,
+        allowedConnections: Array.isArray(apiKeyInfo.allowedConnections)
+          ? apiKeyInfo.allowedConnections
+          : [],
+      },
+    });
+    if (budgetRedirect) {
+      billedProvider = budgetRedirect.billedProvider;
+      billedModel = budgetRedirect.billedModel;
+      log.info(
+        "BUDGET_ROUTING",
+        `${budgetRedirect.billedProvider}/${budgetRedirect.billedModel} → ${budgetRedirect.provider}/${budgetRedirect.model} (rule ${budgetRedirect.ruleId}, ${budgetRedirect.hops} hop(s))`
+      );
+      logAuditEvent({
+        action: "routing.model_budget_redirect",
+        actor: apiKeyInfo.name || "system",
+        target: budgetRedirect.provider,
+        details: {
+          original_model: `${budgetRedirect.billedProvider}/${budgetRedirect.billedModel}`,
+          redirected_to: `${budgetRedirect.provider}/${budgetRedirect.model}`,
+          rule_id: budgetRedirect.ruleId,
+          hops: budgetRedirect.hops,
+        },
+      });
+      resolvedProvider = budgetRedirect.provider;
+      model = budgetRedirect.model;
+      if (body && typeof body === "object") body.model = budgetRedirect.model;
+    }
+  }
+
   // Prefer the combo target's providerId when available — the model string's
   // provider prefix may differ from the credential provider ID (e.g. model
   // "xiaomi/mimo-v2-flash" resolves to provider "xiaomi" but the combo target
@@ -1460,6 +1507,8 @@ async function handleSingleModelChat(
         skipUpstreamRetry: runtimeOptions.skipUpstreamRetry ?? false,
         correlationId: runtimeOptions?.correlationId ?? null,
         modelPinned: runtimeOptions?.modelPinned ?? false,
+        billedProvider,
+        billedModel,
       });
       if (telemetry) telemetry.endPhase();
 

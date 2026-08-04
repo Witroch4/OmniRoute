@@ -11,6 +11,10 @@
 export function buildFailureUsageRecord(opts: {
   provider: string | null | undefined;
   model: string | null | undefined;
+  /** Provider the CLIENT asked for, when a model budget rule redirected the request. */
+  billedProvider?: string | null | undefined;
+  /** Model the CLIENT asked for, when a model budget rule redirected the request. */
+  billedModel?: string | null | undefined;
   connectionId: string | null | undefined;
   apiKeyInfo: { id?: string; name?: string } | null | undefined;
   effectiveServiceTier: string;
@@ -24,6 +28,8 @@ export function buildFailureUsageRecord(opts: {
   return {
     provider: opts.provider || "unknown",
     model: opts.model || "unknown",
+    billedProvider: opts.billedProvider || null,
+    billedModel: opts.billedModel || null,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, reasoning: 0 },
     status: String(opts.statusCode),
     success: false,

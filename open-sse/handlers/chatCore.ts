@@ -382,6 +382,8 @@ export async function handleChatCore({
   createPiiTransform = null,
   correlationId = null,
   modelPinned = false,
+  billedProvider = null,
+  billedModel = null,
 }) {
   let { provider, model, extendedContext } = modelInfo;
   // ── Memory pressure guard ────────────────────────────────────────────
@@ -502,6 +504,8 @@ export async function handleChatCore({
       buildFailureUsageRecord({
         provider,
         model,
+        billedProvider,
+        billedModel,
         connectionId: getCurrentConnectionId(),
         apiKeyInfo,
         effectiveServiceTier,
@@ -3884,6 +3888,8 @@ export async function handleChatCore({
       provider,
       connectionId: successConnectionId,
       model,
+      billedProvider,
+      billedModel,
       startTime,
       apiKeyInfo,
       effectiveServiceTier,
@@ -4354,6 +4360,8 @@ export async function handleChatCore({
     recordStreamingUsageStats(streamUsage, {
       provider,
       model,
+      billedProvider,
+      billedModel,
       streamStatus: normalizedStreamStatus,
       startTime,
       ttft,

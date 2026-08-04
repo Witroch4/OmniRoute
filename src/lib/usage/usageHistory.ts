@@ -580,6 +580,10 @@ export async function getUsageDb(sinceIso?: string | null, limit?: number, curso
 export interface UsageEntry {
   provider?: string | null;
   model?: string | null;
+  /** Provider the CLIENT asked for, when a model budget rule redirected the request. */
+  billedProvider?: string | null;
+  /** Model the CLIENT asked for, when a model budget rule redirected the request. */
+  billedModel?: string | null;
   /** Raw or normalized token usage — see the interface doc above. */
   tokens?: unknown;
   status?: string | null;
@@ -660,14 +664,17 @@ export async function saveRequestUsage(entry: UsageEntry) {
 
       db.prepare(
         `
-        INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name,
+        INSERT INTO usage_history (provider, model, billed_provider, billed_model, connection_id,
+          api_key_id, api_key_name,
           tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation, tokens_reasoning,
           service_tier, status, success, latency_ms, ttft_ms, error_code, combo_strategy, endpoint, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
       ).run(
         entry.provider || null,
         entry.model || null,
+        entry.billedProvider || null,
+        entry.billedModel || null,
         entry.connectionId || null,
         entry.apiKeyId || null,
         entry.apiKeyName || null,

@@ -18,6 +18,10 @@ import { type EffectiveServiceTier } from "./serviceTier.ts";
 export type RecordStreamingUsageStatsContext = {
   provider: string | null | undefined;
   model: string | null | undefined;
+  /** Provider the CLIENT asked for, when a model budget rule redirected the request. */
+  billedProvider?: string | null | undefined;
+  /** Model the CLIENT asked for, when a model budget rule redirected the request. */
+  billedModel?: string | null | undefined;
   streamStatus: number;
   startTime: number;
   ttft: number;
@@ -35,6 +39,8 @@ function persistStreamingUsageRow(usage: object, ctx: RecordStreamingUsageStatsC
   saveRequestUsage({
     provider: provider || "unknown",
     model: model || "unknown",
+    billedProvider: ctx.billedProvider || null,
+    billedModel: ctx.billedModel || null,
     tokens: usage,
     status: String(streamStatus),
     success: streamStatus === 200,
