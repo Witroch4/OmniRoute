@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { CodexExecutor } from "@omniroute/open-sse/executors/codex.ts";
 import { getApiKeyMetadata } from "@/lib/db/apiKeys";
+import { listModelBudgetRules } from "@/lib/db/apiKeyModelBudgetRules";
 import { authorizeWebSocketHandshake, extractWsTokenFromRequest } from "@/lib/ws/handshake";
 import { getModelInfo } from "@/sse/services/model";
 import { getProviderCredentialsWithQuotaPreflight } from "@/sse/services/auth";
@@ -404,6 +405,41 @@ async function prepare(body: JsonRecord) {
       "codex_ws_provider_required",
       `Responses WebSocket bridge only supports Codex models, got ${provider || "unknown"}`
     );
+  }
+
+  // Final-review Finding 4: model-budget-routing's redirect (resolveModelBudgetRedirect,
+  // src/sse/handlers/chat.ts:1112) never runs on this transport, so a family USD cap
+  // configured on this key would silently never engage here. Worse, this proxy's frame
+  // relay (scripts/dev/responses-ws-proxy.mjs's `upstream.onmessage`) forwards every
+  // upstream WebSocket frame byte-for-byte with no model-field rewriting at all -- unlike
+  // chatCore.ts's SSE pipeline, there is no echo transform on this leg. Wiring in the
+  // redirect here without ALSO teaching that separate relay process to rewrite the served
+  // model out of every relayed frame would make things WORSE than today's silent bypass:
+  // it would redirect (saving money) but LEAK the served model verbatim to the client in
+  // real time, breaking the feature's core "the client must never tell" guarantee on this
+  // transport specifically. That is a real fix, not a contained one -- it crosses into a
+  // standalone script outside the open-sse/chatCore pipeline this feature otherwise lives
+  // in, so it is not done in this pass (see the final-review-fixes-report.md for the
+  // scoped follow-up plan).
+  //
+  // Interim guard, cheap and safe: fail CLOSED instead of silently open. A key that has
+  // ANY enabled model-budget rule sourced from "codex" cannot use this transport at all --
+  // it must fall back to the HTTP /v1/responses path, which enforces the cap AND keeps the
+  // redirect invisible. This trades convenience (that key loses the WS transport) for
+  // correctness (the cap can no longer be bypassed by switching transports).
+  if (metadata?.id) {
+    const codexBudgetRules = listModelBudgetRules(metadata.id).filter(
+      (rule) => rule.sourceProvider.toLowerCase() === "codex"
+    );
+    if (codexBudgetRules.length > 0) {
+      return jsonError(
+        400,
+        "codex_ws_budget_rules_unsupported",
+        "This API key has model-budget-routing rules on the Codex family. The Responses " +
+          "WebSocket bridge cannot enforce those caps or keep a redirect invisible on this " +
+          "transport -- use the HTTP /v1/responses endpoint instead."
+      );
+    }
   }
 
   const credentials = await getProviderCredentialsWithQuotaPreflight(

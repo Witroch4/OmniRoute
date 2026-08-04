@@ -30,6 +30,7 @@ const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const combosDb = await import("../../src/lib/db/combos.ts");
 const costRules = await import("../../src/domain/costRules.ts");
 const rateLimiter = await import("../../src/shared/utils/rateLimiter.ts");
+const modelBudgetRulesDb = await import("../../src/lib/db/apiKeyModelBudgetRules.ts");
 const route = await import("../../src/app/api/internal/codex-responses-ws/route.ts");
 
 rateLimiter.setRateLimiterTestMode(true);
@@ -158,4 +159,81 @@ test("WS prepare() rejects a combo not in the key's allowedCombos policy (403)",
     `expected a policy rejection (403), got ${response.status}: ${JSON.stringify(body)}`
   );
   assert.notEqual(body.error?.code, "codex_credentials_unavailable");
+});
+
+/**
+ * Final-review Finding 4: model-budget-routing's redirect never runs on this transport
+ * (resolveModelBudgetRedirect is only wired into src/sse/handlers/chat.ts's HTTP path),
+ * and the separate WS relay process (scripts/dev/responses-ws-proxy.mjs) forwards every
+ * upstream frame byte-for-byte with no model-field rewriting -- so wiring the redirect in
+ * here without ALSO teaching that relay to rewrite frames would leak the served model to
+ * the client in real time. Interim guard: fail CLOSED. A key with any enabled
+ * codex-sourced model-budget rule must be refused this transport entirely, BEFORE
+ * credential selection (never `codex_credentials_unavailable`), so the cap can't be
+ * silently bypassed by switching from HTTP to this WS bridge.
+ */
+test("WS prepare() refuses a key with an enabled codex-sourced model-budget rule (400, before credential selection)", async () => {
+  const budgetKey = await apiKeysDb.createApiKey("Budget Ruled Key", "machine-6564-d");
+  modelBudgetRulesDb.replaceModelBudgetRules(budgetKey.id, [
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "codex",
+      sourceFamily: "gpt-5.5*",
+      weeklyLimitUsd: 10,
+      targetProvider: "codex",
+      targetFamily: "gpt-5-mini*",
+    },
+  ]);
+
+  const response = await route.POST(buildPrepareRequest(budgetKey.key, "gpt-5.5"));
+  const body = (await response.json()) as { error?: { code?: string; message?: string } };
+
+  assert.equal(
+    response.status,
+    400,
+    `expected the budget-rules guard to fire (400), got ${response.status}: ${JSON.stringify(body)}`
+  );
+  assert.equal(body.error?.code, "codex_ws_budget_rules_unsupported");
+  assert.notEqual(
+    body.error?.code,
+    "codex_credentials_unavailable",
+    "must be rejected by the budget-rules guard, before credential selection ever runs"
+  );
+});
+
+test("WS prepare() proceeds when the key's model-budget rules are DISABLED or on a different provider", async () => {
+  const key = await apiKeysDb.createApiKey("Unaffected Key", "machine-6564-e");
+  modelBudgetRulesDb.replaceModelBudgetRules(key.id, [
+    {
+      enabled: false,
+      priority: 0,
+      sourceProvider: "codex",
+      sourceFamily: "gpt-5.5*",
+      weeklyLimitUsd: 10,
+      targetProvider: "codex",
+      targetFamily: "gpt-5-mini*",
+    },
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "cc",
+      sourceFamily: "claude-opus-*",
+      weeklyLimitUsd: 10,
+      targetProvider: "cc",
+      targetFamily: "claude-sonnet-*",
+    },
+  ]);
+
+  const response = await route.POST(buildPrepareRequest(key.key, "gpt-5.5"));
+  const body = (await response.json()) as { error?: { code?: string; message?: string } };
+
+  assert.notEqual(
+    body.error?.code,
+    "codex_ws_budget_rules_unsupported",
+    `an unrelated/disabled rule must not trip the guard: ${JSON.stringify(body)}`
+  );
+  // No Codex OAuth connection exists in this test environment, so it still fails
+  // downstream -- but past the guard, with the (unrelated) credential error.
+  assert.equal(body.error?.code, "codex_credentials_unavailable");
 });
