@@ -130,6 +130,11 @@ test("GET /api/usage/analytics includes byModel array with cost calculations", a
   assert.ok(gptEntry);
   assert.ok(typeof gptEntry.cost === "number");
   assert.ok(gptEntry.cost > 0);
+  // No model-budget redirect happened for these rows (billed_provider/billed_model
+  // are NULL), so normalizedCost must fall back to the same real cost — Task 11's
+  // "NULL means no redirect, normalized equals real" contract.
+  assert.equal(typeof gptEntry.normalizedCost, "number");
+  assertClose(gptEntry.normalizedCost, gptEntry.cost);
 });
 
 test("GET /api/usage/analytics resolves Codex GPT-5.5 pricing through provider aliases", async () => {
@@ -341,6 +346,81 @@ test("GET /api/usage/analytics includes cost by API key", async () => {
   assert.equal(body.byApiKey[0].apiKeyId, "test-key");
   assert.equal(body.byApiKey[0].apiKeyName, "Primary Key");
   assertClose(body.byApiKey[0].cost, body.summary.totalCost);
+});
+
+test("GET /api/usage/analytics prices a redirected row at the served model for cost and at the billed model for normalizedCost", async () => {
+  // Simulates a model-budget-rule redirect: the client asked for claude-opus,
+  // the rule served claude-sonnet instead, and usage_history records both the
+  // real (provider/model) and billed (billed_provider/billed_model) pairs.
+  await localDb.updatePricing({
+    anthropic: {
+      "claude-sonnet": { input: 3, output: 15 },
+      "claude-opus": { input: 15, output: 75 },
+    },
+  });
+
+  const db = core.getDbInstance();
+  db.prepare(
+    `INSERT INTO usage_history
+       (provider, model, billed_provider, billed_model, connection_id, api_key_id, api_key_name,
+        service_tier, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "anthropic",
+    "claude-sonnet",
+    "anthropic",
+    "claude-opus",
+    "redirect-conn",
+    "redirect-key",
+    "Redirected Key",
+    "standard",
+    1000,
+    500,
+    1,
+    200,
+    new Date().toISOString()
+  );
+
+  const response = await analyticsRoute.GET(makeRequest("http://localhost/api/usage/analytics"));
+  const body = await response.json();
+  assert.equal(response.status, 200);
+
+  const realCost = (1000 / 1_000_000) * 3 + (500 / 1_000_000) * 15; // served (sonnet) rates: 0.0105
+  const normalizedCost = (1000 / 1_000_000) * 15 + (500 / 1_000_000) * 75; // billed (opus) rates: 0.0525
+  assert.ok(normalizedCost > realCost, "test fixture must exercise a real divergence");
+
+  // Grouping stays on the REAL model — the row must appear as claude-sonnet,
+  // never as claude-opus, with cost at sonnet rates and normalizedCost at opus rates.
+  const modelEntry = body.byModel.find(
+    (m) => m.model === "claude-sonnet" && m.provider === "anthropic"
+  );
+  assert.ok(modelEntry, "redirected row must group under the real (served) model");
+  assert.ok(
+    !body.byModel.some((m) => m.model === "claude-opus"),
+    "the billed model must never appear as its own byModel row"
+  );
+  assertClose(modelEntry.cost, realCost);
+  assertClose(modelEntry.normalizedCost, normalizedCost);
+
+  const providerEntry = body.byProvider.find((p) => p.provider === "anthropic");
+  assert.ok(providerEntry);
+  assertClose(providerEntry.cost, realCost);
+  assertClose(providerEntry.normalizedCost, normalizedCost);
+
+  const accountEntry = body.byAccount.find((a) => a.account === "redirect-conn");
+  assert.ok(accountEntry);
+  assertClose(accountEntry.cost, realCost);
+  assertClose(accountEntry.normalizedCost, normalizedCost);
+
+  const apiKeyEntry = body.byApiKey.find((k) => k.apiKeyId === "redirect-key");
+  assert.ok(apiKeyEntry);
+  assertClose(apiKeyEntry.cost, realCost);
+  assertClose(apiKeyEntry.normalizedCost, normalizedCost);
+
+  const serviceTierEntry = body.byServiceTier.find((t) => t.serviceTier === "standard");
+  assert.ok(serviceTierEntry);
+  assertClose(serviceTierEntry.cost, realCost);
+  assertClose(serviceTierEntry.normalizedCost, normalizedCost);
 });
 
 test("GET /api/usage/analytics does not double-count raw and aggregated rows", async () => {

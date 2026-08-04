@@ -2,6 +2,7 @@ export type CostExplorerGroupBy = "provider" | "model" | "apiKey" | "account" | 
 export type CostExplorerSortKey =
   | "name"
   | "cost"
+  | "normalizedCostUsd"
   | "requests"
   | "totalTokens"
   | "sharePct"
@@ -28,6 +29,14 @@ export interface CostExplorerBreakdownRow {
   completionTokens?: number;
   totalTokens: number;
   cost: number;
+  /**
+   * Cost priced at the model the client asked for (`billed_provider`/
+   * `billed_model` when a budget rule redirected the request, the real pair
+   * otherwise) — the same figure the API key USD quota and `@@om-usage`
+   * report. Optional because older cached payloads may not carry it yet;
+   * `buildCostExplorerRows` falls back to `cost` in that case.
+   */
+  normalizedCost?: number;
   savings?: number;
   usageSavingsTokens?: number;
 }
@@ -51,6 +60,11 @@ export interface CostExplorerRow {
   completionTokens: number;
   totalTokens: number;
   cost: number;
+  /**
+   * Priced at the model the client asked for. Differs from `cost` only when a
+   * model budget rule rerouted the request — see `CostExplorerBreakdownRow`.
+   */
+  normalizedCostUsd: number;
   avgCostPerRequest: number;
   sharePct: number;
 }
@@ -134,6 +148,10 @@ export function buildCostExplorerRows({
       const detail = getRowDetail(row, groupBy);
       const requests = toFiniteNumber(row.requests);
       const cost = toFiniteNumber(row.cost);
+      // Fall back to `cost` when the payload predates normalizedCost (older
+      // cache entry) — for unredirected traffic the two are equal anyway.
+      const normalizedCostUsd =
+        row.normalizedCost === undefined ? cost : toFiniteNumber(row.normalizedCost);
       const totalTokens = toFiniteNumber(row.totalTokens);
       const useCostForShare = totalCost > 0;
       const shareBase = useCostForShare ? totalCost : totalRequests;
@@ -149,6 +167,7 @@ export function buildCostExplorerRows({
         completionTokens: toFiniteNumber(row.completionTokens),
         totalTokens,
         cost,
+        normalizedCostUsd,
         avgCostPerRequest: requests > 0 ? cost / requests : 0,
         sharePct: shareBase > 0 ? (shareValue / shareBase) * 100 : 0,
       };

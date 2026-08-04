@@ -134,13 +134,36 @@ function resolveModelPricingForRow(
   return resolution.pricing;
 }
 
+/**
+ * Resolve the (provider, model) pair a row should be priced at.
+ *
+ * `normalized: false` (default) uses the REAL pair — the model that actually
+ * served the request. `normalized: true` uses `billed_provider`/`billed_model`
+ * — the model the client asked for — falling back to the real pair when a row
+ * was never redirected (NULL billed columns). Same COALESCE semantics as
+ * `getApiKeyUsdSpendSince`'s `basis` option, so the dashboard and the USD
+ * quota can never disagree about what "normalized" means.
+ */
+function resolveRowPricingPair(
+  row: Record<string, unknown>,
+  normalized: boolean
+): { provider: string; model: string } {
+  if (!normalized) {
+    return { provider: toStringValue(row.provider), model: toStringValue(row.model) };
+  }
+  return {
+    provider: toStringValue(row.billedProvider) || toStringValue(row.provider),
+    model: toStringValue(row.billedModel) || toStringValue(row.model),
+  };
+}
+
 function computeUsageRowCost(
   row: Record<string, unknown>,
   pricingByProvider: PricingByProvider,
-  computeCostFromPricing: ComputeCostFromPricing
+  computeCostFromPricing: ComputeCostFromPricing,
+  options: { normalized?: boolean } = {}
 ): number {
-  const provider = toStringValue(row.provider);
-  const model = toStringValue(row.model);
+  const { provider, model } = resolveRowPricingPair(row, options.normalized ?? false);
   if (!provider || !model) return 0;
   const serviceTier = normalizeServiceTier(row.serviceTier ?? row.service_tier);
 
@@ -163,6 +186,20 @@ function computeUsageRowCost(
       flatRateAsZero: true,
     }
   );
+}
+
+/**
+ * Normalized-basis twin of `computeUsageRowCost` — same pricing path, priced
+ * at the requested (billed) model instead of the real one. This is the figure
+ * every client-facing surface (API key USD quota, `@@om-usage`) reports; see
+ * `getApiKeyUsdSpendSince`'s doc comment for the full basis contract.
+ */
+function computeUsageRowNormalizedCost(
+  row: Record<string, unknown>,
+  pricingByProvider: PricingByProvider,
+  computeCostFromPricing: ComputeCostFromPricing
+): number {
+  return computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, { normalized: true });
 }
 
 function computeUsageRowStandardCost(
@@ -488,6 +525,11 @@ export async function GET(request: Request) {
       const provider = row.provider as string;
       const short = normalizeModelName(model);
       const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const normalizedCost = computeUsageRowNormalizedCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing
+      );
       const key = `${provider}::${model}`;
       const existing = modelMap.get(key) || {
         model: short,
@@ -501,6 +543,7 @@ export async function GET(request: Request) {
         successfulRequests: 0,
         lastUsed: "",
         cost: 0,
+        normalizedCost: 0,
       };
       const requests = Number(row.requests) || 0;
       existing.requests = Number(existing.requests || 0) + requests;
@@ -516,6 +559,7 @@ export async function GET(request: Request) {
         existing.lastUsed = row.lastUsed;
       }
       existing.cost = Number(existing.cost || 0) + cost;
+      existing.normalizedCost = Number(existing.normalizedCost || 0) + normalizedCost;
       modelMap.set(key, existing);
     }
 
@@ -538,6 +582,7 @@ export async function GET(request: Request) {
             : 0,
         lastUsed: row.lastUsed,
         cost: roundCost(Number(row.cost || 0)),
+        normalizedCost: roundCost(Number(row.normalizedCost || 0)),
       }))
       .sort((left, right) => Number(right.requests) - Number(left.requests))
       .slice(0, 50);
@@ -546,11 +591,21 @@ export async function GET(request: Request) {
     summary.totalCost = roundCost(totalCost);
 
     const providerCostByProvider = new Map<string, number>();
+    const providerNormalizedCostByProvider = new Map<string, number>();
     for (const row of providerCostRows) {
       const provider = toStringValue(row.provider);
       if (!provider) continue;
       const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const normalizedCost = computeUsageRowNormalizedCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing
+      );
       providerCostByProvider.set(provider, (providerCostByProvider.get(provider) || 0) + cost);
+      providerNormalizedCostByProvider.set(
+        provider,
+        (providerNormalizedCostByProvider.get(provider) || 0) + normalizedCost
+      );
     }
 
     // Models with no pricing row are costed at $0 and silently deflate every
@@ -570,13 +625,26 @@ export async function GET(request: Request) {
           ? Number((Number(row.successfulRequests) / Number(row.requests)) * 100).toFixed(2)
           : 0,
       cost: roundCost(providerCostByProvider.get(toStringValue(row.provider)) || 0),
+      normalizedCost: roundCost(
+        providerNormalizedCostByProvider.get(toStringValue(row.provider)) || 0
+      ),
     }));
 
     const accountCostByAccount = new Map<string, number>();
+    const accountNormalizedCostByAccount = new Map<string, number>();
     for (const row of accountCostRows) {
       const account = toStringValue(row.account, "unknown");
       const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const normalizedCost = computeUsageRowNormalizedCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing
+      );
       accountCostByAccount.set(account, (accountCostByAccount.get(account) || 0) + cost);
+      accountNormalizedCostByAccount.set(
+        account,
+        (accountNormalizedCostByAccount.get(account) || 0) + normalizedCost
+      );
     }
 
     const byAccount = accountRows.map((row) => ({
@@ -588,6 +656,9 @@ export async function GET(request: Request) {
       avgLatencyMs: Math.round(Number(row.avgLatencyMs)),
       lastUsed: row.lastUsed,
       cost: roundCost(accountCostByAccount.get(toStringValue(row.account, "unknown")) || 0),
+      normalizedCost: roundCost(
+        accountNormalizedCostByAccount.get(toStringValue(row.account, "unknown")) || 0
+      ),
     }));
 
     const apiKeyMap = new Map<
@@ -602,6 +673,7 @@ export async function GET(request: Request) {
         completionTokens: number;
         totalTokens: number;
         cost: number;
+        normalizedCost: number;
       }
     >();
     for (const row of apiKeyRows) {
@@ -625,6 +697,7 @@ export async function GET(request: Request) {
         completionTokens: 0,
         totalTokens: 0,
         cost: 0,
+        normalizedCost: 0,
       };
 
       existing.requests += Number(row.requests);
@@ -632,10 +705,19 @@ export async function GET(request: Request) {
       existing.completionTokens += Number(row.completionTokens);
       existing.totalTokens += Number(row.totalTokens);
       existing.cost += computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      existing.normalizedCost += computeUsageRowNormalizedCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing
+      );
       apiKeyMap.set(key, existing);
     }
     const byApiKey = Array.from(apiKeyMap.values())
-      .map((row) => ({ ...row, cost: roundCost(row.cost) }))
+      .map((row) => ({
+        ...row,
+        cost: roundCost(row.cost),
+        normalizedCost: roundCost(row.normalizedCost),
+      }))
       .sort((left, right) => right.cost - left.cost);
 
     const serviceTierMap = new Map<
@@ -648,6 +730,7 @@ export async function GET(request: Request) {
         completionTokens: number;
         totalTokens: number;
         cost: number;
+        normalizedCost: number;
         savings: number;
         usageSavingsTokens: number;
       }
@@ -662,6 +745,7 @@ export async function GET(request: Request) {
         completionTokens: 0,
         totalTokens: 0,
         cost: 0,
+        normalizedCost: 0,
         savings: 0,
         usageSavingsTokens: 0,
       };
@@ -671,6 +755,11 @@ export async function GET(request: Request) {
       existing.totalTokens += Number(row.totalTokens || 0);
       const actualCost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
       existing.cost += actualCost;
+      existing.normalizedCost += computeUsageRowNormalizedCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing
+      );
       if (serviceTier === "flex") {
         const standardCost = computeUsageRowStandardCost(
           row,
@@ -690,6 +779,7 @@ export async function GET(request: Request) {
       .map((row) => ({
         ...row,
         cost: roundCost(row.cost),
+        normalizedCost: roundCost(row.normalizedCost),
         savings: roundCost(row.savings),
         usageSavingsTokens: Math.round(row.usageSavingsTokens),
       }))

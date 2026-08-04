@@ -105,7 +105,9 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           latency_ms,
           connection_id,
           api_key_id,
-          api_key_name
+          api_key_name,
+          billed_provider,
+          billed_model
         FROM usage_history
         ${rawWhere}
         UNION ALL
@@ -123,7 +125,9 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           0 as latency_ms,
           NULL as connection_id,
           NULL as api_key_id,
-          NULL as api_key_name
+          NULL as api_key_name,
+          NULL as billed_provider,
+          NULL as billed_model
         FROM daily_usage_summary
         ${aggWhere}
        )`
@@ -132,7 +136,8 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           tokens_input, tokens_output,
           tokens_cache_read, tokens_cache_creation, tokens_reasoning,
           service_tier, success, latency_ms,
-          connection_id, api_key_id, api_key_name
+          connection_id, api_key_id, api_key_name,
+          billed_provider, billed_model
         FROM usage_history
         ${rawWhere}
        )`;

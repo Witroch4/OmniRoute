@@ -136,6 +136,9 @@ export function ApiKeyUsageLimitCard({
             When enabled, @@om-usage returns daily quota, weekly quota, daily spend, and weekly
             spend in USD. Weekly follows the cached Claude reset when available.
           </p>
+          <p className="mt-1 text-xs text-text-muted">
+            Spend shown is normalized (priced at the requested model).
+          </p>
         </div>
         <button
           type="button"

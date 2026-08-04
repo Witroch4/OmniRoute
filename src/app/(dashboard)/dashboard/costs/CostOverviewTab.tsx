@@ -948,6 +948,7 @@ function CostExplorerCard({
     () => [
       { key: "name", label: t("dimension"), align: "left" },
       { key: "cost", label: t("cost"), align: "right" },
+      { key: "normalizedCostUsd", label: "Normalized cost", align: "right" },
       { key: "requests", label: t("requests"), align: "right" },
       { key: "totalTokens", label: t("tokens"), align: "right" },
       { key: "avgCostPerRequest", label: t("avgCostPerRequest"), align: "right" },
@@ -1063,6 +1064,9 @@ function CostExplorerCard({
                       {formatCost(row.cost)}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
+                      {formatCost(row.normalizedCostUsd)}
+                    </td>
+                    <td className="py-3 text-right font-mono text-text-muted">
                       {numberFormatter.format(row.requests)}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
@@ -1092,6 +1096,11 @@ function CostExplorerCard({
             </table>
           </div>
           <p className="mt-3 text-xs text-text-muted">{formatRowCount()}</p>
+          <p className="mt-1 text-xs text-text-muted">
+            Normalized cost prices each request at the model the client asked for. It differs from
+            Cost only for requests a model budget rule rerouted, and it is the figure every API key
+            quota and <code>@@om-usage</code> reading is measured against.
+          </p>
         </>
       )}
     </Card>

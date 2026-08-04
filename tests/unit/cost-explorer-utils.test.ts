@@ -91,6 +91,40 @@ describe("buildCostExplorerRows", () => {
     assert.equal(rows[0].sharePct, 75);
   });
 
+  it("falls back normalizedCostUsd to cost when the payload has no normalizedCost field", () => {
+    const rows = buildCostExplorerRows({ analytics, groupBy: "provider" });
+
+    // None of the fixture rows carry `normalizedCost` (no redirect happened),
+    // so normalizedCostUsd must equal cost for every row.
+    for (const row of rows) {
+      assert.equal(row.normalizedCostUsd, row.cost);
+    }
+  });
+
+  it("surfaces normalizedCostUsd separately from cost for a redirected row", () => {
+    const redirectedAnalytics: CostExplorerAnalyticsPayload = {
+      summary: { totalCost: 10.5, totalRequests: 1 },
+      byModel: [
+        {
+          provider: "anthropic",
+          model: "claude-sonnet",
+          requests: 1,
+          totalTokens: 1500,
+          cost: 10.5,
+          normalizedCost: 52.5,
+        },
+      ],
+    };
+
+    const rows = buildCostExplorerRows({ analytics: redirectedAnalytics, groupBy: "model" });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].name, "claude-sonnet");
+    assert.equal(rows[0].cost, 10.5);
+    assert.equal(rows[0].normalizedCostUsd, 52.5);
+    assert.notEqual(rows[0].normalizedCostUsd, rows[0].cost);
+  });
+
   it("filters rows case-insensitively across names and details", () => {
     const rows = buildCostExplorerRows({
       analytics,

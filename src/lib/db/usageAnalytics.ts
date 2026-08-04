@@ -191,6 +191,8 @@ export interface ModelUsageRow {
   model: string;
   provider: string;
   serviceTier: string;
+  billedModel: string | null;
+  billedProvider: string | null;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -205,6 +207,13 @@ export interface ModelUsageRow {
 
 /**
  * Per-model usage aggregates from the unified source CTE.
+ *
+ * Grouped an extra level by (billed_provider, billed_model) — the pair a
+ * model-budget rule redirected FROM — so `computeUsageRowCost` can be called
+ * a second time per row with those columns to produce the normalized total
+ * (#omniroute-model-budget-family-routing Task 11). Real (provider, model)
+ * grouping is unchanged; callers that only merge rows by real model see the
+ * same totals as before, just spread over more source rows.
  */
 export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams): ModelUsageRow[] {
   const db = getDbInstance();
@@ -215,6 +224,8 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         LOWER(model) as model,
         LOWER(provider) as provider,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        LOWER(NULLIF(billed_model, '')) as billedModel,
+        LOWER(NULLIF(billed_provider, '')) as billedProvider,
         COUNT(*) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
@@ -226,7 +237,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
         COALESCE(MAX(timestamp), '') as lastUsed
       FROM ${unifiedSource} AS _u
-      GROUP BY LOWER(model), LOWER(provider), serviceTier
+      GROUP BY LOWER(model), LOWER(provider), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
       ORDER BY requests DESC
     `
     )
@@ -239,6 +250,8 @@ export interface ProviderCostRow {
   provider: string;
   model: string;
   serviceTier: string;
+  billedModel: string | null;
+  billedProvider: string | null;
   promptTokens: number;
   completionTokens: number;
   cacheReadTokens: number;
@@ -248,6 +261,9 @@ export interface ProviderCostRow {
 
 /**
  * Per-provider, per-model token breakdown for provider cost calculation.
+ * Also grouped by (billed_provider, billed_model) — see the note on
+ * `getModelUsageRows` — so callers can price the normalized total alongside
+ * the real one without a second aggregation pass.
  */
 export function getProviderCostRows(
   unifiedSource: string,
@@ -261,13 +277,15 @@ export function getProviderCostRows(
         LOWER(provider) as provider,
         LOWER(model) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        LOWER(NULLIF(billed_model, '')) as billedModel,
+        LOWER(NULLIF(billed_provider, '')) as billedProvider,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
       FROM ${unifiedSource} AS _u
-      GROUP BY LOWER(provider), LOWER(model), serviceTier
+      GROUP BY LOWER(provider), LOWER(model), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
     `
     )
     .all(params) as ProviderCostRow[];
@@ -319,6 +337,8 @@ export interface AccountCostRow {
   provider: string;
   model: string;
   serviceTier: string;
+  billedModel: string | null;
+  billedProvider: string | null;
   promptTokens: number;
   completionTokens: number;
   cacheReadTokens: number;
@@ -344,6 +364,8 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
         LOWER(usage_history.provider) as provider,
         LOWER(usage_history.model) as model,
         COALESCE(NULLIF(usage_history.service_tier, ''), 'standard') as serviceTier,
+        LOWER(NULLIF(usage_history.billed_model, '')) as billedModel,
+        LOWER(NULLIF(usage_history.billed_provider, '')) as billedProvider,
         COALESCE(SUM(usage_history.tokens_input), 0) as promptTokens,
         COALESCE(SUM(usage_history.tokens_output), 0) as completionTokens,
         COALESCE(SUM(usage_history.tokens_cache_read), 0) as cacheReadTokens,
@@ -352,7 +374,7 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
       FROM usage_history
       LEFT JOIN provider_connections c ON c.id = usage_history.connection_id
       ${whereClause}
-      GROUP BY account, LOWER(usage_history.provider), LOWER(usage_history.model), serviceTier
+      GROUP BY account, LOWER(usage_history.provider), LOWER(usage_history.model), serviceTier, LOWER(NULLIF(usage_history.billed_model, '')), LOWER(NULLIF(usage_history.billed_provider, ''))
     `
     )
     .all(params) as AccountCostRow[];
@@ -412,6 +434,8 @@ export interface ApiKeyUsageRow {
   provider: string;
   model: string;
   serviceTier: string;
+  billedModel: string | null;
+  billedProvider: string | null;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -441,6 +465,8 @@ export function getApiKeyUsageRows(
         LOWER(provider) as provider,
         LOWER(model) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        LOWER(NULLIF(billed_model, '')) as billedModel,
+        LOWER(NULLIF(billed_provider, '')) as billedProvider,
         COUNT(*) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
@@ -450,7 +476,7 @@ export function getApiKeyUsageRows(
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
       FROM usage_history
       ${apiKeyWhereClause}
-      GROUP BY COALESCE(NULLIF(api_key_id, ''), NULLIF(api_key_name, ''), 'unknown'), NULLIF(api_key_id, ''), LOWER(provider), LOWER(model), serviceTier
+      GROUP BY COALESCE(NULLIF(api_key_id, ''), NULLIF(api_key_name, ''), 'unknown'), NULLIF(api_key_id, ''), LOWER(provider), LOWER(model), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
     `
     )
     .all(params) as ApiKeyUsageRow[];
@@ -462,6 +488,8 @@ export interface ServiceTierUsageRow {
   serviceTier: string;
   provider: string;
   model: string;
+  billedModel: string | null;
+  billedProvider: string | null;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -486,7 +514,8 @@ export function getServiceTierUsageRows(
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
         LOWER(provider) as provider,
         LOWER(model) as model,
-        COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        LOWER(NULLIF(billed_model, '')) as billedModel,
+        LOWER(NULLIF(billed_provider, '')) as billedProvider,
         COUNT(*) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
@@ -495,7 +524,7 @@ export function getServiceTierUsageRows(
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
       FROM ${unifiedSource} AS _u
-      GROUP BY serviceTier, LOWER(provider), LOWER(model)
+      GROUP BY serviceTier, LOWER(provider), LOWER(model), LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
     `
     )
     .all(params) as ServiceTierUsageRow[];
