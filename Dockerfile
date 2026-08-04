@@ -1,5 +1,13 @@
 # ── Common base with runtime deps ──────────────────────────────────────────
-FROM node:24-trixie-slim AS base
+# Node is PINNED, not floating. node:24-trixie-slim moved from v24.18.1 to
+# v24.19.0, and 24.19.0 aborts when a Next build worker holding a native addon
+# (better-sqlite3) exits:
+#   node::RemoveEnvironmentCleanupHook -> Assertion failed: (env) != nullptr
+#   Next.js build worker exited with code: null and signal: SIGABRT
+# Reproduced on native arm64 AND under the arm64 QEMU cross-build, on this
+# branch AND on its base commit -- i.e. purely the Node bump. v24.18.1 is the
+# version every shipped image was built with. Re-test before moving this.
+FROM node:24.18.1-trixie-slim AS base
 WORKDIR /app
 
 # `apt-get upgrade` pulls the security-patched versions of the Debian (trixie)
@@ -101,9 +109,11 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 
 # Build-worker count (see next.config.mjs experimental.cpus for the full story).
 # Unset by default, so Next keeps its own one-worker-per-host-CPU heuristic.
-# Set to 1 for the arm64 QEMU cross-build, where concurrent workers tearing down
-# better-sqlite3's native Statement destructor under the emulator abort the build:
-#   `--build-arg OMNIROUTE_BUILD_CPUS=1`
+# It does NOT work around the node 24.19.0 abort — the FROM pin above is the fix
+# for that. Use it to cut peak build memory (~10.2 GiB -> ~2.3 GiB for the builder
+# container) when building on a memory-tight host, or on one already serving
+# traffic:
+#   `--build-arg OMNIROUTE_BUILD_CPUS=2`
 ARG OMNIROUTE_BUILD_CPUS=
 ENV OMNIROUTE_BUILD_CPUS=${OMNIROUTE_BUILD_CPUS}
 
