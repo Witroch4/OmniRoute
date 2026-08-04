@@ -1,0 +1,18 @@
+-- Migration: normalized-spend attribution on domain_cost_history.
+-- Final-review Finding 2 (model-budget-routing): apiKeySelfService.ts (GET /v1/me/status,
+-- authenticated with the API key itself via `self:usage` scope) read this table's `cost`
+-- column, which recordCost() always writes at the SERVED model's rates -- never normalized
+-- to what the client is actually billed. On a model-budget redirect this let a client read
+-- a cost figure several times lower than X-OmniRoute-Response-Cost / @@om-usage for the
+-- SAME traffic, a client-visible confidentiality/consistency leak the feature is supposed
+-- to prevent, plus a secondary bypass of any `domain_budgets` cap on that key (enforced
+-- against this same REAL-priced ledger).
+--
+-- billed_cost mirrors usage_history's billed_provider/billed_model NULL convention: NULL
+-- means "no redirect happened", so normalized cost equals real cost and every pre-existing
+-- row reads correctly through COALESCE(billed_cost, cost) with no backfill. `cost` (real)
+-- keeps meaning exactly what it always has -- every OTHER consumer of this table
+-- (checkBudget's domain_budgets enforcement, the admin-only /api/usage/budget[/bulk] and
+-- /api/usage/provider-window-costs routes) intentionally tracks OmniRoute's real upstream
+-- spend and is left untouched; only the self-service read opts into the normalized basis.
+ALTER TABLE domain_cost_history ADD COLUMN billed_cost REAL;

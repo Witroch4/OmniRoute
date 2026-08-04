@@ -9,6 +9,8 @@
  * is byte-identical to the previous inline block.
  */
 
+import { isModelBudgetRedirect } from "../../services/responseModelEcho.ts";
+
 type CostResolver = (
   provider: string,
   model: string,
@@ -23,15 +25,30 @@ export function recordStreamingCost(args: {
   streamUsage: Record<string, number | undefined> | null | undefined;
   serviceTier?: string;
   calculateCost: CostResolver;
-  recordCost: (apiKeyId: string, cost: number) => void;
+  recordCost: (apiKeyId: string, cost: number, billedCost?: number | null) => void;
+  /** Provider/model the CLIENT asked for, when a model budget rule redirected THIS
+   * request (Finding 2 / migration 127) — same pair `headerResponseCost` uses in the
+   * non-streaming path. */
+  billedProvider?: string | null;
+  billedModel?: string | null;
 }): void {
   if (!args.apiKeyId || !args.streamUsage) return;
 
   const apiKeyId = args.apiKeyId;
+  const isRedirect = isModelBudgetRedirect(args.billedModel);
   args
     .calculateCost(args.provider, args.model, args.streamUsage, { serviceTier: args.serviceTier })
-    .then((estimatedCost) => {
-      if (estimatedCost > 0) args.recordCost(apiKeyId, estimatedCost);
+    .then(async (estimatedCost) => {
+      if (estimatedCost <= 0) return;
+      const billedCost = isRedirect
+        ? await args.calculateCost(
+            args.billedProvider || args.provider,
+            args.billedModel as string,
+            args.streamUsage,
+            { serviceTier: args.serviceTier }
+          )
+        : undefined;
+      args.recordCost(apiKeyId, estimatedCost, billedCost);
     })
     .catch(() => {});
 }

@@ -317,3 +317,39 @@ test("syncAllBudgetSchedules advances overdue budgets and records a reset log", 
     Date.now = originalNow;
   }
 });
+
+// Final-review Finding 2: domain_cost_history (getCostSummary/recordCost) always priced
+// at the SERVED model's rates, with no normalized alternative anywhere — apiKeySelfService
+// (GET /v1/me/status, client-facing) read it directly, so a redirected key reported real
+// (cheap) spend instead of what the client is billed. Migration 127 adds billed_cost;
+// getCostSummary's basis option (default "real", unchanged) picks it up via
+// COALESCE(billed_cost, cost). This exercises the real recordCost -> spendBatchWriter ->
+// domain_cost_history -> getCostSummary path end to end, both flushed and still-buffered.
+test("getCostSummary basis: normalized reads the BILLED cost, real reads the served cost", () => {
+  // A redirected request: served (real) cost is cheap, billed (normalized) cost is what
+  // the client is charged — mirrors chatCore.ts's headerResponseCost split.
+  costRules.recordCost("key-normalized", 2, 10);
+  // A non-redirected request: no billedCost passed, normalized must equal real.
+  costRules.recordCost("key-normalized", 3);
+
+  const real = costRules.getCostSummary("key-normalized");
+  const normalized = costRules.getCostSummary("key-normalized", { basis: "normalized" });
+
+  assert.equal(real.dailyTotal, 5, "real basis sums the served-rate cost only");
+  assert.equal(normalized.dailyTotal, 13, "normalized basis sums COALESCE(billed_cost, cost)");
+  assert.equal(real.monthlyTotal, 5);
+  assert.equal(normalized.monthlyTotal, 13);
+});
+
+test("getCostSummary basis: normalized also applies to already-flushed rows (COALESCE in SQL)", () => {
+  const now = Date.now();
+  // Bypass the batch writer entirely — this is what a flushed/persisted row looks like.
+  domainState.saveCostEntry("key-flushed", 2, now, 10);
+  domainState.saveCostEntry("key-flushed", 3, now, null);
+
+  const real = costRules.getCostSummary("key-flushed");
+  const normalized = costRules.getCostSummary("key-flushed", { basis: "normalized" });
+
+  assert.equal(real.dailyTotal, 5);
+  assert.equal(normalized.dailyTotal, 13);
+});

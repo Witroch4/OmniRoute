@@ -1,7 +1,4 @@
-import {
-  hasSelfAccountQuotaScope,
-  hasSelfUsageScope,
-} from "@/shared/constants/selfServiceScopes";
+import { hasSelfAccountQuotaScope, hasSelfUsageScope } from "@/shared/constants/selfServiceScopes";
 import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 
 type JsonRecord = Record<string, unknown>;
@@ -34,7 +31,10 @@ interface CostSummaryLike {
   warningThreshold: number | null;
 }
 
-type GetCostSummaryFn = (apiKeyId: string) => CostSummaryLike;
+type GetCostSummaryFn = (
+  apiKeyId: string,
+  options?: { basis?: "real" | "normalized" }
+) => CostSummaryLike;
 type CheckBudgetFn = (apiKeyId: string) => unknown;
 type GetDbInstanceFn = () => DbLike;
 type GetProviderConnectionByIdFn = (connectionId: string) => Promise<unknown>;
@@ -389,18 +389,24 @@ export async function buildApiKeySelfServiceStatus(
   }
 
   const resolvedDeps = await normalizeDeps(deps);
-  const summary = resolvedDeps.getCostSummary(metadata.id);
+  // Finding 2 (final-review): this route authenticates with the API key itself
+  // (self:usage scope) — it is client-facing, so it must report what the client is
+  // BILLED, not what the traffic actually cost OmniRoute at the served model's rates.
+  // "real" stays the default for every other consumer of getCostSummary (checkBudget's
+  // own domain_budgets enforcement below, and the admin-only /api/usage/budget[/bulk]
+  // routes) — see migration 127 / costRules.getCostSummary's doc comment.
+  const summary = resolvedDeps.getCostSummary(metadata.id, { basis: "normalized" });
   resolvedDeps.checkBudget(metadata.id);
 
   const cost = buildCostStatus(summary, resolvedDeps.now());
   const tokens = aggregateTokens(
     resolvedDeps.getDbInstance() as DbLike,
     metadata.id,
-    cost.periodStartAt ?? new Date(getCurrentMonthWindow(resolvedDeps.now()).periodStartAt).toISOString()
+    cost.periodStartAt ??
+      new Date(getCurrentMonthWindow(resolvedDeps.now()).periodStartAt).toISOString()
   );
   const accountQuotas = await resolveAccountQuotas(metadata, resolvedDeps);
-  const accountQuota =
-    accountQuotas && accountQuotas.length === 1 ? accountQuotas[0] : undefined;
+  const accountQuota = accountQuotas && accountQuotas.length === 1 ? accountQuotas[0] : undefined;
 
   return {
     apiKey: {

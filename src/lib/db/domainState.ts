@@ -364,36 +364,62 @@ export function deleteBudget(apiKeyId: string) {
 
 // ──────────────── Cost History ────────────────
 
+/** "real" (default) reads the served-model rate (`cost`); "normalized" reads what the
+ * client is billed (`COALESCE(billed_cost, cost)`) -- see migration 127. Every existing
+ * caller omits this and keeps reading real, byte-identical to before. */
+export type CostBasis = "real" | "normalized";
+
+function costColumnExpr(basis: CostBasis | undefined): string {
+  return basis === "normalized" ? "COALESCE(billed_cost, cost)" : "cost";
+}
+
 /**
  * Record a cost entry.
  * @param {string} apiKeyId
  * @param {number} cost
  * @param {number} [timestamp]
+ * @param {number|null} [billedCost] - set only on a model-budget redirect; NULL means
+ *   normalized cost equals real cost (migration 127).
  */
-export function saveCostEntry(apiKeyId: string, cost: number, timestamp = Date.now()) {
+export function saveCostEntry(
+  apiKeyId: string,
+  cost: number,
+  timestamp = Date.now(),
+  billedCost: number | null = null
+) {
   ensureBudgetSchema();
   const db = getDbInstance();
-  db.prepare("INSERT INTO domain_cost_history (api_key_id, cost, timestamp) VALUES (?, ?, ?)").run(
-    apiKeyId,
-    cost,
-    timestamp
-  );
+  db.prepare(
+    "INSERT INTO domain_cost_history (api_key_id, cost, billed_cost, timestamp) VALUES (?, ?, ?, ?)"
+  ).run(apiKeyId, cost, billedCost, timestamp);
 }
 
 export function batchSaveCostEntries(
-  entries: Array<{ apiKeyId: string; cost: number; timestamp: number }>
+  entries: Array<{
+    apiKeyId: string;
+    cost: number;
+    timestamp: number;
+    billedCost?: number | null;
+  }>
 ) {
   ensureBudgetSchema();
   if (!Array.isArray(entries) || entries.length === 0) return;
 
   const db = getDbInstance();
   const stmt = db.prepare(
-    "INSERT INTO domain_cost_history (api_key_id, cost, timestamp) VALUES (?, ?, ?)"
+    "INSERT INTO domain_cost_history (api_key_id, cost, billed_cost, timestamp) VALUES (?, ?, ?, ?)"
   );
   const tx = db.transaction(
-    (rows: Array<{ apiKeyId: string; cost: number; timestamp: number }>) => {
+    (
+      rows: Array<{
+        apiKeyId: string;
+        cost: number;
+        timestamp: number;
+        billedCost?: number | null;
+      }>
+    ) => {
       for (const entry of rows) {
-        stmt.run(entry.apiKeyId, entry.cost, entry.timestamp);
+        stmt.run(entry.apiKeyId, entry.cost, entry.billedCost ?? null, entry.timestamp);
       }
     }
   );
@@ -401,12 +427,17 @@ export function batchSaveCostEntries(
   tx(entries);
 }
 
-export function loadCostTotal(apiKeyId: string, sinceTimestamp: number) {
+export function loadCostTotal(
+  apiKeyId: string,
+  sinceTimestamp: number,
+  options?: { basis?: CostBasis }
+) {
   ensureBudgetSchema();
   const db = getDbInstance();
+  const costExpr = costColumnExpr(options?.basis);
   const row = db
     .prepare(
-      "SELECT COALESCE(SUM(cost), 0) AS total FROM domain_cost_history WHERE api_key_id = ? AND timestamp >= ?"
+      `SELECT COALESCE(SUM(${costExpr}), 0) AS total FROM domain_cost_history WHERE api_key_id = ? AND timestamp >= ?`
     )
     .get(apiKeyId, sinceTimestamp) as { total?: number } | undefined;
   return Number(row?.total || 0);
@@ -416,14 +447,20 @@ export function loadCostTotal(apiKeyId: string, sinceTimestamp: number) {
  * Load cost entries for an API key within a time window.
  * @param {string} apiKeyId
  * @param {number} sinceTimestamp
+ * @param {{basis?: CostBasis}} [options]
  * @returns {Array<{cost: number, timestamp: number}>}
  */
-export function loadCostEntries(apiKeyId: string, sinceTimestamp: number) {
+export function loadCostEntries(
+  apiKeyId: string,
+  sinceTimestamp: number,
+  options?: { basis?: CostBasis }
+) {
   ensureBudgetSchema();
   const db = getDbInstance();
+  const costExpr = costColumnExpr(options?.basis);
   return db
     .prepare(
-      "SELECT cost, timestamp FROM domain_cost_history WHERE api_key_id = ? AND timestamp >= ? ORDER BY timestamp"
+      `SELECT ${costExpr} AS cost, timestamp FROM domain_cost_history WHERE api_key_id = ? AND timestamp >= ? ORDER BY timestamp`
     )
     .all(apiKeyId, sinceTimestamp);
 }
@@ -433,18 +470,21 @@ export function loadCostEntries(apiKeyId: string, sinceTimestamp: number) {
  * @param {string} apiKeyId
  * @param {number} sinceTimestamp
  * @param {number} untilTimestamp
+ * @param {{basis?: CostBasis}} [options]
  * @returns {Array<{cost: number, timestamp: number}>}
  */
 export function loadCostEntriesInRange(
   apiKeyId: string,
   sinceTimestamp: number,
-  untilTimestamp: number
+  untilTimestamp: number,
+  options?: { basis?: CostBasis }
 ) {
   ensureBudgetSchema();
   const db = getDbInstance();
+  const costExpr = costColumnExpr(options?.basis);
   return db
     .prepare(
-      `SELECT cost, timestamp
+      `SELECT ${costExpr} AS cost, timestamp
        FROM domain_cost_history
        WHERE api_key_id = ? AND timestamp >= ? AND timestamp < ?
        ORDER BY timestamp`

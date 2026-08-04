@@ -4079,7 +4079,14 @@ export async function handleChatCore({
         cacheSource: "upstream",
       });
       if (apiKeyInfo?.id && estimatedCost > 0) {
-        recordCost(apiKeyInfo.id, estimatedCost);
+        // Finding 2: record the BILLED cost alongside the real one so a client-facing
+        // reader (apiKeySelfService.ts) can report normalized spend — see
+        // headerResponseCost's doc comment just above for why this is the billed figure.
+        recordCost(
+          apiKeyInfo.id,
+          estimatedCost,
+          isModelBudgetRedirect(billedModel) ? headerResponseCost : undefined
+        );
       }
       log?.warn?.(
         "GUARDRAIL",
@@ -4189,7 +4196,12 @@ export async function handleChatCore({
       cacheSource: "upstream",
     });
     if (apiKeyInfo?.id && estimatedCost > 0) {
-      recordCost(apiKeyInfo.id, estimatedCost);
+      // Finding 2: same billed-vs-real split as the guardrail-blocked branch above.
+      recordCost(
+        apiKeyInfo.id,
+        estimatedCost,
+        isModelBudgetRedirect(billedModel) ? headerResponseCost : undefined
+      );
     }
 
     // === Quota Share POST-hook (B/F7) — fire-and-forget, fail-open ===
@@ -4447,6 +4459,8 @@ export async function handleChatCore({
       serviceTier: effectiveServiceTier,
       calculateCost,
       recordCost,
+      billedProvider,
+      billedModel,
     });
 
     // === Quota Share POST-hook streaming (B/F7) — fire-and-forget, fail-open ===

@@ -1,9 +1,15 @@
 import { batchSaveCostEntries } from "@/lib/db/domainState";
 
+export type SpendBasis = "real" | "normalized";
+
 export interface BufferedCostEntry {
   apiKeyId: string;
   cost: number;
   timestamp: number;
+  /** Set only on a model-budget redirect: what the client is billed, at the requested
+   * model's rates. `null`/absent means normalized cost equals real cost -- mirrors
+   * domain_cost_history.billed_cost (migration 127). */
+  billedCost?: number | null;
 }
 
 interface SpendBatchWriterOptions {
@@ -34,10 +40,17 @@ function getMaxBufferSize() {
 
 function normalizeEntry(entry: BufferedCostEntry): BufferedCostEntry | null {
   if (!entry?.apiKeyId || !Number.isFinite(entry.cost) || entry.cost <= 0) return null;
+  const billedCost =
+    typeof entry.billedCost === "number" &&
+    Number.isFinite(entry.billedCost) &&
+    entry.billedCost > 0
+      ? entry.billedCost
+      : null;
   return {
     apiKeyId: entry.apiKeyId,
     cost: entry.cost,
     timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+    billedCost,
   };
 }
 
@@ -69,8 +82,8 @@ export class SpendBatchWriter {
     this.timer.unref?.();
   }
 
-  increment(apiKeyId: string, cost: number, timestamp = Date.now()) {
-    const entry = normalizeEntry({ apiKeyId, cost, timestamp });
+  increment(apiKeyId: string, cost: number, timestamp = Date.now(), billedCost?: number | null) {
+    const entry = normalizeEntry({ apiKeyId, cost, timestamp, billedCost });
     if (!entry) return;
 
     this.start();
@@ -85,22 +98,28 @@ export class SpendBatchWriter {
   getBufferedEntries(
     apiKeyId: string,
     sinceTimestamp = 0,
-    untilTimestamp = Number.POSITIVE_INFINITY
+    untilTimestamp = Number.POSITIVE_INFINITY,
+    basis: SpendBasis = "real"
   ) {
     const matchesWindow = (entry: BufferedCostEntry) =>
       entry.apiKeyId === apiKeyId &&
       entry.timestamp >= sinceTimestamp &&
       entry.timestamp < untilTimestamp;
 
-    return [...this.inFlightEntries, ...this.buffer].filter(matchesWindow);
+    const entries = [...this.inFlightEntries, ...this.buffer].filter(matchesWindow);
+    if (basis === "normalized") {
+      return entries.map((entry) => ({ ...entry, cost: entry.billedCost ?? entry.cost }));
+    }
+    return entries;
   }
 
   getPendingCostTotal(
     apiKeyId: string,
     sinceTimestamp = 0,
-    untilTimestamp = Number.POSITIVE_INFINITY
+    untilTimestamp = Number.POSITIVE_INFINITY,
+    basis: SpendBasis = "real"
   ) {
-    return this.getBufferedEntries(apiKeyId, sinceTimestamp, untilTimestamp).reduce(
+    return this.getBufferedEntries(apiKeyId, sinceTimestamp, untilTimestamp, basis).reduce(
       (sum, entry) => sum + entry.cost,
       0
     );

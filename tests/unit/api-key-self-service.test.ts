@@ -5,7 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import DatabaseSync from "better-sqlite3";
 
-import { SELF_ACCOUNT_QUOTA_SCOPE, SELF_USAGE_SCOPE } from "../../src/shared/constants/selfServiceScopes.ts";
+import {
+  SELF_ACCOUNT_QUOTA_SCOPE,
+  SELF_USAGE_SCOPE,
+} from "../../src/shared/constants/selfServiceScopes.ts";
 import { buildApiKeySelfServiceStatus } from "../../src/lib/usage/apiKeySelfService.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -47,10 +50,7 @@ test("self-service scope migration backfills own usage once and preserves explic
   assert.deepEqual(scopesById.get("legacy-empty"), [SELF_USAGE_SCOPE]);
   assert.deepEqual(scopesById.get("legacy-null"), [SELF_USAGE_SCOPE]);
   assert.deepEqual(scopesById.get("custom"), ["custom:scope", SELF_USAGE_SCOPE]);
-  assert.deepEqual(scopesById.get("quota-opt-in"), [
-    SELF_ACCOUNT_QUOTA_SCOPE,
-    SELF_USAGE_SCOPE,
-  ]);
+  assert.deepEqual(scopesById.get("quota-opt-in"), [SELF_ACCOUNT_QUOTA_SCOPE, SELF_USAGE_SCOPE]);
   assert.deepEqual(scopesById.get("already-disabled-after-migration"), ["custom:scope"]);
 });
 
@@ -221,7 +221,11 @@ test("self-service status reports all explicitly allowed provider account quotas
         usage: {
           plan: "Claude Max",
           quotas: {
-            daily: { usedPercentage: 35, remainingPercentage: 65, resetAt: "2026-05-30T00:00:00.000Z" },
+            daily: {
+              usedPercentage: 35,
+              remainingPercentage: 65,
+              resetAt: "2026-05-30T00:00:00.000Z",
+            },
           },
         },
         cache: { quotas: null, plan: null, message: null, fetchedAt: "" },
@@ -258,7 +262,10 @@ test("self-service status reports all active provider account quotas for unrestr
       { id: "conn-disabled", provider: "claude", isActive: false },
     ],
     fetchAndPersistProviderLimits: async (connectionId: string) => ({
-      connection: { id: connectionId, provider: connectionId === "conn-codex" ? "codex" : "cursor" },
+      connection: {
+        id: connectionId,
+        provider: connectionId === "conn-codex" ? "codex" : "cursor",
+      },
       usage: {
         plan: connectionId === "conn-codex" ? "ChatGPT Plus" : "Cursor Pro",
         quotas: {
@@ -424,4 +431,45 @@ test("self-service status normalizes Codex account quota for one explicit connec
       },
     },
   });
+});
+
+// Final-review Finding 2: this route authenticates with the API key itself (self:usage
+// scope) — it's client-facing, so it must read domain_cost_history at the BILLED
+// (normalized) rate, not the served (real) rate a model-budget redirect priced the
+// traffic at. Asserts the real production call site (apiKeySelfService.ts) actually
+// requests basis: "normalized" from getCostSummary — a revert to the old
+// `getCostSummary(metadata.id)` call (no options) would make this fail while every
+// other test in this file, which ignores the args entirely, would stay green.
+test("self-service status requests the NORMALIZED cost basis, not the real one", async () => {
+  const metadata = {
+    id: "key-basis",
+    name: "basis-check",
+    scopes: [SELF_USAGE_SCOPE],
+    allowedConnections: [],
+  };
+  const getCostSummaryCalls: unknown[][] = [];
+  const { deps } = makeDeps({
+    getCostSummary: (...args: unknown[]) => {
+      getCostSummaryCalls.push(args);
+      return {
+        budget: null,
+        totalCostMonth: 12.34,
+        totalCostPeriod: 0,
+        activeLimitUsd: 0,
+        resetInterval: null,
+        resetTime: null,
+        budgetResetAt: null,
+        lastBudgetResetAt: null,
+        periodStartAt: null,
+        nextResetAt: null,
+        warningThreshold: null,
+      };
+    },
+  });
+
+  await buildApiKeySelfServiceStatus(metadata, deps);
+
+  assert.equal(getCostSummaryCalls.length, 1);
+  assert.equal(getCostSummaryCalls[0][0], "key-basis");
+  assert.deepEqual(getCostSummaryCalls[0][1], { basis: "normalized" });
 });

@@ -10,6 +10,7 @@
  */
 
 import {
+  type CostBasis,
   deleteAllCostData,
   deleteBudget as dbDeleteBudget,
   deleteCostEntries,
@@ -394,11 +395,14 @@ export function deleteBudget(apiKeyId: string) {
  * Record a cost for an API key.
  *
  * @param {string} apiKeyId
- * @param {number} cost - Cost in USD
+ * @param {number} cost - Cost in USD, at the SERVED model's rates (real spend).
+ * @param {number|null} [billedCost] - Cost in USD at the model the CLIENT asked for, set
+ *   only when a model budget rule redirected this request (Finding 2 / migration 127).
+ *   Omitted/NULL means normalized cost equals real cost.
  */
-export function recordCost(apiKeyId: string, cost: number): void {
+export function recordCost(apiKeyId: string, cost: number, billedCost?: number | null): void {
   try {
-    spendBatchWriter.increment(apiKeyId, cost, Date.now());
+    spendBatchWriter.increment(apiKeyId, cost, Date.now(), billedCost);
   } catch {
     // Non-critical.
   }
@@ -522,14 +526,20 @@ export function checkBudget(apiKeyId: string, additionalCost = 0) {
  * @param {string} apiKeyId
  * @returns {number} Total cost today in USD
  */
-export function getDailyTotal(apiKeyId: string): number {
+export function getDailyTotal(apiKeyId: string, options?: { basis?: CostBasis }): number {
+  const basis = options?.basis ?? "real";
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
   try {
     return (
-      sumEntries(toCostEntries(loadCostEntries(apiKeyId, todayStart.getTime()))) +
-      spendBatchWriter.getPendingCostTotal(apiKeyId, todayStart.getTime())
+      sumEntries(toCostEntries(loadCostEntries(apiKeyId, todayStart.getTime(), { basis }))) +
+      spendBatchWriter.getPendingCostTotal(
+        apiKeyId,
+        todayStart.getTime(),
+        Number.POSITIVE_INFINITY,
+        basis
+      )
     );
   } catch {
     return 0;
@@ -542,7 +552,17 @@ export function getDailyTotal(apiKeyId: string): number {
  * @param {string} apiKeyId
  * @returns {BudgetSummary}
  */
-export function getCostSummary(apiKeyId: string): BudgetSummary {
+/**
+ * @param apiKeyId
+ * @param options.basis - "real" (default, unchanged behavior) prices every consumer of
+ *   this summary at the SERVED model's rates -- what checkBudget's `domain_budgets`
+ *   enforcement and the admin-only /api/usage/budget[/bulk] routes intentionally track
+ *   (OmniRoute's real upstream spend). "normalized" prices at what the client is billed
+ *   -- required for any client-facing reader (apiKeySelfService.ts's GET /v1/me/status),
+ *   see migration 127 / Finding 2.
+ */
+export function getCostSummary(apiKeyId: string, options?: { basis?: CostBasis }): BudgetSummary {
+  const basis = options?.basis ?? "real";
   const now = new Date();
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
@@ -553,18 +573,33 @@ export function getCostSummary(apiKeyId: string): BudgetSummary {
 
   try {
     const dailyEntries = [
-      ...toCostEntries(loadCostEntries(apiKeyId, todayStart.getTime())),
-      ...spendBatchWriter.getBufferedEntries(apiKeyId, todayStart.getTime()),
+      ...toCostEntries(loadCostEntries(apiKeyId, todayStart.getTime(), { basis })),
+      ...spendBatchWriter.getBufferedEntries(
+        apiKeyId,
+        todayStart.getTime(),
+        Number.POSITIVE_INFINITY,
+        basis
+      ),
     ];
     const monthlyEntries = [
-      ...toCostEntries(loadCostEntries(apiKeyId, monthStart.getTime())),
-      ...spendBatchWriter.getBufferedEntries(apiKeyId, monthStart.getTime()),
+      ...toCostEntries(loadCostEntries(apiKeyId, monthStart.getTime(), { basis })),
+      ...spendBatchWriter.getBufferedEntries(
+        apiKeyId,
+        monthStart.getTime(),
+        Number.POSITIVE_INFINITY,
+        basis
+      ),
     ];
     const periodEntries =
       window !== null
         ? [
-            ...toCostEntries(loadCostEntries(apiKeyId, window.periodStartAt)),
-            ...spendBatchWriter.getBufferedEntries(apiKeyId, window.periodStartAt),
+            ...toCostEntries(loadCostEntries(apiKeyId, window.periodStartAt, { basis })),
+            ...spendBatchWriter.getBufferedEntries(
+              apiKeyId,
+              window.periodStartAt,
+              Number.POSITIVE_INFINITY,
+              basis
+            ),
           ]
         : [];
 

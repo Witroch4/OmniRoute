@@ -78,9 +78,11 @@ test("spend batch writer auto-flushes at the configured threshold", async () => 
 
   await waitFor(() => persisted.length === 2);
 
+  // Finding 2 / migration 127: every buffered entry now carries billedCost (null when no
+  // model-budget redirect happened), mirroring domain_cost_history.billed_cost.
   assert.deepEqual(persisted, [
-    { apiKeyId: "key-a", cost: 1.25, timestamp: 100 },
-    { apiKeyId: "key-b", cost: 2.75, timestamp: 200 },
+    { apiKeyId: "key-a", cost: 1.25, timestamp: 100, billedCost: null },
+    { apiKeyId: "key-b", cost: 2.75, timestamp: 200, billedCost: null },
   ]);
 
   await writer.stop();
@@ -115,8 +117,8 @@ test("spend batch writer requeues failed flushes and flushes pending entries on 
   assert.equal(writer.getPendingCostTotal("key-a", 0), 0);
   assert.equal(writer.getPendingCostTotal("key-b", 0), 0);
   assert.deepEqual(persisted, [
-    { apiKeyId: "key-a", cost: 1.5, timestamp: 111 },
-    { apiKeyId: "key-b", cost: 2.5, timestamp: 222 },
+    { apiKeyId: "key-a", cost: 1.5, timestamp: 111, billedCost: null },
+    { apiKeyId: "key-b", cost: 2.5, timestamp: 222, billedCost: null },
   ]);
 });
 
@@ -137,6 +139,22 @@ test("recordCost buffers writes while budget checks and summaries still see pend
   const persistedEntries = domainState.loadCostEntries("key-live", 0);
   assert.equal(persistedEntries.length, 2);
   assert.equal(costRules.getDailyTotal("key-live"), 4.5);
+});
+
+test("recordCost's billed cost survives buffered AND flushed reads under the normalized basis", async () => {
+  costRules.recordCost("key-redirected", 2, 10); // redirected: real=2, billed=10
+  costRules.recordCost("key-redirected", 3); // not redirected: billed defaults to real
+
+  // Still buffered — spendBatchWriter.getBufferedEntries must resolve the same split.
+  assert.equal(costRules.getCostSummary("key-redirected").dailyTotal, 5);
+  assert.equal(costRules.getCostSummary("key-redirected", { basis: "normalized" }).dailyTotal, 13);
+
+  const flushResult = await flushSpendBatchWriter();
+  assert.equal(flushResult.flushedEntries, 2);
+
+  // Flushed to domain_cost_history.billed_cost — same split via COALESCE in SQL now.
+  assert.equal(costRules.getCostSummary("key-redirected").dailyTotal, 5);
+  assert.equal(costRules.getCostSummary("key-redirected", { basis: "normalized" }).dailyTotal, 13);
 });
 
 test("deleteBudget discards pending spend before it reaches the database", async () => {

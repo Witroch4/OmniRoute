@@ -6,9 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { recordStreamingCost } = await import(
-  "../../open-sse/handlers/chatCore/streamingCost.ts"
-);
+const { recordStreamingCost } = await import("../../open-sse/handlers/chatCore/streamingCost.ts");
 
 function spies(costValue: number) {
   const recorded: Array<{ apiKeyId: string; cost: number }> = [];
@@ -80,6 +78,67 @@ test("valid input records the resolved cost against the api key", async () => {
   assert.equal(s.recorded.length, 1);
   assert.equal(s.recorded[0].apiKeyId, "key-1");
   assert.equal(s.recorded[0].cost, 0.0073);
+});
+
+// Final-review Finding 2: streamingCost.ts previously only ever knew the served
+// provider/model, so a redirected streaming request recorded real (served) cost with no
+// billed figure at all -- domain_cost_history had nothing for a normalized reader to fall
+// back on. billedProvider/billedModel let it record BOTH, mirroring chatCore.ts's
+// non-streaming headerResponseCost split.
+test("a redirected stream records BOTH the real (served) and billed cost", async () => {
+  const recorded: Array<{ apiKeyId: string; cost: number; billedCost: number | null | undefined }> =
+    [];
+  const costArgs: Array<{ provider: string; model: string }> = [];
+  const calculateCost = async (provider: string, model: string) => {
+    costArgs.push({ provider, model });
+    // Served (cheap) model prices low; billed (requested, expensive) model prices high.
+    return model === "claude-sonnet-5" ? 2 : 10;
+  };
+  const recordCost = (apiKeyId: string, cost: number, billedCost?: number | null) => {
+    recorded.push({ apiKeyId, cost, billedCost });
+  };
+
+  recordStreamingCost({
+    apiKeyId: "key-1",
+    provider: "cc",
+    model: "claude-sonnet-5",
+    streamUsage: { prompt_tokens: 1000, completion_tokens: 500 },
+    calculateCost,
+    recordCost,
+    billedProvider: "cc",
+    billedModel: "claude-opus-4-8",
+  });
+
+  await waitFor(() => recorded.length > 0);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].cost, 2, "real cost stays priced at the SERVED model");
+  assert.equal(
+    recorded[0].billedCost,
+    10,
+    "billed cost is priced at the model the client asked for"
+  );
+  assert.deepEqual(costArgs, [
+    { provider: "cc", model: "claude-sonnet-5" },
+    { provider: "cc", model: "claude-opus-4-8" },
+  ]);
+});
+
+test("without a redirect, only the real cost is computed and billedCost is omitted", async () => {
+  const s = spies(0.0073);
+  recordStreamingCost({
+    apiKeyId: "key-1",
+    provider: "deepseek",
+    model: "deepseek-chat",
+    streamUsage: { prompt_tokens: 100, completion_tokens: 50 },
+    calculateCost: s.calculateCost,
+    recordCost: (apiKeyId: string, cost: number, billedCost?: number | null) => {
+      s.recorded.push({ apiKeyId, cost });
+      assert.equal(billedCost, undefined);
+    },
+  });
+  await waitFor(() => s.recorded.length > 0);
+  // calculateCost is called exactly once (served only) — no redirect means no second call.
+  assert.equal(s.costArgs.length, 1);
 });
 
 test("estimatedCost <= 0 does not record", async () => {
