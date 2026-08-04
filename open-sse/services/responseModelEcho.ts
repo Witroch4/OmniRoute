@@ -86,6 +86,25 @@ export function resolveEchoHeaderValue(
  * response: { model, ... } }` — so also rewrite `obj.response.model` when present. This is
  * what lets the Codex CLI compatibility shim echo the requested effort-suffixed model id
  * (e.g. `gpt-5.5-xhigh`) in `response.created`/`response.completed` payloads.
+ *
+ * Model-budget-routing final-review Finding 1: the Anthropic Messages wire format nests
+ * `model` a level down a THIRD way — `{ type: "message_start", message: { model, ... } }`
+ * — emitted by the Anthropic-native passthrough (`createPassthroughStreamWithLogger`) and
+ * by every translator that targets Claude shape (`openai-to-claude.ts`,
+ * `gemini-to-claude.ts`). Left unrewritten, a redirected `/v1/messages` request — this
+ * feature's canonical use case (Claude Code hits `cc/claude-opus-*`, gets served by
+ * `cc/claude-sonnet-*`) — leaked the served model in the very first SSE frame while every
+ * other surface (headers, later chunks) correctly showed the billed model. Rewrite
+ * `obj.message.model` alongside `obj.response.model` for the same reason: this transform
+ * is the last pipeline stage (`streamingPipeline.ts`), operating on already client-shaped
+ * bytes, so it must cover every wire shape a client-facing format can hand it, not just
+ * the ones a given call site happens to exercise.
+ *
+ * Same sweep also found the Antigravity/cloudcode wire shape (`/antigravity` endpoint,
+ * `openai-to-antigravity.ts`): `{ response: { modelVersion, candidates, ... } }` — a
+ * DIFFERENT field name (`modelVersion`, not `model`) inside the same one-level-deep
+ * `response` envelope already handled above, captured from the served upstream's raw
+ * `chunk.model` before this echo transform ever runs. Rewrite it too.
  */
 export function echoModelInObject(obj: unknown, echoModel: string | null | undefined): unknown {
   if (!echoModel) return obj;
@@ -99,6 +118,18 @@ export function echoModelInObject(obj: unknown, echoModel: string | null | undef
       const nestedRec = nested as Record<string, unknown>;
       if (typeof nestedRec.model === "string") {
         nestedRec.model = echoModel;
+      }
+      // Antigravity: { response: { modelVersion, ... } } — see doc comment above.
+      if (typeof nestedRec.modelVersion === "string") {
+        nestedRec.modelVersion = echoModel;
+      }
+    }
+    // Anthropic `message_start`: { type: "message_start", message: { model, ... } }
+    const message = rec.message;
+    if (message && typeof message === "object" && !Array.isArray(message)) {
+      const messageRec = message as Record<string, unknown>;
+      if (typeof messageRec.model === "string") {
+        messageRec.model = echoModel;
       }
     }
   }
@@ -128,6 +159,10 @@ export function cloneShallowForModelEcho<T>(value: T): T {
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
     clone.response = { ...(nested as Record<string, unknown>) };
   }
+  const message = clone.message;
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    clone.message = { ...(message as Record<string, unknown>) };
+  }
   return clone as T;
 }
 
@@ -155,6 +190,21 @@ export function echoModelInSseLine(line: string, echoModel: string | null | unde
       const nestedRec = nested as Record<string, unknown>;
       if (typeof nestedRec.model === "string") {
         nestedRec.model = echoModel;
+        changed = true;
+      }
+      // Antigravity: { response: { modelVersion, ... } } — see echoModelInObject.
+      if (typeof nestedRec.modelVersion === "string") {
+        nestedRec.modelVersion = echoModel;
+        changed = true;
+      }
+    }
+    // Model-budget-routing Finding 1: Anthropic `message_start` nests `model` under
+    // `message.model` — see echoModelInObject for the shape and why this must be here.
+    const message = parsed.message;
+    if (message && typeof message === "object" && !Array.isArray(message)) {
+      const messageRec = message as Record<string, unknown>;
+      if (typeof messageRec.model === "string") {
+        messageRec.model = echoModel;
         changed = true;
       }
     }

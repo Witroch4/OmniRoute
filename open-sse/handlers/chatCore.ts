@@ -4126,7 +4126,16 @@ export async function handleChatCore({
         connectionId,
         status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}`,
       }).catch(() => {});
-      const malformedMessage = `[${provider}/${model}] returned an empty response (no usable choices/output)`;
+      // Confidentiality: this message reaches the client verbatim via createErrorResult
+      // below. On a budget redirect it must name the BILLED pair, not the served one —
+      // otherwise a client that never saw the served model anywhere else in this response
+      // learns it here. `reportMalformed200`/`appendRequestLog` above stay on the real
+      // served `provider`/`model` — those are internal diagnostics, not client-facing.
+      // Reuses the same resolveEchoHeaderValue that keeps X-OmniRoute-Model/-Provider
+      // honest, so this and the headers can never disagree about the billed pair.
+      const malformedMessageProvider = resolveEchoHeaderValue(provider, billedProvider);
+      const malformedMessageModel = resolveEchoHeaderValue(model, billedModel);
+      const malformedMessage = `[${malformedMessageProvider}/${malformedMessageModel}] returned an empty response (no usable choices/output)`;
       persistAttemptLogs({
         status: HTTP_STATUS.BAD_GATEWAY,
         tokens: usage,
