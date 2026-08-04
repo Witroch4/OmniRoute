@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildModelBudgetRulesSavePayload } from "../../src/app/(dashboard)/dashboard/api-manager/modelBudgetRulesPayload.ts";
-import type { ModelBudgetRuleDraft } from "../../src/app/(dashboard)/dashboard/api-manager/components/ModelBudgetRoutingSettings.tsx";
+import {
+  buildModelBudgetRulesSavePayload,
+  resolveModelBudgetRulesSave,
+} from "../../src/app/(dashboard)/dashboard/api-manager/modelBudgetRulesPayload.ts";
+import type {
+  ModelBudgetRuleDraft,
+  ModelBudgetRulesLoadStatus,
+} from "../../src/app/(dashboard)/dashboard/api-manager/components/ModelBudgetRoutingSettings.tsx";
 
 function draft(overrides: Partial<ModelBudgetRuleDraft> = {}): ModelBudgetRuleDraft {
   return {
@@ -69,4 +75,68 @@ test("enabled: false rows are preserved (only completeness/limit gate dropping, 
   const payload = buildModelBudgetRulesSavePayload([draft({ enabled: false })]);
   assert.equal(payload.rules.length, 1);
   assert.equal(payload.rules[0].enabled, false);
+});
+
+// ─── fix round 1 (review, Finding 1 — Critical): whitespace-only fields must not
+// pass the completeness check, and must not be sent verbatim (untrimmed) either. ──
+
+test("a whitespace-only sourceFamily is treated as missing and the row is dropped", () => {
+  const payload = buildModelBudgetRulesSavePayload([draft({ sourceFamily: "   " })]);
+  assert.deepEqual(payload, { rules: [] });
+});
+
+test("whitespace-only values are rejected the same way in every string field", () => {
+  const rows = [
+    draft({ sourceProvider: " " }),
+    draft({ sourceFamily: "\t" }),
+    draft({ targetProvider: "  " }),
+    draft({ targetFamily: "\n" }),
+  ];
+  assert.deepEqual(buildModelBudgetRulesSavePayload(rows), { rules: [] });
+});
+
+test("leading/trailing whitespace on otherwise-valid fields is trimmed in the saved payload", () => {
+  const payload = buildModelBudgetRulesSavePayload([
+    draft({ sourceProvider: " cc ", sourceFamily: " claude-opus-* " }),
+  ]);
+  assert.equal(payload.rules.length, 1);
+  assert.equal(payload.rules[0].sourceProvider, "cc");
+  assert.equal(payload.rules[0].sourceFamily, "claude-opus-*");
+});
+
+// ─── fix round 1 (review, Finding 1 — Critical): resolveModelBudgetRulesSave is the
+// single gate that must stop a PUT { rules: [] } from being sent for any reason other
+// than the admin genuinely clearing a *successfully loaded* rule list. ──────────────
+
+test("status 'loading' never authorizes a save, even with a fully valid, non-empty draft list", () => {
+  const decision = resolveModelBudgetRulesSave("loading", [draft()]);
+  assert.equal(decision.shouldSave, false);
+  assert.equal(decision.payload, null);
+});
+
+test("status 'error' never authorizes a save, even with a fully valid, non-empty draft list", () => {
+  const decision = resolveModelBudgetRulesSave("error", [draft()]);
+  assert.equal(decision.shouldSave, false);
+  assert.equal(decision.payload, null);
+});
+
+test("status 'loaded' with an empty draft list is the legitimate clear-all — it IS authorized", () => {
+  const decision = resolveModelBudgetRulesSave("loaded", []);
+  assert.equal(decision.shouldSave, true);
+  assert.deepEqual(decision.payload, { rules: [] });
+});
+
+test("status 'loaded' with valid rules authorizes a save and shapes the same payload as buildModelBudgetRulesSavePayload", () => {
+  const drafts = [draft()];
+  const decision = resolveModelBudgetRulesSave("loaded", drafts);
+  assert.equal(decision.shouldSave, true);
+  assert.deepEqual(decision.payload, buildModelBudgetRulesSavePayload(drafts));
+});
+
+test("every non-'loaded' status is rejected (exhaustive over the type), 'loaded' is the only one that saves", () => {
+  const statuses: ModelBudgetRulesLoadStatus[] = ["loading", "loaded", "error"];
+  for (const status of statuses) {
+    const decision = resolveModelBudgetRulesSave(status, [draft()]);
+    assert.equal(decision.shouldSave, status === "loaded", `status=${status}`);
+  }
 });

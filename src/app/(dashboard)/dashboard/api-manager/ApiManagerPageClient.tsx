@@ -29,8 +29,9 @@ import { MinSpendGuaranteeSettings } from "./components/MinSpendGuaranteeSetting
 import {
   ModelBudgetRoutingSettings,
   type ModelBudgetRuleDraft,
+  type ModelBudgetRulesLoadStatus,
 } from "./components/ModelBudgetRoutingSettings";
-import { buildModelBudgetRulesSavePayload } from "./modelBudgetRulesPayload";
+import { resolveModelBudgetRulesSave } from "./modelBudgetRulesPayload";
 import { ChaosModeAccessToggle } from "./components/ChaosModeAccessToggle";
 import { BypassProviderQuotaToggle } from "./components/BypassProviderQuotaToggle";
 
@@ -807,7 +808,8 @@ export default function ApiManagerPageClient() {
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
-    budgetRules: ModelBudgetRuleDraft[]
+    budgetRules: ModelBudgetRuleDraft[],
+    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus
   ) => {
     if (!editingKey || !editingKey.id) return;
 
@@ -892,19 +894,35 @@ export default function ApiManagerPageClient() {
 
       // Model budget routing rules live in their own resource (Task 9 API) — save
       // them alongside the key permissions PATCH above, not as part of its body.
-      const budgetRulesRes = await fetch(
-        `/api/keys/${encodeURIComponent(editingKey.id)}/budget-rules`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildModelBudgetRulesSavePayload(budgetRules)),
-        }
-      );
+      //
+      // resolveModelBudgetRulesSave only authorizes the PUT when the modal's copy of
+      // the rules is known-good (loadStatus === "loaded"); if the GET never completed
+      // or failed, it returns shouldSave: false and this panel is left untouched on
+      // the server — see the Task 10 fix-round report, Finding 1 (Critical): sending
+      // a PUT built from an unloaded/failed `budgetRules` state (which reads as `[]`,
+      // indistinguishable from "the admin cleared their rules") silently wiped a
+      // key's real rules.
+      const budgetRulesDecision = resolveModelBudgetRulesSave(budgetRulesLoadStatus, budgetRules);
+      if (budgetRulesDecision.shouldSave && budgetRulesDecision.payload) {
+        const budgetRulesRes = await fetch(
+          `/api/keys/${encodeURIComponent(editingKey.id)}/budget-rules`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(budgetRulesDecision.payload),
+          }
+        );
 
-      if (!budgetRulesRes.ok) {
-        const data = await budgetRulesRes.json();
-        setPageError(extractApiErrorMessage(data, t("failedUpdatePermissions")));
-        return;
+        if (!budgetRulesRes.ok) {
+          const data = await budgetRulesRes.json();
+          const detail = extractApiErrorMessage(data, t("failedUpdatePermissions"));
+          // Finding 2: the PATCH above already committed by this point — say so, so the
+          // admin doesn't believe nothing was saved and re-attempt the whole form.
+          setPageError(
+            `Key permissions were saved, but the model budget routing rules were not: ${detail}`
+          );
+          return;
+        }
       }
 
       await fetchData();
@@ -1686,7 +1704,8 @@ const PermissionsModal = memo(function PermissionsModal({
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
-    budgetRules: ModelBudgetRuleDraft[]
+    budgetRules: ModelBudgetRuleDraft[],
+    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus
   ) => void;
 }) {
   const t = useTranslations("apiManager");
@@ -1793,18 +1812,26 @@ const PermissionsModal = memo(function PermissionsModal({
       : ""
   );
   const [budgetRules, setBudgetRules] = useState<ModelBudgetRuleDraft[]>([]);
+  // Starts "loading", not an implicit "loaded with []" — see
+  // resolveModelBudgetRulesSave() in modelBudgetRulesPayload.ts, which is the thing that
+  // actually depends on this distinction to decide whether a save is allowed to touch
+  // budget rules at all (fix round 1, Finding 1 — Critical).
+  const [budgetRulesLoadStatus, setBudgetRulesLoadStatus] =
+    useState<ModelBudgetRulesLoadStatus>("loading");
 
   // Model budget routing rules are a separate resource (Task 9 API), not a field on
-  // the key payload — fetch them once when the modal opens for this key. The modal
-  // remounts per key (`key={editingKey.id}` at the call site), so a mount-only effect
-  // is correct here and re-fires for every newly opened key.
-  useEffect(() => {
-    if (!apiKey?.id) return;
+  // the key payload — fetch them once when the modal opens for this key (and again on
+  // manual retry from the panel). The modal remounts per key (`key={editingKey.id}` at
+  // the call site), so a mount-only effect is correct here and re-fires for every newly
+  // opened key.
+  const loadBudgetRules = useCallback(() => {
+    if (!apiKey?.id) return () => {};
     let cancelled = false;
+    setBudgetRulesLoadStatus("loading");
     fetch(`/api/keys/${encodeURIComponent(apiKey.id)}/budget-rules`)
-      .then((res) => (res.ok ? res.json() : { rules: [] }))
-      .then(
-        (data: {
+      .then((res) => {
+        if (!res.ok) throw new Error(`budget-rules GET failed with status ${res.status}`);
+        return res.json() as Promise<{
           rules?: Array<{
             enabled: boolean;
             sourceProvider: string;
@@ -1813,27 +1840,35 @@ const PermissionsModal = memo(function PermissionsModal({
             targetProvider: string;
             targetFamily: string;
           }>;
-        }) => {
-          if (cancelled) return;
-          setBudgetRules(
-            (data.rules ?? []).map((rule) => ({
-              enabled: rule.enabled,
-              sourceProvider: rule.sourceProvider,
-              sourceFamily: rule.sourceFamily,
-              weeklyLimitUsd: String(rule.weeklyLimitUsd),
-              targetProvider: rule.targetProvider,
-              targetFamily: rule.targetFamily,
-            }))
-          );
-        }
-      )
+        }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setBudgetRules(
+          (data.rules ?? []).map((rule) => ({
+            enabled: rule.enabled,
+            sourceProvider: rule.sourceProvider,
+            sourceFamily: rule.sourceFamily,
+            weeklyLimitUsd: String(rule.weeklyLimitUsd),
+            targetProvider: rule.targetProvider,
+            targetFamily: rule.targetFamily,
+          }))
+        );
+        setBudgetRulesLoadStatus("loaded");
+      })
       .catch(() => {
-        // Leave budgetRules empty — the key still opens, and the user can add rules.
+        if (cancelled) return;
+        // Leave budgetRules as-is (still []) but flip the status to "error" so the panel
+        // renders a visible failure state instead of looking like "no rules configured",
+        // and so resolveModelBudgetRulesSave refuses to send that [] as a clear-all PUT.
+        setBudgetRulesLoadStatus("error");
       });
     return () => {
       cancelled = true;
     };
   }, [apiKey?.id]);
+
+  useEffect(() => loadBudgetRules(), [loadBudgetRules]);
   const getModelDisplayName = useCallback(
     (modelId: string) =>
       modelId === CLAUDE_CODE_DEFAULT_MODEL_ID ? CLAUDE_CODE_DEFAULT_MODEL_NAME : modelId,
@@ -2031,7 +2066,8 @@ const PermissionsModal = memo(function PermissionsModal({
       chaosModeEnabled,
       minSpendGuaranteeEnabled,
       parseUsdLimitInput(minSpendGuaranteeUsd),
-      budgetRules
+      budgetRules,
+      budgetRulesLoadStatus
     );
   }, [
     onSave,
@@ -2074,6 +2110,7 @@ const PermissionsModal = memo(function PermissionsModal({
     minSpendGuaranteeEnabled,
     minSpendGuaranteeUsd,
     budgetRules,
+    budgetRulesLoadStatus,
     apiKey?.scopes,
     t,
   ]);
@@ -2667,7 +2704,12 @@ const PermissionsModal = memo(function PermissionsModal({
             onEnabledChange={setMinSpendGuaranteeEnabled}
             onGuaranteeUsdChange={setMinSpendGuaranteeUsd}
           />
-          <ModelBudgetRoutingSettings rules={budgetRules} onRulesChange={setBudgetRules} />
+          <ModelBudgetRoutingSettings
+            rules={budgetRules}
+            onRulesChange={setBudgetRules}
+            loadStatus={budgetRulesLoadStatus}
+            onRetryLoad={loadBudgetRules}
+          />
         </div>
 
         {/* Chaos Mode Access Toggle */}
