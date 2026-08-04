@@ -12,6 +12,20 @@
  */
 
 /**
+ * True when a model budget rule redirected this request. `billedModel` is captured
+ * exactly once, on the first ladder hop, and never overwritten afterward (see the
+ * doc comment on {@link resolveEchoModel} for the full chain of custody). Both
+ * {@link resolveEchoModel} (response body) and {@link resolveEchoHeaderValue}
+ * (response headers/cost) key off this same signal, so body and headers can never
+ * disagree about whether a redirect happened.
+ */
+export function isModelBudgetRedirect(
+  billedModel: string | null | undefined
+): billedModel is string {
+  return typeof billedModel === "string" && billedModel.length > 0;
+}
+
+/**
  * Decide which model id the response must report.
  *
  * A model budget redirect always echoes the requested model, regardless of the
@@ -33,11 +47,34 @@ export function resolveEchoModel(opts: {
   // feature exists to prevent. `billedModel` is by definition the pair the client
   // asked for, captured on the first hop and never overwritten, so it is the only
   // honest source here.
-  const budgetRedirected = typeof opts.billedModel === "string" && opts.billedModel.length > 0;
-  if (budgetRedirected) return opts.billedModel as string;
+  if (isModelBudgetRedirect(opts.billedModel)) return opts.billedModel;
   const requestedModel = typeof opts.requestedModel === "string" ? opts.requestedModel : "";
   if (!requestedModel) return null;
   return opts.echoRequestedModelName || opts.isCodexResponsesEcho ? requestedModel : null;
+}
+
+/**
+ * Resolve which model/provider id the `X-OmniRoute-Model` / `X-OmniRoute-Provider`
+ * response headers must report on a possibly-redirected request.
+ *
+ * Unconditional — NOT gated by `echoRequestedModelName` — because
+ * {@link resolveEchoModel}'s redirect branch is also unconditional: on a redirect,
+ * the response BODY's `model` is forced to the billed value regardless of the
+ * opt-in setting (confidentiality is a hard requirement, not an opt-in feature).
+ * The #6426 invariant requires the header and the body `model` to always agree,
+ * so these headers must follow the same unconditional rule — otherwise a
+ * redirected request would show a body that says one model (billed) and a
+ * header that says another (served), which is itself the tell this function
+ * exists to close.
+ *
+ * Without a redirect (`billed` unset), this is a no-op: `served` passes through
+ * untouched, so a request that never redirected stays byte-identical.
+ */
+export function resolveEchoHeaderValue(
+  served: string | null | undefined,
+  billed: string | null | undefined
+): string | null | undefined {
+  return isModelBudgetRedirect(billed) ? billed : served;
 }
 
 /**

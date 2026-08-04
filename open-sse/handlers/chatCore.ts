@@ -113,7 +113,12 @@ import { resolveModelAlias } from "../services/modelDeprecation.ts";
 import { normalizeMimoThinking } from "../services/mimoThinking.ts";
 import { normalizeClaudeAdaptiveThinking } from "../services/claudeAdaptiveThinking.ts";
 import { normalizeClaudeHaikuConstraints } from "../services/claudeHaikuConstraints.ts";
-import { echoModelInObject, resolveEchoModel } from "../services/responseModelEcho.ts";
+import {
+  echoModelInObject,
+  isModelBudgetRedirect,
+  resolveEchoHeaderValue,
+  resolveEchoModel,
+} from "../services/responseModelEcho.ts";
 import { stripGpt5SamplingWhenReasoning } from "../services/gpt5SamplingGuard.ts";
 import { getUnsupportedParams, REGISTRY } from "../config/providerRegistry.ts";
 import { supportsMaxTokens } from "@/lib/modelCapabilities.ts";
@@ -4020,6 +4025,30 @@ export async function handleChatCore({
     const estimatedCost = responseUsage
       ? await calculateCost(provider, model, responseUsage, { serviceTier: effectiveServiceTier })
       : 0;
+    // Confidentiality (review round 1): on a budget redirect, X-OmniRoute-Response-Cost
+    // must reflect the BILLED (client-facing) model's rates, not the served model's —
+    // otherwise a client that knows the requested model's published per-token price can
+    // multiply it by X-OmniRoute-Tokens-In/-Out, compare against this header, and infer
+    // the downgrade from the mismatch. `estimatedCost` above (served rates) still feeds
+    // recordCost/quota-share/gamification below unchanged — those track OmniRoute's REAL
+    // upstream spend, which genuinely happened at the served model's rates.
+    const headerResponseCost =
+      responseUsage && isModelBudgetRedirect(billedModel)
+        ? await calculateCost(
+            // No `as string` cast needed: `provider` is already used unconditionally as a
+            // plain string just above (line ~4026) — it is always resolved by this point in
+            // the success path. `billedProvider` is set in lockstep with `billedModel` (see
+            // modelBudgetRouting.ts: both are captured from the same `input` at the top of
+            // resolveModelBudgetRedirect, never independently), so inside this
+            // isModelBudgetRedirect(billedModel) branch it is always a real string too; the
+            // `|| provider` fallback only guards a pairing invariant violation, not a
+            // known-nullable value.
+            billedProvider || provider,
+            billedModel,
+            responseUsage,
+            { serviceTier: effectiveServiceTier }
+          )
+        : estimatedCost;
 
     if (postCallGuardrails.blocked) {
       const guardrailMessage = postCallGuardrails.message || "Response blocked by guardrail";
@@ -4165,11 +4194,14 @@ export async function handleChatCore({
       clientResponse: translatedResponse,
     });
     const responseHeaders = buildNonStreamingResponseHeaders({
-      provider,
-      model,
+      // Confidentiality (review round 1): X-OmniRoute-Model/-Provider must carry the
+      // BILLED pair on a redirect, or they contradict the body (which echoModel below
+      // already forces to the billed pair) — a header/body mismatch is itself a tell.
+      provider: resolveEchoHeaderValue(provider, billedProvider),
+      model: resolveEchoHeaderValue(model, billedModel),
       startTime,
       responseUsage,
-      estimatedCost,
+      estimatedCost: headerResponseCost,
       requestId: skillRequestId,
       compressionResponseMeta,
     });
@@ -4264,8 +4296,10 @@ export async function handleChatCore({
 
   const responseHeaders = assembleStreamingResponseHeaders({
     providerHeaders: providerResponse.headers,
-    provider,
-    model,
+    // Confidentiality (review round 1): same billed-pair preference as the
+    // non-streaming header site above — see resolveEchoHeaderValue's doc comment.
+    provider: resolveEchoHeaderValue(provider, billedProvider),
+    model: resolveEchoHeaderValue(model, billedModel),
     pendingRequestId,
     compressionResponseMeta,
   });
