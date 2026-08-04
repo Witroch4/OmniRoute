@@ -155,3 +155,32 @@ test("spend is read once per rule and then cached", async () => {
 
   assert.equal(queried, 1, "the second call must be served from the TTL cache");
 });
+
+test("a key with a rule that doesn't match this request never fetches the window or queries spend", async () => {
+  clearModelBudgetRoutingCacheForTests();
+  let windowFetched = 0;
+  let spendQueried = 0;
+  const redirect = await resolveModelBudgetRedirect(
+    { apiKeyId: "key-1", provider: "cc", model: "gpt-5" },
+    {
+      listRules: () => [rule({ sourceFamily: "claude-opus-*", targetFamily: "claude-sonnet-*" })],
+      getFamilySpend: async () => {
+        spendQueried += 1;
+        return 999;
+      },
+      resolveTarget: (_p: string, glob: string) => glob.replace("-*", "-5"),
+      getWindowStartIso: async () => {
+        windowFetched += 1;
+        return WINDOW_START;
+      },
+      warn: () => {},
+    }
+  );
+  assert.equal(redirect, null);
+  assert.equal(
+    windowFetched,
+    0,
+    "the weekly window must be fetched lazily, not for every key with a rule"
+  );
+  assert.equal(spendQueried, 0);
+});

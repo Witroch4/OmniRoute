@@ -109,7 +109,15 @@ export async function resolveModelBudgetRedirect(
         now
       ));
 
-  const sinceIso = await getWindowStartIso();
+  // Lazy + memoized: only paid for once a rule actually matches the current
+  // provider/model, and at most once per call even across multiple hops —
+  // the default getWindowStartIso does a real DB query, so a key with a rule
+  // that simply doesn't apply to this request must not pay for it.
+  let sinceIsoPromise: Promise<string> | null = null;
+  const ensureSinceIso = (): Promise<string> => {
+    if (!sinceIsoPromise) sinceIsoPromise = getWindowStartIso();
+    return sinceIsoPromise;
+  };
 
   const billedProvider = input.provider;
   const billedModel = input.model;
@@ -131,6 +139,7 @@ export async function resolveModelBudgetRedirect(
     );
     if (!rule) break;
 
+    const sinceIso = await ensureSinceIso();
     if (!(await isRuleExhausted(rule, apiKeyId, sinceIso, getFamilySpend, now))) break;
 
     const targetModel = resolveTarget(rule.targetProvider, rule.targetFamily);
