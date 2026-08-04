@@ -105,6 +105,13 @@ export function resolveEchoHeaderValue(
  * DIFFERENT field name (`modelVersion`, not `model`) inside the same one-level-deep
  * `response` envelope already handled above, captured from the served upstream's raw
  * `chunk.model` before this echo transform ever runs. Rewrite it too.
+ *
+ * Final-review-fixes-wave-2: the sweep above covered every NESTED shape but missed a
+ * fourth, TOP-LEVEL one — the native Gemini response shape, `{ candidates: [...],
+ * usageMetadata: {...}, modelVersion: "..." }` — reachable via the passthrough branch
+ * when `clientResponseFormat === GEMINI` (chatCore.ts), in practice the Ollama shim
+ * (`/v1/api/chat`) carrying a hand-crafted Gemini body against a Gemini-target
+ * provider. Rewrite top-level `modelVersion` symmetrically with top-level `model`.
  */
 export function echoModelInObject(obj: unknown, echoModel: string | null | undefined): unknown {
   if (!echoModel) return obj;
@@ -112,6 +119,10 @@ export function echoModelInObject(obj: unknown, echoModel: string | null | undef
     const rec = obj as Record<string, unknown>;
     if (typeof rec.model === "string") {
       rec.model = echoModel;
+    }
+    // Gemini native top-level shape — see doc comment above.
+    if (typeof rec.modelVersion === "string") {
+      rec.modelVersion = echoModel;
     }
     const nested = rec.response;
     if (nested && typeof nested === "object" && !Array.isArray(nested)) {
@@ -151,6 +162,13 @@ export function echoModelInObject(obj: unknown, echoModel: string | null | undef
  * model directly and was never redirected at all). This clone is the minimum needed
  * to make `echoModelInObject` safe to call on a cached value without corrupting it
  * for the next reader.
+ *
+ * Final-review-fixes-wave-2: top-level `modelVersion` (native Gemini shape) needs NO
+ * extra clone depth beyond what the top-level `{ ...value }` spread already does —
+ * unlike `response.model`/`message.model`, it is not nested, so the same shallow copy
+ * that already isolates `model` isolates `modelVersion` too. Confirmed, not assumed:
+ * mutating `clone.modelVersion` after this function returns cannot reach back into
+ * `value` (verified in `tests/unit/usage/model-budget-echo.test.ts`).
  */
 export function cloneShallowForModelEcho<T>(value: T): T {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -181,6 +199,12 @@ export function echoModelInSseLine(line: string, echoModel: string | null | unde
     let changed = false;
     if (typeof parsed.model === "string") {
       parsed.model = echoModel;
+      changed = true;
+    }
+    // Final-review-fixes-wave-2: native Gemini response shape nests the served model
+    // at the TOP level under `modelVersion` (not `model`) — see echoModelInObject.
+    if (typeof parsed.modelVersion === "string") {
+      parsed.modelVersion = echoModel;
       changed = true;
     }
     // #3697: Responses API events nest `model` under `response.model` — see

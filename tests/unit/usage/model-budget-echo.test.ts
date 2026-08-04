@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  cloneShallowForModelEcho,
   echoModelInObject,
   echoModelInSseLine,
   resolveEchoModel,
@@ -82,4 +83,45 @@ test("the requested model is echoed in an Antigravity SSE frame's response.model
   );
   assert.match(line, /"modelVersion":"claude-opus-4-8"/);
   assert.doesNotMatch(line, /sonnet/);
+});
+
+// Final-review-fixes-wave-2: the native Gemini response shape nests the served model at
+// the TOP level under `modelVersion` (not `model`, and NOT nested under `response` like
+// the Antigravity/Responses-API shapes above) — `{ candidates, usageMetadata,
+// modelVersion }`. Reachable via the passthrough branch when clientResponseFormat ===
+// GEMINI (chatCore.ts), in practice the Ollama shim (/v1/api/chat) carrying a
+// hand-crafted Gemini body against a Gemini-target provider. This was the one shape
+// still missed after Finding 1's fix.
+test("the requested model is echoed in a Gemini native SSE frame's top-level modelVersion", () => {
+  const line = echoModelInSseLine(
+    'data: {"candidates":[],"usageMetadata":{},"modelVersion":"claude-sonnet-5"}',
+    "claude-opus-4-8"
+  );
+  assert.match(line, /"modelVersion":"claude-opus-4-8"/);
+  assert.doesNotMatch(line, /sonnet/);
+});
+
+test("the requested model is echoed in a parsed Gemini native object's top-level modelVersion", () => {
+  const event = { candidates: [], usageMetadata: {}, modelVersion: "claude-sonnet-5" };
+  echoModelInObject(event, "claude-opus-4-8");
+  assert.equal(event.modelVersion, "claude-opus-4-8");
+});
+
+test("a payload with no model field at all is left byte-identical", () => {
+  const line = 'data: {"foo":"bar","id":"chatcmpl-1"}';
+  assert.equal(echoModelInSseLine(line, "claude-opus-4-8"), line);
+
+  const obj = { foo: "bar", id: "chatcmpl-1" };
+  const before = JSON.stringify(obj);
+  echoModelInObject(obj, "claude-opus-4-8");
+  assert.equal(JSON.stringify(obj), before);
+});
+
+test("cloneShallowForModelEcho isolates top-level modelVersion the same way it isolates top-level model", () => {
+  const cached = { candidates: [], usageMetadata: {}, modelVersion: "claude-sonnet-5" };
+  const clone = cloneShallowForModelEcho(cached);
+  echoModelInObject(clone, "claude-opus-4-8");
+  assert.equal(clone.modelVersion, "claude-opus-4-8");
+  // The shared cached entry must be untouched for the next reader.
+  assert.equal(cached.modelVersion, "claude-sonnet-5");
 });
