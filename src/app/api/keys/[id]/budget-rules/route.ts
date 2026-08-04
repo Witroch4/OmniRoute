@@ -42,38 +42,43 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
 
-  const { id } = await params;
-  const key = await getApiKeyById(id);
-  if (!key || typeof key.id !== "string") {
-    return NextResponse.json({ error: "Key not found" }, { status: 404 });
+  try {
+    const { id } = await params;
+    const key = await getApiKeyById(id);
+    if (!key || typeof key.id !== "string") {
+      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+    }
+    return NextResponse.json({ rules: listAllModelBudgetRules(key.id) });
+  } catch (error) {
+    log.error("keys", "Error fetching API key budget rules", error);
+    return NextResponse.json({ error: "Failed to fetch budget rules" }, { status: 500 });
   }
-  return NextResponse.json({ rules: listAllModelBudgetRules(key.id) });
 }
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
 
-  const { id } = await params;
-  const key = await getApiKeyById(id);
-  if (!key || typeof key.id !== "string") {
-    return NextResponse.json({ error: "Key not found" }, { status: 404 });
-  }
-
-  let rules: ModelBudgetRuleInput[];
   try {
-    rules = normalizeBudgetRulesPayload(await request.json());
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Invalid payload" },
-      { status: 400 }
-    );
-  }
+    const { id } = await params;
+    const key = await getApiKeyById(id);
+    if (!key || typeof key.id !== "string") {
+      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+    }
 
-  try {
+    let rules: ModelBudgetRuleInput[];
+    try {
+      rules = normalizeBudgetRulesPayload(await request.json());
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid payload" },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json({ rules: replaceModelBudgetRules(key.id, rules) });
   } catch (error) {
-    log.error("BUDGET_ROUTING", `Failed to save rules for key ${key.id}: ${String(error)}`);
-    return NextResponse.json({ error: "Failed to save rules" }, { status: 500 });
+    log.error("keys", "Error saving API key budget rules", error);
+    return NextResponse.json({ error: "Failed to save budget rules" }, { status: 500 });
   }
 }
