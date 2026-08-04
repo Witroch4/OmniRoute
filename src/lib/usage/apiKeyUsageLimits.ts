@@ -450,8 +450,96 @@ async function getProviderWeeklyWindow(
   };
 }
 
-export async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promise<number> {
+export type SpendBasis = "normalized" | "real";
+
+async function sumUsageCostRows(rows: UsageCostRow[]): Promise<number> {
+  let total = 0;
+  for (const row of rows) {
+    const provider = typeof row.provider === "string" ? row.provider : "";
+    const model = typeof row.model === "string" ? row.model : "";
+    if (!provider || !model) continue;
+
+    total += await calculateCost(
+      provider,
+      model,
+      {
+        input: toNumber(row.promptTokens),
+        output: toNumber(row.completionTokens),
+        cacheRead: toNumber(row.cacheReadTokens),
+        cacheCreation: toNumber(row.cacheCreationTokens),
+        reasoning: toNumber(row.reasoningTokens),
+      },
+      { provider, model, serviceTier: row.serviceTier || "standard" }
+    );
+  }
+  return roundUsd(total);
+}
+
+/**
+ * Sum an API key's USD spend since `sinceIso`.
+ *
+ * `basis: "normalized"` (the default) prices each row by the model the CLIENT
+ * asked for — `billed_provider`/`billed_model` when a model budget rule
+ * redirected the request, the real pair otherwise. This is what every
+ * client-facing surface reports and what the key's USD quota is measured
+ * against, so a key that gets silently downgraded to Sonnet keeps burning its
+ * quota at Opus rates.
+ *
+ * `basis: "real"` prices by the model that actually ran. It drives the model
+ * budget rules themselves (a redirected row must count toward the family that
+ * SERVED it, or the opus -> sonnet -> haiku ladder could never advance past its
+ * first rung) and the min-spend guarantee. It is admin-only and must never
+ * reach a client-facing response.
+ */
+export async function getApiKeyUsdSpendSince(
+  apiKeyId: string,
+  sinceIso: string,
+  options: { basis?: SpendBasis } = {}
+): Promise<number> {
   if (!apiKeyId) return 0;
+  const basis = options.basis ?? "normalized";
+  const providerExpr =
+    basis === "normalized" ? "COALESCE(NULLIF(billed_provider, ''), provider)" : "provider";
+  const modelExpr = basis === "normalized" ? "COALESCE(NULLIF(billed_model, ''), model)" : "model";
+
+  const db = getDbInstance();
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        LOWER(${providerExpr}) as provider,
+        LOWER(${modelExpr}) as model,
+        COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        COALESCE(SUM(tokens_input), 0) as promptTokens,
+        COALESCE(SUM(tokens_output), 0) as completionTokens,
+        COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
+        COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+      FROM usage_history
+      WHERE api_key_id = @apiKeyId
+        AND timestamp >= @sinceIso
+        AND success = 1
+      GROUP BY LOWER(${providerExpr}), LOWER(${modelExpr}), serviceTier
+    `
+    )
+    .all({ apiKeyId, sinceIso }) as UsageCostRow[];
+
+  return sumUsageCostRows(rows);
+}
+
+/**
+ * Real USD spend for one provider + model family (glob over the bare model id),
+ * for one API key, since `sinceIso`. Always priced by the model that actually
+ * ran — see the `basis` note on getApiKeyUsdSpendSince for why the rules must
+ * use real rather than normalized spend.
+ */
+export async function getApiKeyFamilyRealSpendSince(
+  apiKeyId: string,
+  provider: string,
+  familyGlob: string,
+  sinceIso: string
+): Promise<number> {
+  if (!apiKeyId || !provider || !familyGlob) return 0;
   const db = getDbInstance();
   const rows = db
     .prepare(
@@ -469,36 +557,38 @@ export async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string)
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso
         AND success = 1
+        AND LOWER(provider) = @provider
+        AND LOWER(model) GLOB @familyGlob
       GROUP BY LOWER(provider), LOWER(model), serviceTier
     `
     )
-    .all({ apiKeyId, sinceIso }) as UsageCostRow[];
+    .all({
+      apiKeyId,
+      sinceIso,
+      provider: provider.toLowerCase(),
+      familyGlob: familyGlob.toLowerCase(),
+    }) as UsageCostRow[];
 
-  let total = 0;
-  for (const row of rows) {
-    const provider = typeof row.provider === "string" ? row.provider : "";
-    const model = typeof row.model === "string" ? row.model : "";
-    if (!provider || !model) continue;
+  return sumUsageCostRows(rows);
+}
 
-    total += await calculateCost(
-      provider,
-      model,
-      {
-        input: toNumber(row.promptTokens),
-        output: toNumber(row.completionTokens),
-        cacheRead: toNumber(row.cacheReadTokens),
-        cacheCreation: toNumber(row.cacheCreationTokens),
-        reasoning: toNumber(row.reasoningTokens),
-      },
-      {
-        provider,
-        model,
-        serviceTier: row.serviceTier || "standard",
-      }
-    );
+/**
+ * Start of the API key's current weekly window: the observed provider reset when
+ * one is known, otherwise a rolling 7 days. Shared by the key's USD quota and by
+ * model budget rules so both reset as a single event.
+ */
+export async function getApiKeyWeeklyWindowStartIso(
+  metadata: ApiKeyUsageLimitMetadata,
+  deps: ApiKeyUsageLimitDeps = {},
+  now: number = Date.now()
+): Promise<string> {
+  const resolvedDeps = await resolveDeps(deps);
+  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  if (weeklyWindow.windowStartIso) return weeklyWindow.windowStartIso;
+  if (weeklyWindow.resetAtIso) {
+    return new Date(Date.parse(weeklyWindow.resetAtIso) - WEEK_MS).toISOString();
   }
-
-  return roundUsd(total);
+  return getRollingWeekStartIso(now);
 }
 
 export async function getApiKeyUsageLimitStatus(
@@ -511,11 +601,7 @@ export async function getApiKeyUsageLimitStatus(
   const dailyResetAtIso = getFortalezaDayResetIso(now);
   const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
   const weeklyResetAtIso = weeklyWindow.resetAtIso;
-  const weeklyWindowStartIso = weeklyWindow.windowStartIso
-    ? weeklyWindow.windowStartIso
-    : weeklyResetAtIso
-      ? new Date(Date.parse(weeklyResetAtIso) - WEEK_MS).toISOString()
-      : getRollingWeekStartIso(now);
+  const weeklyWindowStartIso = await getApiKeyWeeklyWindowStartIso(metadata, resolvedDeps, now);
   const dailyLimitUsd = normalizeLimitUsd(metadata.dailyUsageLimitUsd);
   const weeklyLimitUsd = normalizeLimitUsd(metadata.weeklyUsageLimitUsd);
   const enabled = metadata.usageLimitEnabled === true;
