@@ -26,6 +26,11 @@ import { extractApiErrorMessage } from "@/shared/http/apiErrorMessage";
 import { hasProviderQuotaBypassScope } from "@/shared/constants/apiKeyPolicyScopes";
 import { UsageLimitSettings } from "./components/UsageLimitSettings";
 import { MinSpendGuaranteeSettings } from "./components/MinSpendGuaranteeSettings";
+import {
+  ModelBudgetRoutingSettings,
+  type ModelBudgetRuleDraft,
+} from "./components/ModelBudgetRoutingSettings";
+import { buildModelBudgetRulesSavePayload } from "./modelBudgetRulesPayload";
 import { ChaosModeAccessToggle } from "./components/ChaosModeAccessToggle";
 import { BypassProviderQuotaToggle } from "./components/BypassProviderQuotaToggle";
 
@@ -801,7 +806,8 @@ export default function ApiManagerPageClient() {
     blockedModels: string[],
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
-    minSpendGuaranteeUsd: number | null
+    minSpendGuaranteeUsd: number | null,
+    budgetRules: ModelBudgetRuleDraft[]
   ) => {
     if (!editingKey || !editingKey.id) return;
 
@@ -878,14 +884,32 @@ export default function ApiManagerPageClient() {
         }),
       });
 
-      if (res.ok) {
-        await fetchData();
-        setShowPermissionsModal(false);
-        setEditingKey(null);
-      } else {
+      if (!res.ok) {
         const data = await res.json();
         setPageError(extractApiErrorMessage(data, t("failedUpdatePermissions")));
+        return;
       }
+
+      // Model budget routing rules live in their own resource (Task 9 API) — save
+      // them alongside the key permissions PATCH above, not as part of its body.
+      const budgetRulesRes = await fetch(
+        `/api/keys/${encodeURIComponent(editingKey.id)}/budget-rules`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildModelBudgetRulesSavePayload(budgetRules)),
+        }
+      );
+
+      if (!budgetRulesRes.ok) {
+        const data = await budgetRulesRes.json();
+        setPageError(extractApiErrorMessage(data, t("failedUpdatePermissions")));
+        return;
+      }
+
+      await fetchData();
+      setShowPermissionsModal(false);
+      setEditingKey(null);
     } catch (error) {
       console.error("Error updating permissions:", error);
       setPageError(t("failedUpdatePermissionsRetry"));
@@ -1661,7 +1685,8 @@ const PermissionsModal = memo(function PermissionsModal({
     blockedModels: string[],
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
-    minSpendGuaranteeUsd: number | null
+    minSpendGuaranteeUsd: number | null,
+    budgetRules: ModelBudgetRuleDraft[]
   ) => void;
 }) {
   const t = useTranslations("apiManager");
@@ -1767,6 +1792,48 @@ const PermissionsModal = memo(function PermissionsModal({
       ? String(apiKey.minSpendGuaranteeUsd)
       : ""
   );
+  const [budgetRules, setBudgetRules] = useState<ModelBudgetRuleDraft[]>([]);
+
+  // Model budget routing rules are a separate resource (Task 9 API), not a field on
+  // the key payload — fetch them once when the modal opens for this key. The modal
+  // remounts per key (`key={editingKey.id}` at the call site), so a mount-only effect
+  // is correct here and re-fires for every newly opened key.
+  useEffect(() => {
+    if (!apiKey?.id) return;
+    let cancelled = false;
+    fetch(`/api/keys/${encodeURIComponent(apiKey.id)}/budget-rules`)
+      .then((res) => (res.ok ? res.json() : { rules: [] }))
+      .then(
+        (data: {
+          rules?: Array<{
+            enabled: boolean;
+            sourceProvider: string;
+            sourceFamily: string;
+            weeklyLimitUsd: number;
+            targetProvider: string;
+            targetFamily: string;
+          }>;
+        }) => {
+          if (cancelled) return;
+          setBudgetRules(
+            (data.rules ?? []).map((rule) => ({
+              enabled: rule.enabled,
+              sourceProvider: rule.sourceProvider,
+              sourceFamily: rule.sourceFamily,
+              weeklyLimitUsd: String(rule.weeklyLimitUsd),
+              targetProvider: rule.targetProvider,
+              targetFamily: rule.targetFamily,
+            }))
+          );
+        }
+      )
+      .catch(() => {
+        // Leave budgetRules empty — the key still opens, and the user can add rules.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey?.id]);
   const getModelDisplayName = useCallback(
     (modelId: string) =>
       modelId === CLAUDE_CODE_DEFAULT_MODEL_ID ? CLAUDE_CODE_DEFAULT_MODEL_NAME : modelId,
@@ -1963,7 +2030,8 @@ const PermissionsModal = memo(function PermissionsModal({
       blockedModels,
       chaosModeEnabled,
       minSpendGuaranteeEnabled,
-      parseUsdLimitInput(minSpendGuaranteeUsd)
+      parseUsdLimitInput(minSpendGuaranteeUsd),
+      budgetRules
     );
   }, [
     onSave,
@@ -2005,6 +2073,7 @@ const PermissionsModal = memo(function PermissionsModal({
     chaosModeEnabled,
     minSpendGuaranteeEnabled,
     minSpendGuaranteeUsd,
+    budgetRules,
     apiKey?.scopes,
     t,
   ]);
@@ -2598,6 +2667,7 @@ const PermissionsModal = memo(function PermissionsModal({
             onEnabledChange={setMinSpendGuaranteeEnabled}
             onGuaranteeUsdChange={setMinSpendGuaranteeUsd}
           />
+          <ModelBudgetRoutingSettings rules={budgetRules} onRulesChange={setBudgetRules} />
         </div>
 
         {/* Chaos Mode Access Toggle */}
