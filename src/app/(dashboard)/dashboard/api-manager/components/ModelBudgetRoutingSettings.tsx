@@ -56,7 +56,9 @@ const SELECT_CLASSNAME =
  *    provider they never chose. Handled by injecting the stored value as its own option
  *    when it isn't in the live `providers` list.
  */
-function ProviderField({
+/** Exported for reuse by `ModelFamilyMultiplierSettings.tsx` — same closed-set-of-connected-
+ * providers rationale applies there. */
+export function ProviderField({
   label,
   value,
   providers,

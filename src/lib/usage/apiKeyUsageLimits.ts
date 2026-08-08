@@ -2,6 +2,12 @@ import { getDbInstance } from "@/lib/db/core";
 import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
 import { calculateCost } from "./costCalculator";
+import {
+  applyFamilyMultiplier,
+  loadFamilyMultiplierRules,
+  resolveFamilyMultiplier,
+  type FamilyMultiplierRule,
+} from "./modelFamilyMultiplier";
 import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 
 const FORTALEZA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -452,14 +458,28 @@ async function getProviderWeeklyWindow(
 
 export type SpendBasis = "normalized" | "real";
 
-async function sumUsageCostRows(rows: UsageCostRow[]): Promise<number> {
+/**
+ * `multiplierRules` is non-null only for `basis: "normalized"` callers (see
+ * `getApiKeyUsdSpendSince` below) — a `basis: "real"` caller (the model
+ * budget rules' own real-spend check, the min-spend guarantee) must never
+ * have its total scaled, since the multiplier exists purely to shape what the
+ * client is billed, not what OmniRoute actually spent. Each row's
+ * `provider`/`model` is already the EFFECTIVE BILLED pair by the time it
+ * reaches here for normalized basis (see the `providerExpr`/`modelExpr`
+ * COALESCE in the caller), so resolving the multiplier directly off them is
+ * correct — no separate billed-vs-served split needed at this layer.
+ */
+async function sumUsageCostRows(
+  rows: UsageCostRow[],
+  multiplierRules: FamilyMultiplierRule[] | null = null
+): Promise<number> {
   let total = 0;
   for (const row of rows) {
     const provider = typeof row.provider === "string" ? row.provider : "";
     const model = typeof row.model === "string" ? row.model : "";
     if (!provider || !model) continue;
 
-    total += await calculateCost(
+    let rowCost = await calculateCost(
       provider,
       model,
       {
@@ -471,6 +491,13 @@ async function sumUsageCostRows(rows: UsageCostRow[]): Promise<number> {
       },
       { provider, model, serviceTier: row.serviceTier || "standard" }
     );
+
+    if (multiplierRules) {
+      const multiplier = resolveFamilyMultiplier(multiplierRules, provider, model);
+      rowCost = applyFamilyMultiplier(rowCost, multiplier);
+    }
+
+    total += rowCost;
   }
   return roundUsd(total);
 }
@@ -490,6 +517,12 @@ async function sumUsageCostRows(rows: UsageCostRow[]): Promise<number> {
  * SERVED it, or the opus -> sonnet -> haiku ladder could never advance past its
  * first rung) and the min-spend guarantee. It is admin-only and must never
  * reach a client-facing response.
+ *
+ * `basis: "normalized"` is also where the per-key model-family multiplier
+ * (migration 128) applies — every row here is already priced at the BILLED
+ * pair, so its family multiplier (if any) scales that row's cost before the
+ * sum. `basis: "real"` never loads multiplier rules at all, since the
+ * multiplier must never touch what OmniRoute actually paid upstream.
  */
 export async function getApiKeyUsdSpendSince(
   apiKeyId: string,
@@ -524,7 +557,8 @@ export async function getApiKeyUsdSpendSince(
     )
     .all({ apiKeyId, sinceIso }) as UsageCostRow[];
 
-  return sumUsageCostRows(rows);
+  const multiplierRules = basis === "normalized" ? await loadFamilyMultiplierRules(apiKeyId) : null;
+  return sumUsageCostRows(rows, multiplierRules);
 }
 
 /**

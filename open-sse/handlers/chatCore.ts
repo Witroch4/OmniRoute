@@ -198,6 +198,10 @@ import { finalizePendingScope, updatePendingScope } from "@/lib/usage/pendingReq
 import { recordCost } from "@/domain/costRules";
 import { calculateCost } from "@/lib/usage/costCalculator";
 import {
+  applyFamilyMultiplier,
+  getApiKeyFamilyMultiplier,
+} from "@/lib/usage/modelFamilyMultiplier.ts";
+import {
   buildClaudePassthroughToolNameMap,
   restoreClaudePassthroughToolNames,
   mergeResponseToolNameMap,
@@ -4041,23 +4045,43 @@ export async function handleChatCore({
     // the downgrade from the mismatch. `estimatedCost` above (served rates) still feeds
     // recordCost/quota-share/gamification below unchanged — those track OmniRoute's REAL
     // upstream spend, which genuinely happened at the served model's rates.
-    const headerResponseCost =
-      responseUsage && isModelBudgetRedirect(billedModel)
+    const isBudgetRedirect = isModelBudgetRedirect(billedModel);
+    // Effective BILLED pair: the redirect's ORIGIN when redirected, otherwise the served
+    // pair itself (a direct, non-redirected request is billed at what it asked for).
+    // Both the pricing lookup above and the family multiplier below (migration 128) key
+    // off this SAME pair — see modelFamilyMultiplier.ts's module doc for why a redirected
+    // request must take the family it was billed as, never the family that served it.
+    const billedProviderForCost = isBudgetRedirect ? billedProvider || provider : provider;
+    const billedModelForCost = isBudgetRedirect ? (billedModel as string) : model;
+    const normalizedBaseCost =
+      responseUsage && isBudgetRedirect
         ? await calculateCost(
             // No `as string` cast needed: `provider` is already used unconditionally as a
             // plain string just above (line ~4026) — it is always resolved by this point in
             // the success path. `billedProvider` is set in lockstep with `billedModel` (see
             // modelBudgetRouting.ts: both are captured from the same `input` at the top of
             // resolveModelBudgetRedirect, never independently), so inside this
-            // isModelBudgetRedirect(billedModel) branch it is always a real string too; the
-            // `|| provider` fallback only guards a pairing invariant violation, not a
-            // known-nullable value.
-            billedProvider || provider,
-            billedModel,
+            // isBudgetRedirect branch it is always a real string too; the `|| provider`
+            // fallback only guards a pairing invariant violation, not a known-nullable value.
+            billedProviderForCost,
+            billedModelForCost,
             responseUsage,
             { serviceTier: effectiveServiceTier }
           )
         : estimatedCost;
+    // Per-key, per-billed-family multiplier (migration 128) — the SAME shared resolver
+    // `getApiKeyUsdSpendSince`/the analytics route use, so this response's own
+    // X-OmniRoute-Response-Cost header, the recordCost() billedCost persisted below, and
+    // every read-time aggregate can never disagree about this request's normalized cost.
+    const familyMultiplier = apiKeyInfo?.id
+      ? await getApiKeyFamilyMultiplier(apiKeyInfo.id, billedProviderForCost, billedModelForCost)
+      : 1;
+    const headerResponseCost = applyFamilyMultiplier(normalizedBaseCost, familyMultiplier);
+    // Preserves the pre-existing "NULL means normalized == real, no backfill" contract
+    // (migration 127) for the common case where a key has neither a redirect nor a
+    // multiplier configured — recordCost() only gets an explicit billedCost when one of
+    // the two actually changes the number.
+    const shouldRecordBilledCost = isBudgetRedirect || familyMultiplier !== 1;
 
     if (postCallGuardrails.blocked) {
       const guardrailMessage = postCallGuardrails.message || "Response blocked by guardrail";
@@ -4085,7 +4109,7 @@ export async function handleChatCore({
         recordCost(
           apiKeyInfo.id,
           estimatedCost,
-          isModelBudgetRedirect(billedModel) ? headerResponseCost : undefined
+          shouldRecordBilledCost ? headerResponseCost : undefined
         );
       }
       log?.warn?.(
@@ -4200,7 +4224,7 @@ export async function handleChatCore({
       recordCost(
         apiKeyInfo.id,
         estimatedCost,
-        isModelBudgetRedirect(billedModel) ? headerResponseCost : undefined
+        shouldRecordBilledCost ? headerResponseCost : undefined
       );
     }
 

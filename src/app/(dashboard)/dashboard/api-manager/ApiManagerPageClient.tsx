@@ -32,6 +32,12 @@ import {
   type ModelBudgetRulesLoadStatus,
 } from "./components/ModelBudgetRoutingSettings";
 import { resolveModelBudgetRulesSave } from "./modelBudgetRulesPayload";
+import {
+  ModelFamilyMultiplierSettings,
+  type FamilyMultiplierDraft,
+  type FamilyMultipliersLoadStatus,
+} from "./components/ModelFamilyMultiplierSettings";
+import { resolveFamilyMultipliersSave } from "./familyMultipliersPayload";
 import { ChaosModeAccessToggle } from "./components/ChaosModeAccessToggle";
 import { BypassProviderQuotaToggle } from "./components/BypassProviderQuotaToggle";
 
@@ -809,7 +815,9 @@ export default function ApiManagerPageClient() {
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
     budgetRules: ModelBudgetRuleDraft[],
-    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus
+    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus,
+    familyMultipliers: FamilyMultiplierDraft[],
+    familyMultipliersLoadStatus: FamilyMultipliersLoadStatus
   ) => {
     if (!editingKey || !editingKey.id) return;
 
@@ -920,6 +928,34 @@ export default function ApiManagerPageClient() {
           // admin doesn't believe nothing was saved and re-attempt the whole form.
           setPageError(
             `Key permissions were saved, but the model budget routing rules were not: ${detail}`
+          );
+          return;
+        }
+      }
+
+      // Model family multipliers (migration 128) are their own resource too, saved the
+      // same way as the budget rules just above — same load-must-succeed-first gate
+      // (resolveFamilyMultipliersSave), same reason (an unloaded/failed local copy must
+      // never be sent as a clear-all PUT).
+      const familyMultipliersDecision = resolveFamilyMultipliersSave(
+        familyMultipliersLoadStatus,
+        familyMultipliers
+      );
+      if (familyMultipliersDecision.shouldSave && familyMultipliersDecision.payload) {
+        const familyMultipliersRes = await fetch(
+          `/api/keys/${encodeURIComponent(editingKey.id)}/family-multipliers`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(familyMultipliersDecision.payload),
+          }
+        );
+
+        if (!familyMultipliersRes.ok) {
+          const data = await familyMultipliersRes.json();
+          const detail = extractApiErrorMessage(data, t("failedUpdatePermissions"));
+          setPageError(
+            `Key permissions were saved, but the model family multipliers were not: ${detail}`
           );
           return;
         }
@@ -1705,7 +1741,9 @@ const PermissionsModal = memo(function PermissionsModal({
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
     budgetRules: ModelBudgetRuleDraft[],
-    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus
+    budgetRulesLoadStatus: ModelBudgetRulesLoadStatus,
+    familyMultipliers: FamilyMultiplierDraft[],
+    familyMultipliersLoadStatus: FamilyMultipliersLoadStatus
   ) => void;
 }) {
   const t = useTranslations("apiManager");
@@ -1879,6 +1917,57 @@ const PermissionsModal = memo(function PermissionsModal({
   }, [apiKey?.id]);
 
   useEffect(() => loadBudgetRules(), [loadBudgetRules]);
+
+  const [familyMultipliers, setFamilyMultipliers] = useState<FamilyMultiplierDraft[]>([]);
+  // Same "starts loading, not an implicit loaded-with-[]" contract as budgetRulesLoadStatus
+  // above — see resolveFamilyMultipliersSave() in familyMultipliersPayload.ts.
+  const [familyMultipliersLoadStatus, setFamilyMultipliersLoadStatus] =
+    useState<FamilyMultipliersLoadStatus>("loading");
+
+  // Model family multipliers (migration 128) are their own resource too — fetch them once
+  // per key the same way loadBudgetRules does, and reuse budgetRuleProviders for the
+  // provider dropdown (same closed set of connected providers).
+  const loadFamilyMultipliers = useCallback(() => {
+    if (!apiKey?.id) return () => {};
+    let cancelled = false;
+    setFamilyMultipliersLoadStatus("loading");
+    fetch(`/api/keys/${encodeURIComponent(apiKey.id)}/family-multipliers`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`family-multipliers GET failed with status ${res.status}`);
+        return res.json() as Promise<{
+          rules?: Array<{
+            enabled: boolean;
+            provider: string;
+            familyGlob: string;
+            multiplier: number;
+          }>;
+        }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setFamilyMultipliers(
+          (data.rules ?? []).map((rule) => ({
+            enabled: rule.enabled,
+            provider: rule.provider,
+            familyGlob: rule.familyGlob,
+            multiplier: String(rule.multiplier),
+          }))
+        );
+        setFamilyMultipliersLoadStatus("loaded");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Same reasoning as loadBudgetRules' catch: leave familyMultipliers as-is (still
+        // []) but flip the status to "error" so resolveFamilyMultipliersSave refuses to
+        // send that [] as a clear-all PUT.
+        setFamilyMultipliersLoadStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey?.id]);
+
+  useEffect(() => loadFamilyMultipliers(), [loadFamilyMultipliers]);
   const getModelDisplayName = useCallback(
     (modelId: string) =>
       modelId === CLAUDE_CODE_DEFAULT_MODEL_ID ? CLAUDE_CODE_DEFAULT_MODEL_NAME : modelId,
@@ -2077,7 +2166,9 @@ const PermissionsModal = memo(function PermissionsModal({
       minSpendGuaranteeEnabled,
       parseUsdLimitInput(minSpendGuaranteeUsd),
       budgetRules,
-      budgetRulesLoadStatus
+      budgetRulesLoadStatus,
+      familyMultipliers,
+      familyMultipliersLoadStatus
     );
   }, [
     onSave,
@@ -2121,6 +2212,8 @@ const PermissionsModal = memo(function PermissionsModal({
     minSpendGuaranteeUsd,
     budgetRules,
     budgetRulesLoadStatus,
+    familyMultipliers,
+    familyMultipliersLoadStatus,
     apiKey?.scopes,
     t,
   ]);
@@ -2727,6 +2820,13 @@ const PermissionsModal = memo(function PermissionsModal({
             onRulesChange={setBudgetRules}
             loadStatus={budgetRulesLoadStatus}
             onRetryLoad={loadBudgetRules}
+            providers={budgetRuleProviders}
+          />
+          <ModelFamilyMultiplierSettings
+            rules={familyMultipliers}
+            onRulesChange={setFamilyMultipliers}
+            loadStatus={familyMultipliersLoadStatus}
+            onRetryLoad={loadFamilyMultipliers}
             providers={budgetRuleProviders}
           />
         </div>
