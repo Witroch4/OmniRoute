@@ -26,7 +26,7 @@ import {
 
 import {
   buildCostExplorerRows,
-  resolveCostDisplayFractionDigits,
+  formatCurrencyCost,
   type CostExplorerCostBasis,
   type CostExplorerGroupBy,
   type CostExplorerRow,
@@ -175,29 +175,6 @@ function createCurrencyFormatter(locale: string) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-}
-
-function formatCurrencyCost(locale: string, value: number): string {
-  const numericValue = Number(value || 0);
-  if (!Number.isFinite(numericValue) || numericValue === 0) {
-    return new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(0);
-  }
-
-  // Shared with `costsMatchAtDisplayPrecision` (costExplorerUtils.ts) so the
-  // duplicate-value suppression rounds at the exact precision shown here, by
-  // construction rather than by keeping two copies of the same formula in sync.
-  const fractionDigits = resolveCostDisplayFractionDigits(numericValue);
-  return new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  }).format(numericValue);
 }
 
 function csvCell(value: string | number): string {

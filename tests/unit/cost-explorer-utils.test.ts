@@ -312,13 +312,18 @@ describe("costsMatchAtDisplayPrecision", () => {
     assert.equal(costsMatchAtDisplayPrecision(0.0105000000000001, 0.0104999999999999), true);
   });
 
-  it("does not let independent per-value fraction-digit selection defeat the comparison at a threshold boundary", () => {
-    // cost=0.0100000001 sits just above the 0.01 threshold (4 displayed digits);
-    // normalizedCostUsd=0.0099999999 sits just below it. Naively picking fraction
-    // digits per-value independently could format these as different-looking
-    // strings even though they're the same number to well beyond any displayed
-    // precision. Rounding both from cost's fraction-digit count keeps them equal.
-    assert.equal(costsMatchAtDisplayPrecision(0.0100000001, 0.0099999999), true);
+  it("REVISED in round 2 — a value straddling the $0.01 tier boundary is NOT treated as matching, even though it's numerically near-identical", () => {
+    // Round 1 rounded both values from cost's fraction-digit count alone, which
+    // made this pair compare equal (0.0100000001 has 4 displayed digits on its
+    // own tier, 0.0099999999 has 6 — anchoring on cost's 4 digits rounded both
+    // to 0.0100). That was itself an instance of the anchor-on-one-argument bug
+    // fix round 2 addresses generally: the renderer actually shows these as
+    // "$0.0100" (cost's own 4-digit tier) vs "$0.010000" (normalizedCostUsd's
+    // own 6-digit tier) — genuinely different strings, padding aside — so the
+    // string-comparison fix correctly does NOT suppress here. Showing two
+    // numbers that are this close is an acceptable trade-off; the alternative
+    // (round 1's behavior) is exactly the class of false positive round 2 fixes.
+    assert.equal(costsMatchAtDisplayPrecision(0.0100000001, 0.0099999999), false);
   });
 
   it("still finds a real difference when it lands exactly on a fraction-digit boundary", () => {
@@ -332,5 +337,41 @@ describe("costsMatchAtDisplayPrecision", () => {
     // Below $0.01, the display uses 6 fraction digits, so a gap this size (5e-6)
     // is visible at that precision and must NOT be suppressed.
     assert.equal(costsMatchAtDisplayPrecision(0.000001, 0.000006), false);
+  });
+
+  // --- Round 2 regression coverage: the reviewer's exact false-positive case ---
+  //
+  // Round 1 derived fraction digits from `cost` alone. `cost=1.00` sits at the
+  // coarse >=1 tier (2 digits: "$1.00"); `normalizedCostUsd=0.995` sits at the
+  // finer <1 tier on its OWN magnitude (4 digits: "$0.9950") — a visibly
+  // different string. Anchoring on `cost` rounded 0.995 to 2 digits too (1.00),
+  // making the two compare equal and suppressing a genuinely different pair.
+  // The bug was asymmetric — swapping the arguments happened to give the
+  // correct answer, purely because the anchor (now the second value) landed in
+  // the coarser tier in that direction. A fix must be correct in BOTH
+  // directions, which is exactly what pure string-equality guarantees for free
+  // (string equality is inherently symmetric — there is no "anchor" anymore).
+
+  it("no false positive at the $1.00 tier boundary — cost coarser, normalizedCostUsd finer (the reviewer's exact case)", () => {
+    assert.equal(costsMatchAtDisplayPrecision(1.0, 0.995), false);
+  });
+
+  it("no false positive at the $1.00 tier boundary — arguments reversed (this direction was already correct in round 1; must stay correct)", () => {
+    assert.equal(costsMatchAtDisplayPrecision(0.995, 1.0), false);
+  });
+
+  it("the $1.00 boundary check is symmetric", () => {
+    assert.equal(
+      costsMatchAtDisplayPrecision(1.0, 0.995),
+      costsMatchAtDisplayPrecision(0.995, 1.0)
+    );
+  });
+
+  it("no false positive at the $0.01 tier boundary in either argument order", () => {
+    // cost=0.01 sits at the >=0.01 tier (4 digits: "$0.0100"); 0.0099 sits just
+    // below it, at its OWN <0.01 tier (6 digits: "$0.009900") — different
+    // strings, so neither argument order may report a match.
+    assert.equal(costsMatchAtDisplayPrecision(0.01, 0.0099), false);
+    assert.equal(costsMatchAtDisplayPrecision(0.0099, 0.01), false);
   });
 });

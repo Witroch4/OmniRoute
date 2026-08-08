@@ -114,33 +114,83 @@ export function resolveCostDisplayFractionDigits(value: number): number {
   return 2;
 }
 
-function roundToFractionDigits(value: number, fractionDigits: number): number {
-  const factor = 10 ** fractionDigits;
-  return Math.round(value * factor) / factor;
+/**
+ * Formats a USD cost value the way the Cost Explorer displays it — variable
+ * fraction digits by magnitude (see `resolveCostDisplayFractionDigits`), with a
+ * fixed 2-digit `$0.00` for exactly zero. Moved here (out of `CostOverviewTab.tsx`,
+ * where it originated) so `costsMatchAtDisplayPrecision` below can call the EXACT
+ * function the table cells render through, not a re-derivation of its rounding
+ * rule — see that function's doc for why that distinction matters.
+ */
+export function formatCurrencyCost(locale: string, value: number): string {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue) || numericValue === 0) {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(0);
+  }
+
+  const fractionDigits = resolveCostDisplayFractionDigits(numericValue);
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(numericValue);
 }
+
+// Locale used ONLY for the `costsMatchAtDisplayPrecision` equality check below —
+// not for anything actually shown to a user. `Intl.NumberFormat` rounding (which
+// is what determines whether two values format to the same digits) does not vary
+// by locale; only grouping/decimal separators and currency symbol placement do,
+// and those are identical on both sides of the comparison regardless of which
+// locale is picked. Any fixed locale works; this one is arbitrary.
+const DISPLAY_EQUALITY_LOCALE = "en-US";
 
 /**
  * Whether `cost` (real) and `normalizedCostUsd` (billed) would render as the
- * identical number in the Cost Explorer table — i.e. whether showing both is
+ * identical STRING in the Cost Explorer table — i.e. whether showing both is
  * pointless duplication rather than a genuine real-vs-billed divergence. This is
  * what a "—" in the secondary cost column means: not "no data", but "identical to
  * the other column at the precision shown."
  *
- * Both values are rounded to the SAME fraction-digit count — derived from `cost`
- * only, never independently per value — before comparing. Deriving fraction
- * digits independently per value would let two numbers that sit on opposite
- * sides of a fraction-digit threshold (0.01 or 1.00) get rounded at different
- * precisions and spuriously compare unequal even though a human reading the
- * rendered strings would see the same number; deriving both from one reference
- * also means a sub-cent floating-point gap between two pricing-resolution passes
- * (e.g. 0.0105000000000001 vs 0.0104999999999999) rounds to the same value on
- * both sides and does not defeat the suppression.
+ * Round 1 of this fix rounded both values to a single shared fraction-digit
+ * count derived from `cost` alone, then compared the rounded numbers. That was
+ * wrong: the actual cell renderer (`formatCurrencyCost`) picks fraction digits
+ * PER VALUE, independently, from each value's own magnitude — so anchoring on
+ * `cost` produced false positives whenever `cost` landed in a coarser tier than
+ * `normalizedCostUsd` (e.g. `cost=1.00` → 2 digits → "$1.00"; `normalizedCostUsd
+ * =0.995` → 4 digits on its own → "$0.9950"; anchoring on cost's 2-digit tier
+ * rounded 0.995 to 1.00 and wrongly reported them as matching, hiding a visibly
+ * different pair of numbers and mislabeling the muted cell "Same as Cost"). The
+ * bug was asymmetric — anchoring on the OTHER argument gave the opposite wrong
+ * answer for the mirrored input — which is itself the tell that anchoring on
+ * either single argument can never be correct in general.
+ *
+ * Fixed by comparing the RENDERED STRINGS directly — `formatCurrencyCost(a) ===
+ * formatCurrencyCost(b)` is true, by construction, exactly when a user reading
+ * the table would see the same thing in both cells. This removes the entire
+ * class of tier-boundary mismatches (there is no "which argument to anchor on"
+ * question anymore) rather than fixing the one direction that got reported.
+ * Comparing rendered output is inherently symmetric, i.e.
+ * `costsMatchAtDisplayPrecision(a, b) === costsMatchAtDisplayPrecision(b, a)`
+ * always — round 1's anchor-on-first-argument version was not.
+ *
+ * One consequence, by design: a pair that sits exactly on a tier boundary and is
+ * numerically near-identical but independently renders with a different digit
+ * COUNT (e.g. `0.0100` at 4 digits vs `0.010000` at 6 digits for a value a
+ * fraction below the $0.01 threshold) is now correctly treated as NOT matching —
+ * the two strings really do differ, even though the gap is only trailing-zero
+ * padding. Showing both numbers in that rare case is the safe failure mode;
+ * silently hiding a real difference (the bug being fixed here) is not.
  */
 export function costsMatchAtDisplayPrecision(cost: number, normalizedCostUsd: number): boolean {
-  const fractionDigits = resolveCostDisplayFractionDigits(cost);
   return (
-    roundToFractionDigits(cost, fractionDigits) ===
-    roundToFractionDigits(normalizedCostUsd, fractionDigits)
+    formatCurrencyCost(DISPLAY_EQUALITY_LOCALE, cost) ===
+    formatCurrencyCost(DISPLAY_EQUALITY_LOCALE, normalizedCostUsd)
   );
 }
 
