@@ -39,16 +39,75 @@ export const EMPTY_BUDGET_RULE: ModelBudgetRuleDraft = {
   targetFamily: "",
 };
 
+const SELECT_CLASSNAME =
+  "w-full px-3 py-2 text-sm border border-border rounded-lg bg-background text-text-main focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed";
+
+/**
+ * Provider is a closed set on this instance (whatever has a connection), so it's a
+ * `<select>` rather than free text — a mistyped provider used to save silently and just
+ * never match anything, with no error anywhere. Two things this still has to get right:
+ *
+ * 1. Empty `providers` (connections not loaded yet, or the fetch failed) must not render
+ *    a `<select>` with zero real options — that would trap the admin into being unable to
+ *    fill the rule at all. Falls back to the original free-text `<Input>` in that case.
+ * 2. A rule already on file can name a provider that no longer has a connection (removed
+ *    since the rule was saved). That value must still show up as the selected option —
+ *    never silently coerced to blank/first-item — or the admin could save the rule with a
+ *    provider they never chose. Handled by injecting the stored value as its own option
+ *    when it isn't in the live `providers` list.
+ */
+function ProviderField({
+  label,
+  value,
+  providers,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  providers: string[];
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  if (providers.length === 0) {
+    return (
+      <div>
+        <label className="mb-1 block text-xs text-text-muted">{label}</label>
+        <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      </div>
+    );
+  }
+
+  const isKnownOrEmpty = value === "" || providers.includes(value);
+
+  return (
+    <div>
+      <label className="mb-1 block text-xs text-text-muted">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={SELECT_CLASSNAME}>
+        <option value="">Select provider…</option>
+        {!isKnownOrEmpty && <option value={value}>{value} (no longer connected)</option>}
+        {providers.map((provider) => (
+          <option key={provider} value={provider}>
+            {provider}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export function ModelBudgetRoutingSettings({
   rules,
   onRulesChange,
   loadStatus,
   onRetryLoad,
+  providers,
 }: {
   rules: ModelBudgetRuleDraft[];
   onRulesChange: (rules: ModelBudgetRuleDraft[]) => void;
   loadStatus: ModelBudgetRulesLoadStatus;
   onRetryLoad: () => void;
+  providers: string[];
 }) {
   const update = (index: number, patch: Partial<ModelBudgetRuleDraft>) =>
     onRulesChange(rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)));
@@ -115,14 +174,13 @@ export function ModelBudgetRoutingSettings({
         rules.map((rule, index) => (
           <div key={index} className="mt-3 rounded-md border border-border p-2">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">From provider</label>
-                <Input
-                  value={rule.sourceProvider}
-                  onChange={(e) => update(index, { sourceProvider: e.target.value })}
-                  placeholder="from provider"
-                />
-              </div>
+              <ProviderField
+                label="From provider"
+                value={rule.sourceProvider}
+                providers={providers}
+                placeholder="from provider"
+                onChange={(value) => update(index, { sourceProvider: value })}
+              />
               <div>
                 <label className="mb-1 block text-xs text-text-muted">From family</label>
                 <Input
@@ -143,14 +201,13 @@ export function ModelBudgetRoutingSettings({
                   placeholder="USD / week"
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">To provider</label>
-                <Input
-                  value={rule.targetProvider}
-                  onChange={(e) => update(index, { targetProvider: e.target.value })}
-                  placeholder="to provider"
-                />
-              </div>
+              <ProviderField
+                label="To provider"
+                value={rule.targetProvider}
+                providers={providers}
+                placeholder="to provider"
+                onChange={(value) => update(index, { targetProvider: value })}
+              />
               <div>
                 <label className="mb-1 block text-xs text-text-muted">To family</label>
                 <Input

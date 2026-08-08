@@ -1819,6 +1819,16 @@ const PermissionsModal = memo(function PermissionsModal({
   const [budgetRulesLoadStatus, setBudgetRulesLoadStatus] =
     useState<ModelBudgetRulesLoadStatus>("loading");
 
+  // Distinct, sorted providers actually configured on this instance — reuses the
+  // `allConnections` fetch from `/api/providers` already loaded for this modal instead of
+  // adding a second fetch. Backs the "From provider"/"To provider" dropdowns in
+  // ModelBudgetRoutingSettings so a rule's provider can't be mistyped into a value that
+  // silently never matches anything.
+  const budgetRuleProviders = useMemo(
+    () => Array.from(new Set(allConnections.map((c) => c.provider))).sort(),
+    [allConnections]
+  );
+
   // Model budget routing rules are a separate resource (Task 9 API), not a field on
   // the key payload — fetch them once when the modal opens for this key (and again on
   // manual retry from the panel). The modal remounts per key (`key={editingKey.id}` at
@@ -2141,6 +2151,14 @@ const PermissionsModal = memo(function PermissionsModal({
       isOpen={onClose ? isOpen : false}
       title={t("permissionsTitle", { name: apiKey?.name || "" })}
       onClose={onClose}
+      size="full"
+      // Default Modal sizes top out at `full` = max-w-4xl, which is too narrow for the
+      // model budget rule editor's 5-column row (columns were squeezed to ~60px each)
+      // and made USD quota / min-spend / Chaos Mode copy wrap over 2-3 lines. `cn()` uses
+      // tailwind-merge, so these max-w-* utilities replace (not stack with) the `full`
+      // preset's max-w-4xl at each breakpoint — grows on larger screens, still bounded by
+      // the modal wrapper's `w-full` + `p-4` on narrow viewports, so it never overflows.
+      className="max-w-4xl lg:max-w-5xl xl:max-w-6xl"
     >
       <div className="flex flex-col gap-4">
         {/* Key Name */}
@@ -2709,6 +2727,7 @@ const PermissionsModal = memo(function PermissionsModal({
             onRulesChange={setBudgetRules}
             loadStatus={budgetRulesLoadStatus}
             onRetryLoad={loadBudgetRules}
+            providers={budgetRuleProviders}
           />
         </div>
 
