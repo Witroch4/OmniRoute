@@ -613,6 +613,53 @@ export async function getApiKeyWeeklyWindowStartIso(
   return resolveWeeklyWindowStartIso(weeklyWindow, now);
 }
 
+export interface ApiKeyWeeklyWindowResolution {
+  /** Start of the window a caller should filter/report from. */
+  windowStartIso: string;
+  /** Provider-observed reset instant, or null when no reset has been observed yet. */
+  resetAtIso: string | null;
+  /**
+   * True when `windowStartIso` is anchored to an actual provider-observed
+   * reset (cache or `quota_snapshots`). False means `resolveWeeklyWindowStartIso`
+   * fell all the way back to a rolling 7 days (`getRollingWeekStartIso`) because
+   * no in-scope connection has ever advertised/observed a weekly reset — e.g. a
+   * fresh connection or an empty provider-limits cache. Callers that label this
+   * window for end users (the Cost Explorer "since reset" range, the API key
+   * quota card) must not present a `false` result as "since the provider
+   * reset" — the number is real, but the boundary is a guess, not an
+   * observation, and showing it unlabeled would silently misrepresent it.
+   */
+  isObserved: boolean;
+}
+
+/**
+ * Public entry point for callers outside the USD-quota path that need the
+ * key's current weekly window plus whether it is a real observed reset or a
+ * rolling-7d fallback — e.g. the Cost Explorer's "since reset" range, which
+ * must resolve through the SAME window the key's USD quota uses (not
+ * reimplement day arithmetic) and must know when to warn instead of silently
+ * labeling a rolling window as "since reset".
+ */
+export async function resolveApiKeyWeeklyWindow(
+  metadata: ApiKeyUsageLimitMetadata,
+  deps: ApiKeyUsageLimitDeps = {},
+  now: number = Date.now()
+): Promise<ApiKeyWeeklyWindowResolution> {
+  const resolvedDeps = await resolveDeps(deps);
+  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  const windowStartIso = await getApiKeyWeeklyWindowStartIso(
+    metadata,
+    resolvedDeps,
+    now,
+    weeklyWindow
+  );
+  return {
+    windowStartIso,
+    resetAtIso: weeklyWindow.resetAtIso,
+    isObserved: weeklyWindow.resetAtIso !== null,
+  };
+}
+
 export async function getApiKeyUsageLimitStatus(
   metadata: ApiKeyUsageLimitMetadata,
   deps: ApiKeyUsageLimitDeps = {}

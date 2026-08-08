@@ -615,3 +615,84 @@ test("a connection whose cache never advertised a weekly window does not gain on
   assert.equal(status.weeklyResetAtIso, null);
   assert.equal(status.weeklyWindowStartIso, "2026-06-13T14:30:00.000Z");
 });
+
+/**
+ * `resolveApiKeyWeeklyWindow` powers the Cost Explorer "since reset" range
+ * (`/api/usage/analytics?range=sinceReset`). Its whole point is to expose
+ * whether the window came from a real provider-observed reset or a
+ * rolling-7d fallback, so the UI can tell the difference instead of labeling
+ * a rolling window "since reset".
+ */
+test("resolveApiKeyWeeklyWindow reports isObserved=true and matches the USD quota's own weekly window", async () => {
+  const created = await apiKeysDb.createApiKey("SinceReset Key", "machine-limit-since-reset");
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const weeklyResetAt = "2026-06-25T20:00:00.000Z";
+  const deps = {
+    now: () => NOW,
+    getProviderConnectionById: async () => ({
+      id: "conn-claude",
+      provider: "claude",
+      isActive: true,
+    }),
+    getProviderConnections: async () => [],
+    getProviderLimitsCache: () => ({
+      plan: "Claude Max",
+      quotas: {
+        "weekly (7d)": {
+          used: 27,
+          total: 100,
+          resetAt: weeklyResetAt,
+        },
+      },
+      message: null,
+      fetchedAt: new Date(NOW).toISOString(),
+    }),
+    getAllProviderLimitsCache: () => ({}),
+  };
+
+  const resolution = await usageLimits.resolveApiKeyWeeklyWindow(
+    { ...metadata, allowedConnections: ["conn-claude"] },
+    deps,
+    NOW
+  );
+
+  assert.equal(resolution.isObserved, true);
+  assert.equal(resolution.resetAtIso, weeklyResetAt);
+  assert.equal(resolution.windowStartIso, "2026-06-18T20:00:00.000Z");
+
+  // Must be the SAME window the key's own USD quota status uses — the whole
+  // point of routing "since reset" through this helper instead of
+  // reimplementing day arithmetic.
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, allowedConnections: ["conn-claude"] },
+    deps
+  );
+  assert.equal(resolution.windowStartIso, status.weeklyWindowStartIso);
+});
+
+test("resolveApiKeyWeeklyWindow reports isObserved=false and a rolling-7d start when no provider reset has been observed", async () => {
+  const created = await apiKeysDb.createApiKey(
+    "SinceReset Undetermined Key",
+    "machine-limit-since-reset-2"
+  );
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const resolution = await usageLimits.resolveApiKeyWeeklyWindow(
+    { ...metadata, allowedConnections: [] },
+    {
+      now: () => NOW,
+      getProviderConnectionById: async () => null,
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => null,
+      getAllProviderLimitsCache: () => ({}),
+    },
+    NOW
+  );
+
+  assert.equal(resolution.isObserved, false);
+  assert.equal(resolution.resetAtIso, null);
+  assert.equal(resolution.windowStartIso, usageLimits.getRollingWeekStartIso(NOW));
+});

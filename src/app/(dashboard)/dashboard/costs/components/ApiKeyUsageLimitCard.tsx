@@ -46,7 +46,12 @@ function parseUsdInput(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function formatResetHint(resetAtIso: string | null): string {
+/**
+ * Exported so other cost-dashboard surfaces (e.g. the Cost Explorer "since
+ * reset" range) can render reset countdowns in the same "resets in 6d" style
+ * as this card instead of introducing a second format.
+ */
+export function formatResetHint(resetAtIso: string | null): string {
   if (!resetAtIso) return "fallback: rolling 7 days";
   const resetMs = Date.parse(resetAtIso);
   if (!Number.isFinite(resetMs)) return "fallback: rolling 7 days";

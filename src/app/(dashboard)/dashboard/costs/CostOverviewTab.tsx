@@ -41,7 +41,7 @@ import {
   parseExplorerGroupBy,
   type CostRange,
 } from "./costExplorerParams";
-import { ApiKeyUsageLimitCard } from "./components/ApiKeyUsageLimitCard";
+import { ApiKeyUsageLimitCard, formatResetHint } from "./components/ApiKeyUsageLimitCard";
 import { MetricCard } from "./components/MetricCard";
 import { useApiKeyUsageLimits } from "./useApiKeyUsageLimits";
 
@@ -137,6 +137,13 @@ interface UsageAnalyticsPayload {
   weeklyPattern: Array<{ day: string; avgTokens: number; totalTokens: number }>;
   activityMap: Record<string, number>;
   presetSummaries?: Record<string, { totalCost: number }>;
+  /**
+   * Only present when `range=sinceReset` was requested. `isObserved: false`
+   * means `resolveApiKeyWeeklyWindow` fell back to a rolling 7 days because no
+   * in-scope connection has an observed provider reset yet — the UI must show
+   * that caveat instead of labeling the window "since reset".
+   */
+  resetWindow?: { resetAtIso: string | null; isObserved: boolean; windowStartIso: string } | null;
 }
 
 const RANGE_OPTIONS: Array<{ value: CostRange; labelKey: string }> = [
@@ -145,6 +152,48 @@ const RANGE_OPTIONS: Array<{ value: CostRange; labelKey: string }> = [
   { value: "90d", labelKey: "range90d" },
   { value: "all", labelKey: "rangeAll" },
 ];
+
+// Hardcoded English, same rationale as COST_BASIS_OPTIONS below: this range's
+// label is a runtime-computed provider reset instant (see
+// formatSinceResetButtonLabel), not static copy a translation key can hold,
+// so it follows the local hardcoded-English convention rather than
+// half-introducing next-intl for one dynamic string. See
+// ui-followups-report.md.
+const SINCE_RESET_RANGE_VALUE: CostRange = "sinceReset";
+
+function formatSinceResetButtonLabel(
+  resetWindow: UsageAnalyticsPayload["resetWindow"] | undefined
+): string {
+  if (!resetWindow) return "Since reset";
+  if (!resetWindow.isObserved) return "Since reset (rolling 7d — no reset observed yet)";
+  return `Since reset (${formatResetHint(resetWindow.resetAtIso)})`;
+}
+
+/**
+ * Detail line for the "Selected Window" metric card when `range=sinceReset`
+ * — the actual cut-off instant plus the same "resets in 6d" countdown style
+ * as the API key USD quota card (`formatResetHint`), so the owner never has
+ * to memorize the reset date to know what the number above it means. When
+ * the window is an undeterminable rolling-7d fallback (no provider reset
+ * observed for any in-scope connection yet), this says so instead of
+ * silently presenting a rolling window as "since reset".
+ */
+function formatSinceResetWindowDetail(
+  resetWindow: UsageAnalyticsPayload["resetWindow"] | undefined,
+  locale: string
+): string {
+  if (!resetWindow) return "Since reset";
+  if (!resetWindow.isObserved) {
+    return "No provider reset observed yet — showing a rolling 7 days instead";
+  }
+  const cutLabel = new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(resetWindow.windowStartIso));
+  return `Since ${cutLabel} (${formatResetHint(resetWindow.resetAtIso)})`;
+}
 
 const EXPLORER_GROUP_OPTIONS: Array<{
   value: CostExplorerGroupBy;
@@ -364,9 +413,10 @@ export default function CostOverviewTab() {
     };
   }, [apiKeyFilter, range, costBasis, t]);
 
-  const selectedRangeLabel = t(
-    RANGE_OPTIONS.find((option) => option.value === range)?.labelKey || "range30d"
-  );
+  const selectedRangeLabel =
+    range === SINCE_RESET_RANGE_VALUE
+      ? formatSinceResetWindowDetail(analytics?.resetWindow, locale)
+      : t(RANGE_OPTIONS.find((option) => option.value === range)?.labelKey || "range30d");
   const summary = analytics?.summary || {
     totalCost: 0,
     totalRequests: 0,
@@ -539,10 +589,16 @@ export default function CostOverviewTab() {
               </div>
             )}
             <SegmentedControl
-              options={RANGE_OPTIONS.map((option) => ({
-                value: option.value,
-                label: t(option.labelKey),
-              }))}
+              options={[
+                ...RANGE_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: t(option.labelKey),
+                })),
+                {
+                  value: SINCE_RESET_RANGE_VALUE,
+                  label: formatSinceResetButtonLabel(analytics?.resetWindow),
+                },
+              ]}
               value={range}
               onChange={(value) => setRange(value as CostRange)}
             />

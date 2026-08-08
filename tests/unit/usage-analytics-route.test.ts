@@ -14,6 +14,8 @@ const localDb = await import("../../src/lib/localDb.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
 const analyticsRoute = await import("../../src/app/api/usage/analytics/route.ts");
+const providersDb = await import("../../src/lib/db/providers.ts");
+const providerLimitsDb = await import("../../src/lib/db/providerLimits.ts");
 
 const clearPendingRequests = usageHistory.clearPendingRequests;
 const EXPECTED_TOTAL_COST = 0.020925;
@@ -779,4 +781,183 @@ test("GET /api/usage/analytics does not throw Unknown named parameter with apiKe
   // The exact count depends on raw-vs-aggregated boundary; we only need to
   // confirm the endpoint returns 200 without throwing.
   assert.ok(typeof body.summary.totalRequests === "number");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// range=sinceReset — resolves through resolveApiKeyWeeklyWindow (the same
+// helper the API key USD quota uses) instead of day arithmetic. See
+// resolveSinceResetRangeWindow in route.ts.
+// ──────────────────────────────────────────────────────────────────────────
+
+test("GET /api/usage/analytics range=sinceReset scopes the window to a single filtered API key's own connection", async () => {
+  const connection = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: `sincereset-single-${Math.random().toString(16).slice(2, 8)}`,
+    apiKey: "sk-test",
+  });
+  const connectionId = connection.id as string;
+
+  // Reset in 2 days -> window start is ~5 days ago, narrower than a rolling
+  // 7 days. This is the load-bearing assertion: a row 6 days old must be
+  // EXCLUDED (day arithmetic for "7d" would have included it).
+  const resetAtIso = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  providerLimitsDb.setProviderLimitsCache(connectionId, {
+    quotas: { "weekly (7d)": { used: 10, total: 100, resetAt: resetAtIso } },
+    plan: "Test Plan",
+    message: null,
+    fetchedAt: new Date().toISOString(),
+  });
+
+  const apiKey = await apiKeysDb.createApiKey("SinceReset Single Key", "machine-since-reset-1");
+  await apiKeysDb.updateApiKeyPermissions(apiKey.id, { allowedConnections: [connectionId] });
+
+  const db = core.getDbInstance();
+  const insertUsage = db.prepare(
+    `INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  // 6 days ago: before the reset-anchored window start (~5d ago) -> excluded.
+  insertUsage.run(
+    "openai",
+    "gpt-4o",
+    connectionId,
+    apiKey.id,
+    apiKey.name,
+    100,
+    50,
+    1,
+    200,
+    new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
+  );
+  // 3 days ago: after the reset-anchored window start -> included.
+  insertUsage.run(
+    "openai",
+    "gpt-4o",
+    connectionId,
+    apiKey.id,
+    apiKey.name,
+    100,
+    50,
+    1,
+    200,
+    new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+  );
+
+  const response = await analyticsRoute.GET(
+    makeRequest(`http://localhost/api/usage/analytics?range=sinceReset&apiKeyIds=${apiKey.id}`)
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.resetWindow?.isObserved, true);
+  assert.equal(body.resetWindow?.resetAtIso, resetAtIso);
+  assert.equal(
+    body.summary.totalRequests,
+    1,
+    "only the row after the reset-anchored window start should count, not the one a rolling 7d would also include"
+  );
+});
+
+test("GET /api/usage/analytics range=sinceReset falls back to all active connections when zero or multiple API keys are filtered", async () => {
+  const soonerConnection = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: `sincereset-sooner-${Math.random().toString(16).slice(2, 8)}`,
+    apiKey: "sk-test",
+  });
+  const laterConnection = await providersDb.createProviderConnection({
+    provider: "anthropic",
+    authType: "apikey",
+    name: `sincereset-later-${Math.random().toString(16).slice(2, 8)}`,
+    apiKey: "sk-test-2",
+  });
+
+  const soonerResetAtIso = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  const laterResetAtIso = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+  providerLimitsDb.setProviderLimitsCache(soonerConnection.id as string, {
+    quotas: { "weekly (7d)": { used: 10, total: 100, resetAt: soonerResetAtIso } },
+    plan: "Test Plan",
+    message: null,
+    fetchedAt: new Date().toISOString(),
+  });
+  providerLimitsDb.setProviderLimitsCache(laterConnection.id as string, {
+    quotas: { "weekly (7d)": { used: 10, total: 100, resetAt: laterResetAtIso } },
+    plan: "Test Plan",
+    message: null,
+    fetchedAt: new Date().toISOString(),
+  });
+
+  // No apiKeyIds filter at all -> falls back to "all active connections".
+  const noFilterResponse = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics?range=sinceReset")
+  );
+  const noFilterBody = await noFilterResponse.json();
+  assert.equal(noFilterResponse.status, 200);
+  assert.equal(noFilterBody.resetWindow?.isObserved, true);
+  assert.equal(
+    noFilterBody.resetWindow?.resetAtIso,
+    soonerResetAtIso,
+    "with no key filter, the earliest observed reset across all active connections wins"
+  );
+
+  // Two keys filtered -> same "all active connections" fallback, not either key's own scope.
+  const keyOne = await apiKeysDb.createApiKey("SinceReset Multi Key One", "machine-since-reset-2");
+  const keyTwo = await apiKeysDb.createApiKey("SinceReset Multi Key Two", "machine-since-reset-3");
+  await apiKeysDb.updateApiKeyPermissions(keyOne.id, {
+    allowedConnections: [laterConnection.id as string],
+  });
+  await apiKeysDb.updateApiKeyPermissions(keyTwo.id, {
+    allowedConnections: [soonerConnection.id as string],
+  });
+
+  const multiKeyResponse = await analyticsRoute.GET(
+    makeRequest(
+      `http://localhost/api/usage/analytics?range=sinceReset&apiKeyIds=${keyOne.id},${keyTwo.id}`
+    )
+  );
+  const multiKeyBody = await multiKeyResponse.json();
+  assert.equal(multiKeyResponse.status, 200);
+  assert.equal(multiKeyBody.resetWindow?.isObserved, true);
+  assert.equal(
+    multiKeyBody.resetWindow?.resetAtIso,
+    soonerResetAtIso,
+    "multiple filtered keys must resolve the same all-active-connections window as no filter, not either key's own scope"
+  );
+});
+
+test("GET /api/usage/analytics range=sinceReset marks the window unobserved and still returns data when no provider reset can be determined", async () => {
+  const db = core.getDbInstance();
+  // No provider connections / provider_limits_cache at all -> no reset can be observed.
+  db.prepare(
+    `INSERT INTO usage_history (provider, model, connection_id, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "openai",
+    "gpt-4o",
+    "no-reset-conn",
+    100,
+    50,
+    1,
+    200,
+    new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
+  );
+
+  const response = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics?range=sinceReset")
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    body.resetWindow?.isObserved,
+    false,
+    "the UI must be told this is a rolling-7d fallback, not a real observed reset"
+  );
+  assert.equal(body.resetWindow?.resetAtIso, null);
+  assert.equal(
+    body.summary.totalRequests,
+    1,
+    "the fallback must still return real data (rolling 7 days), never silently drop it"
+  );
 });

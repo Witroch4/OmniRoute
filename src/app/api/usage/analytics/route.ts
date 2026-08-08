@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { getApiKeys } from "@/lib/db/apiKeys";
+import { getApiKeyById, getApiKeys } from "@/lib/db/apiKeys";
 import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
+import {
+  resolveApiKeyWeeklyWindow,
+  type ApiKeyUsageLimitMetadata,
+} from "@/lib/usage/apiKeyUsageLimits";
 import {
   buildUnifiedSource,
   buildPresetUnifiedSource,
@@ -54,6 +58,44 @@ function getRangeStartIso(range: string): string | null {
   }
 
   return start.toISOString();
+}
+
+/**
+ * Window resolution for `range=sinceReset` — deliberately NOT a case inside
+ * `getRangeStartIso` above. That function is pure day arithmetic and is on
+ * the hot path for every other range (including the `presets` recompute
+ * loop), so it must stay synchronous and DB-free. "Since reset" instead
+ * resolves through `resolveApiKeyWeeklyWindow` (the same helper the API key
+ * USD quota is measured against), which is async and hits `provider_limits_cache`
+ * / `quota_snapshots` — only this one range pays for that lookup.
+ *
+ * Scope follows the `apiKeyIds` filter already on the request:
+ *   - exactly one key -> that key's own window (its `allowedConnections`,
+ *     mirroring `keys/[id]/usage-limits/route.ts`);
+ *   - zero or several keys -> the window over all active connections
+ *     (`resolveApiKeyWeeklyWindow` already falls back to that when
+ *     `allowedConnections` is empty). The provider reset is a property of the
+ *     connection/account, not of any one key, so this is the same instant in
+ *     practice for a single-connection deployment.
+ */
+async function resolveSinceResetRangeWindow(apiKeyIds: string[]): Promise<{
+  windowStartIso: string;
+  resetAtIso: string | null;
+  isObserved: boolean;
+}> {
+  let metadata: ApiKeyUsageLimitMetadata = { id: "", allowedConnections: [] };
+
+  if (apiKeyIds.length === 1) {
+    const key = await getApiKeyById(apiKeyIds[0]);
+    if (key && typeof key.id === "string") {
+      metadata = {
+        id: key.id,
+        allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
+      };
+    }
+  }
+
+  return resolveApiKeyWeeklyWindow(metadata);
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -372,7 +414,29 @@ export async function GET(request: Request) {
     const apiKeyIds = apiKeyIdsParam ? apiKeyIdsParam.split(",").filter(Boolean) : [];
     const costBasis = parseCostBasis(searchParams.get("costBasis"));
 
-    const sinceIso = startDate || getRangeStartIso(range);
+    // Explicit startDate (custom date-range picker) always wins, same as before.
+    // Otherwise "sinceReset" resolves asynchronously through the provider's
+    // observed weekly window; every other range keeps the pure/sync arithmetic
+    // path unchanged (see resolveSinceResetRangeWindow's doc comment).
+    let sinceIso: string | null;
+    let resetWindow: {
+      resetAtIso: string | null;
+      isObserved: boolean;
+      windowStartIso: string;
+    } | null = null;
+    if (startDate) {
+      sinceIso = startDate;
+    } else if (range === "sinceReset") {
+      const resolved = await resolveSinceResetRangeWindow(apiKeyIds);
+      sinceIso = resolved.windowStartIso;
+      resetWindow = {
+        resetAtIso: resolved.resetAtIso,
+        isObserved: resolved.isObserved,
+        windowStartIso: resolved.windowStartIso,
+      };
+    } else {
+      sinceIso = getRangeStartIso(range);
+    }
     const untilIso = endDate || null;
     const presetsParam = searchParams.get("presets");
 
@@ -980,6 +1044,10 @@ export async function GET(request: Request) {
       dailyByModel,
       modelNames,
       range,
+      // Only set for range=sinceReset — see resolveSinceResetRangeWindow. The
+      // UI must not present a `!isObserved` window as "since the provider
+      // reset"; it is a rolling-7d fallback wearing that range's clothes.
+      resetWindow,
     } as any;
 
     if (presetsParam) {
