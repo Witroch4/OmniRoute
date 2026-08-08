@@ -157,6 +157,26 @@ function resolveRowPricingPair(
   };
 }
 
+/**
+ * `costBasis` query param — grouping mode for the Cost Explorer table
+ * (`/dashboard/costs`), not a pricing change. `real` (default, unchanged
+ * behavior) groups byModel/byProvider by the model that actually SERVED the
+ * request. `billed` groups them by what the client ASKED for — the pair a
+ * model-budget rule redirected FROM — via `COALESCE(billed*, *)`, same basis
+ * `computeUsageRowNormalizedCost`/`getApiKeyUsdSpendSince` already use.
+ *
+ * Only byModel and byProvider bucket identity is actually provider/model —
+ * byAccount (bucketed by connection_id) and byServiceTier (bucketed by
+ * service_tier) are basis-invariant: which physical account/tier served a
+ * request never depends on what the client asked for, so those two already
+ * expose both `cost` and `normalizedCost` per bucket with no regrouping
+ * needed (Task 11). byApiKey is bucketed by API key identity, also
+ * basis-invariant, for the same reason.
+ */
+function parseCostBasis(value: string | null): "real" | "billed" {
+  return value === "billed" ? "billed" : "real";
+}
+
 function computeUsageRowCost(
   row: Record<string, unknown>,
   pricingByProvider: PricingByProvider,
@@ -214,6 +234,97 @@ function computeUsageRowStandardCost(
   );
 }
 
+interface BilledProviderRow {
+  provider: string;
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+  successRatePct: number;
+  cost: number;
+  normalizedCost: number;
+}
+
+/**
+ * `byProvider` for `costBasis=billed` — buckets by `COALESCE(billed_provider,
+ * provider)` instead of the real (served) provider, derived from `modelRows`
+ * (`getModelUsageRows`) since that query already carries billed_provider per
+ * row while `getProviderUsageRows` does not. See the comment at its call site
+ * in `GET` for why re-deriving from the finer-grained model rows is exact.
+ */
+function buildBilledProviderRows(
+  modelRows: Array<Record<string, unknown>>,
+  pricingByProvider: PricingByProvider,
+  computeCostFromPricing: ComputeCostFromPricing
+): BilledProviderRow[] {
+  const providerMap = new Map<
+    string,
+    {
+      provider: string;
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      latencyWeightedTotal: number;
+      successfulRequests: number;
+      cost: number;
+      normalizedCost: number;
+    }
+  >();
+
+  for (const row of modelRows) {
+    const realProvider = toStringValue(row.provider);
+    if (!realProvider) continue;
+    const billedProvider = toStringValue(row.billedProvider) || realProvider;
+    const requests = toNumber(row.requests);
+
+    const existing = providerMap.get(billedProvider) || {
+      provider: billedProvider,
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      latencyWeightedTotal: 0,
+      successfulRequests: 0,
+      cost: 0,
+      normalizedCost: 0,
+    };
+
+    existing.requests += requests;
+    existing.promptTokens += toNumber(row.promptTokens);
+    existing.completionTokens += toNumber(row.completionTokens);
+    existing.totalTokens += toNumber(row.totalTokens);
+    existing.latencyWeightedTotal += toNumber(row.avgLatencyMs) * requests;
+    existing.successfulRequests += toNumber(row.successfulRequests);
+    // Real cost is always priced at the model that actually ran, regardless
+    // of which bucket the row lands in — same contract as `computeUsageRowCost`
+    // everywhere else in this route.
+    existing.cost += computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+    existing.normalizedCost += computeUsageRowNormalizedCost(
+      row,
+      pricingByProvider,
+      computeCostFromPricing
+    );
+    providerMap.set(billedProvider, existing);
+  }
+
+  return Array.from(providerMap.values())
+    .map((row) => ({
+      provider: row.provider,
+      requests: row.requests,
+      promptTokens: row.promptTokens,
+      completionTokens: row.completionTokens,
+      totalTokens: row.totalTokens,
+      avgLatencyMs: row.requests > 0 ? Math.round(row.latencyWeightedTotal / row.requests) : 0,
+      successRatePct:
+        row.requests > 0 ? Number(((row.successfulRequests / row.requests) * 100).toFixed(2)) : 0,
+      cost: roundCost(row.cost),
+      normalizedCost: roundCost(row.normalizedCost),
+    }))
+    .sort((left, right) => right.requests - left.requests);
+}
+
 function computeUsageSavingsTokens(
   row: Record<string, unknown>,
   serviceTier: string,
@@ -259,6 +370,7 @@ export async function GET(request: Request) {
     const endDate = searchParams.get("endDate") || undefined;
     const apiKeyIdsParam = searchParams.get("apiKeyIds") || "";
     const apiKeyIds = apiKeyIdsParam ? apiKeyIdsParam.split(",").filter(Boolean) : [];
+    const costBasis = parseCostBasis(searchParams.get("costBasis"));
 
     const sinceIso = startDate || getRangeStartIso(range);
     const untilIso = endDate || null;
@@ -521,20 +633,28 @@ export async function GET(request: Request) {
 
     const modelMap = new Map<string, Record<string, unknown>>();
     for (const row of modelRows) {
-      const model = row.model as string;
-      const provider = row.provider as string;
-      const short = normalizeModelName(model);
+      const realModel = row.model as string;
+      const realProvider = row.provider as string;
+      // `costBasis=real` (default) groups by the served pair — byte-identical
+      // to pre-costBasis behavior. `costBasis=billed` groups by what the
+      // client asked for, so a redirected row's requests/tokens/cost land in
+      // the REQUESTED family's bucket instead of the family that actually ran.
+      const groupProvider =
+        costBasis === "billed" ? toStringValue(row.billedProvider) || realProvider : realProvider;
+      const groupModel =
+        costBasis === "billed" ? toStringValue(row.billedModel) || realModel : realModel;
+      const short = normalizeModelName(groupModel);
       const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
       const normalizedCost = computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing
       );
-      const key = `${provider}::${model}`;
+      const key = `${groupProvider}::${groupModel}`;
       const existing = modelMap.get(key) || {
         model: short,
-        provider,
-        rawModel: model,
+        provider: groupProvider,
+        rawModel: groupModel,
         requests: 0,
         promptTokens: 0,
         completionTokens: 0,
@@ -613,22 +733,35 @@ export async function GET(request: Request) {
     // so the dashboard can warn instead of under-reporting.
     const pricingGaps = collectPricingGaps(pricingByProvider, providerCostRows);
 
-    const byProvider = providerRows.map((row) => ({
-      provider: row.provider,
-      requests: Number(row.requests),
-      promptTokens: Number(row.promptTokens),
-      completionTokens: Number(row.completionTokens),
-      totalTokens: Number(row.totalTokens),
-      avgLatencyMs: Math.round(Number(row.avgLatencyMs)),
-      successRatePct:
-        Number(row.requests) > 0
-          ? Number((Number(row.successfulRequests) / Number(row.requests)) * 100).toFixed(2)
-          : 0,
-      cost: roundCost(providerCostByProvider.get(toStringValue(row.provider)) || 0),
-      normalizedCost: roundCost(
-        providerNormalizedCostByProvider.get(toStringValue(row.provider)) || 0
-      ),
-    }));
+    // `providerRows` (getProviderUsageRows) only groups by the REAL provider —
+    // it carries no billed_provider dimension, so it can't answer "how many
+    // requests did the client BILL to provider X" (a rule can redirect across
+    // providers, not just families within one). costBasis=real reuses it
+    // unchanged (zero behavior change from before this param existed).
+    // costBasis=billed instead re-derives provider-level requests/tokens/
+    // latency/success from `modelRows`, which already carries billed_provider
+    // per row (Task 11) at a finer grain than provider-only — summing it back
+    // up to provider level is a strict coarsening of the same rows, so it's
+    // exact, not an approximation.
+    const byProvider =
+      costBasis === "billed"
+        ? buildBilledProviderRows(modelRows, pricingByProvider, computeCostFromPricing)
+        : providerRows.map((row) => ({
+            provider: row.provider,
+            requests: Number(row.requests),
+            promptTokens: Number(row.promptTokens),
+            completionTokens: Number(row.completionTokens),
+            totalTokens: Number(row.totalTokens),
+            avgLatencyMs: Math.round(Number(row.avgLatencyMs)),
+            successRatePct:
+              Number(row.requests) > 0
+                ? Number((Number(row.successfulRequests) / Number(row.requests)) * 100).toFixed(2)
+                : 0,
+            cost: roundCost(providerCostByProvider.get(toStringValue(row.provider)) || 0),
+            normalizedCost: roundCost(
+              providerNormalizedCostByProvider.get(toStringValue(row.provider)) || 0
+            ),
+          }));
 
     const accountCostByAccount = new Map<string, number>();
     const accountNormalizedCostByAccount = new Map<string, number>();
@@ -833,6 +966,7 @@ export async function GET(request: Request) {
     const analytics = {
       summary,
       pricingGaps,
+      costBasis,
       dailyTrend,
       activityMap,
       byModel,

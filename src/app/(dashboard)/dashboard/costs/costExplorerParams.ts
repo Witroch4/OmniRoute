@@ -1,4 +1,4 @@
-import { type CostExplorerGroupBy } from "./costExplorerUtils";
+import { type CostExplorerCostBasis, type CostExplorerGroupBy } from "./costExplorerUtils";
 
 export type CostRange = "7d" | "30d" | "90d" | "all";
 
@@ -10,6 +10,7 @@ const EXPLORER_GROUP_VALUES = new Set<CostExplorerGroupBy>([
   "account",
   "serviceTier",
 ]);
+const COST_BASIS_VALUES = new Set<CostExplorerCostBasis>(["real", "billed"]);
 
 /** Hydrate the Cost Explorer date range from an untrusted URL param. Falls back to "30d". */
 export function parseCostRange(value: string | null): CostRange {
@@ -21,6 +22,13 @@ export function parseExplorerGroupBy(value: string | null): CostExplorerGroupBy 
   return value && EXPLORER_GROUP_VALUES.has(value as CostExplorerGroupBy)
     ? (value as CostExplorerGroupBy)
     : "provider";
+}
+
+/** Hydrate the Cost Explorer cost basis from an untrusted URL param. Falls back to "real". */
+export function parseCostBasis(value: string | null): CostExplorerCostBasis {
+  return value && COST_BASIS_VALUES.has(value as CostExplorerCostBasis)
+    ? (value as CostExplorerCostBasis)
+    : "real";
 }
 
 /**

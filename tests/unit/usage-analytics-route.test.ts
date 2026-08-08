@@ -423,6 +423,127 @@ test("GET /api/usage/analytics prices a redirected row at the served model for c
   assertClose(serviceTierEntry.normalizedCost, normalizedCost);
 });
 
+test("GET /api/usage/analytics?costBasis=billed regroups byModel and byProvider onto the requested (billed) pair, moving request counts off the served pair", async () => {
+  // Same-provider redirect: served claude-sonnet, billed claude-opus.
+  await localDb.updatePricing({
+    anthropic: {
+      "claude-sonnet": { input: 3, output: 15 },
+      "claude-opus": { input: 15, output: 75 },
+    },
+  });
+
+  const db = core.getDbInstance();
+  const timestamp = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO usage_history
+       (provider, model, billed_provider, billed_model, connection_id,
+        tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "anthropic",
+    "claude-sonnet",
+    "anthropic",
+    "claude-opus",
+    "redirect-conn",
+    1000,
+    500,
+    1,
+    200,
+    timestamp
+  );
+  // A second, never-redirected claude-opus request — same family, no billed_* columns.
+  db.prepare(
+    `INSERT INTO usage_history
+       (provider, model, connection_id, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run("anthropic", "claude-opus", "native-opus-conn", 1000, 500, 1, 200, timestamp);
+  // Cross-provider redirect: served on openai (gpt-4o, priced in the global beforeEach),
+  // billed to anthropic/claude-opus — exercises byProvider moving requests across providers.
+  db.prepare(
+    `INSERT INTO usage_history
+       (provider, model, billed_provider, billed_model, connection_id,
+        tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "openai",
+    "gpt-4o",
+    "anthropic",
+    "claude-opus",
+    "cross-provider-conn",
+    1000,
+    500,
+    1,
+    200,
+    timestamp
+  );
+
+  const sonnetRealCost = (1000 / 1_000_000) * 3 + (500 / 1_000_000) * 15; // 0.0105
+  const opusNativeCost = (1000 / 1_000_000) * 15 + (500 / 1_000_000) * 75; // 0.0525
+  const gpt4oRealCost = (1000 / 1_000_000) * 2.5 + (500 / 1_000_000) * 10; // 0.0075
+  const opusBilledCost = opusNativeCost; // same rate, used for both redirects' normalizedCost
+
+  // --- Default (real) basis: unchanged, three-way split by SERVED family/provider. ---
+  const realResponse = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics")
+  );
+  const realBody = await realResponse.json();
+  assert.equal(realResponse.status, 200);
+  assert.equal(realBody.costBasis, "real");
+
+  const realSonnet = realBody.byModel.find((m) => m.model === "claude-sonnet");
+  const realOpus = realBody.byModel.find((m) => m.model === "claude-opus");
+  assert.equal(realSonnet.requests, 1);
+  assert.equal(realOpus.requests, 1);
+  assertClose(realSonnet.cost, sonnetRealCost);
+  assertClose(realOpus.cost, opusNativeCost);
+
+  const realOpenaiProvider = realBody.byProvider.find((p) => p.provider === "openai");
+  const realAnthropicProvider = realBody.byProvider.find((p) => p.provider === "anthropic");
+  assert.equal(realOpenaiProvider.requests, 1);
+  assert.equal(realAnthropicProvider.requests, 2);
+
+  // --- Billed basis: regrouped by what the client asked for. ---
+  const billedResponse = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics?costBasis=billed")
+  );
+  const billedBody = await billedResponse.json();
+  assert.equal(billedResponse.status, 200);
+  assert.equal(billedBody.costBasis, "billed");
+
+  // claude-sonnet had zero unredirected traffic in this fixture, so it must
+  // vanish from byModel entirely once billed grouping moves its one request
+  // onto claude-opus — a stale $0 sonnet row would be exactly the "identical
+  // numbers" confusion this mode exists to fix.
+  assert.ok(
+    !billedBody.byModel.some((m) => m.model === "claude-sonnet"),
+    "claude-sonnet must not appear in byModel once all its traffic is billed as claude-opus"
+  );
+  const billedOpus = billedBody.byModel.find(
+    (m) => m.model === "claude-opus" && m.provider === "anthropic"
+  );
+  assert.ok(billedOpus, "claude-opus must absorb both the redirected and native opus requests");
+  // Absorbs: the redirected sonnet-served row + the native opus row. The
+  // cross-provider (openai-served) row is billed to anthropic but as a
+  // DIFFERENT model (also claude-opus here, so it merges into the same
+  // bucket) — requests grows to 3, not 2.
+  assert.equal(billedOpus.requests, 3);
+  assertClose(billedOpus.cost, sonnetRealCost + opusNativeCost + gpt4oRealCost);
+  assertClose(billedOpus.normalizedCost, opusBilledCost * 3);
+
+  // byProvider: the openai-served, anthropic-billed row moves its request off
+  // "openai" and onto "anthropic".
+  const billedOpenaiProvider = billedBody.byProvider.find((p) => p.provider === "openai");
+  const billedAnthropicProvider = billedBody.byProvider.find((p) => p.provider === "anthropic");
+  assert.ok(
+    !billedOpenaiProvider,
+    "openai must not appear in byProvider once its only request is billed to anthropic"
+  );
+  assert.ok(billedAnthropicProvider);
+  assert.equal(billedAnthropicProvider.requests, 3);
+  assertClose(billedAnthropicProvider.cost, sonnetRealCost + opusNativeCost + gpt4oRealCost);
+  assertClose(billedAnthropicProvider.normalizedCost, opusBilledCost * 3);
+});
+
 test("GET /api/usage/analytics does not double-count raw and aggregated rows", async () => {
   const db = core.getDbInstance();
   const today = new Date();

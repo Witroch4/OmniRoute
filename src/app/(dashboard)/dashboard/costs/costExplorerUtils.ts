@@ -1,4 +1,14 @@
 export type CostExplorerGroupBy = "provider" | "model" | "apiKey" | "account" | "serviceTier";
+/**
+ * Which figure the explorer treats as "the" cost for sorting/share/avg purposes.
+ * `real` (default) = what actually ran (the served model's rates) — unchanged
+ * behavior from before this mode existed. `billed` = what the client is charged
+ * (the requested model's rates; identical to `real` for any row a model-budget
+ * rule never touched). Both figures are always present on every row regardless
+ * of basis — this only changes which one drives `avgCostPerRequest`/`sharePct`
+ * and the caller's default sort key/column emphasis.
+ */
+export type CostExplorerCostBasis = "real" | "billed";
 export type CostExplorerSortKey =
   | "name"
   | "cost"
@@ -125,12 +135,14 @@ function getSortValue(row: CostExplorerRow, sortKey: CostExplorerSortKey): strin
 export function buildCostExplorerRows({
   analytics,
   groupBy,
+  costBasis = "real",
   searchQuery = "",
   sortKey = "cost",
   sortDirection = "desc",
 }: {
   analytics: CostExplorerAnalyticsPayload | null | undefined;
   groupBy: CostExplorerGroupBy;
+  costBasis?: CostExplorerCostBasis;
   searchQuery?: string;
   sortKey?: CostExplorerSortKey;
   sortDirection?: CostExplorerSortDirection;
@@ -139,8 +151,21 @@ export function buildCostExplorerRows({
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const sourceRows = getGroupRows(analytics, groupBy);
-  const totalCost = toFiniteNumber(analytics.summary?.totalCost);
+  const totalRealCost = toFiniteNumber(analytics.summary?.totalCost);
   const totalRequests = toFiniteNumber(analytics.summary?.totalRequests);
+  // Sum of normalizedCost across every row in this dimension. Unlike
+  // `totalRealCost` (a server-computed summary figure), there is no
+  // server-side "total normalized" summary today, but the sum is dimension-
+  // invariant — it's the same underlying usage_history rows regrouped, so
+  // summing here is equivalent to summing at the source. Only meaningful in
+  // "billed" basis; unused (and untested against a server figure) otherwise.
+  const totalNormalizedCost = sourceRows.reduce((sum, row) => {
+    const cost = toFiniteNumber(row.cost);
+    const normalizedCost =
+      row.normalizedCost === undefined ? cost : toFiniteNumber(row.normalizedCost);
+    return sum + normalizedCost;
+  }, 0);
+  const totalCost = costBasis === "billed" ? totalNormalizedCost : totalRealCost;
 
   return sourceRows
     .map((row, index) => {
@@ -153,9 +178,10 @@ export function buildCostExplorerRows({
       const normalizedCostUsd =
         row.normalizedCost === undefined ? cost : toFiniteNumber(row.normalizedCost);
       const totalTokens = toFiniteNumber(row.totalTokens);
+      const primaryCost = costBasis === "billed" ? normalizedCostUsd : cost;
       const useCostForShare = totalCost > 0;
       const shareBase = useCostForShare ? totalCost : totalRequests;
-      const shareValue = useCostForShare ? cost : requests;
+      const shareValue = useCostForShare ? primaryCost : requests;
 
       return {
         id: `${groupBy}:${name}:${detail}:${index}`,
@@ -168,7 +194,7 @@ export function buildCostExplorerRows({
         totalTokens,
         cost,
         normalizedCostUsd,
-        avgCostPerRequest: requests > 0 ? cost / requests : 0,
+        avgCostPerRequest: requests > 0 ? primaryCost / requests : 0,
         sharePct: shareBase > 0 ? (shareValue / shareBase) * 100 : 0,
       };
     })

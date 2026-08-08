@@ -172,6 +172,59 @@ describe("buildCostExplorerRows", () => {
     assert.equal(rows[0].sharePct, 40);
   });
 
+  it("uses normalizedCostUsd for avgCostPerRequest/sharePct when costBasis is billed", () => {
+    const redirectedAnalytics: CostExplorerAnalyticsPayload = {
+      summary: { totalCost: 10.5, totalRequests: 2 },
+      byModel: [
+        {
+          provider: "anthropic",
+          model: "claude-sonnet",
+          requests: 1,
+          totalTokens: 1500,
+          cost: 10.5, // real: priced at sonnet (served) rates
+          normalizedCost: 52.5, // billed: priced at opus (requested) rates
+        },
+        {
+          provider: "anthropic",
+          model: "claude-haiku",
+          requests: 1,
+          totalTokens: 500,
+          cost: 1,
+          // no normalizedCost field: never redirected, real === billed
+        },
+      ],
+    };
+
+    const realRows = buildCostExplorerRows({
+      analytics: redirectedAnalytics,
+      groupBy: "model",
+      costBasis: "real",
+    });
+    const sonnetReal = realRows.find((row) => row.name === "claude-sonnet");
+    assert.equal(sonnetReal.avgCostPerRequest, 10.5);
+    // Real basis: share is cost/summary.totalCost = 10.5/10.5 = 100%.
+    assert.equal(sonnetReal.sharePct, 100);
+
+    const billedRows = buildCostExplorerRows({
+      analytics: redirectedAnalytics,
+      groupBy: "model",
+      costBasis: "billed",
+    });
+    const sonnetBilled = billedRows.find((row) => row.name === "claude-sonnet");
+    const haikuBilled = billedRows.find((row) => row.name === "claude-haiku");
+    // Billed basis: avgCostPerRequest follows normalizedCostUsd, not cost.
+    assert.equal(sonnetBilled.avgCostPerRequest, 52.5);
+    // Billed basis: share is normalizedCostUsd / sum(normalizedCostUsd across the
+    // dimension) = 52.5 / (52.5 + 1) = ~98.13%, not summary.totalCost (10.5), which
+    // would silently mis-attribute nearly all share to the wrong total.
+    assert.ok(Math.abs(sonnetBilled.sharePct - (52.5 / 53.5) * 100) < 1e-9);
+    assert.ok(Math.abs(haikuBilled.sharePct - (1 / 53.5) * 100) < 1e-9);
+    // The raw `cost`/`normalizedCostUsd` fields never change with costBasis — only
+    // which one downstream (avg/share) treats as primary changes.
+    assert.equal(sonnetBilled.cost, 10.5);
+    assert.equal(sonnetBilled.normalizedCostUsd, 52.5);
+  });
+
   it("keeps share percentages cost-based when paid and free rows are mixed", () => {
     const mixedAnalytics: CostExplorerAnalyticsPayload = {
       summary: {

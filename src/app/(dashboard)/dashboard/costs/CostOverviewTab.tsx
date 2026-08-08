@@ -26,6 +26,7 @@ import {
 
 import {
   buildCostExplorerRows,
+  type CostExplorerCostBasis,
   type CostExplorerGroupBy,
   type CostExplorerRow,
   type CostExplorerSortDirection,
@@ -34,6 +35,7 @@ import {
 
 import {
   parseApiKeyIds,
+  parseCostBasis,
   parseCostRange,
   parseExplorerGroupBy,
   type CostRange,
@@ -316,6 +318,16 @@ export default function CostOverviewTab() {
   const [explorerGroupBy, setExplorerGroupBy] = useState<CostExplorerGroupBy>(() =>
     parseExplorerGroupBy(searchParams.get("groupBy"))
   );
+  // Which model/provider the Cost Explorer buckets requests under: "real" (default,
+  // unchanged behavior) = the model that served the request; "billed" = the model the
+  // client asked for. Unlike `explorerGroupBy` (a pure client-side reshuffle of an
+  // already-fetched payload), this changes byModel/byProvider bucket MEMBERSHIP itself —
+  // a redirected request's counts move from the serving family's row to the requested
+  // family's row — so it round-trips through `/api/usage/analytics?costBasis=...` rather
+  // than being computed client-side.
+  const [costBasis, setCostBasis] = useState<CostExplorerCostBasis>(() =>
+    parseCostBasis(searchParams.get("costBasis"))
+  );
   const [explorerSearch, setExplorerSearch] = useState("");
   const [explorerSortKey, setExplorerSortKey] = useState<CostExplorerSortKey>("cost");
   const [explorerSortDirection, setExplorerSortDirection] =
@@ -338,6 +350,7 @@ export default function CostOverviewTab() {
           presets: "1d,7d,30d",
         });
         if (apiKeyFilter) params.set("apiKeyIds", apiKeyFilter);
+        if (costBasis === "billed") params.set("costBasis", costBasis);
         const response = await fetch(`/api/usage/analytics?${params.toString()}`);
         if (!response.ok) {
           throw new Error(t("overviewLoadFailed"));
@@ -369,7 +382,7 @@ export default function CostOverviewTab() {
     return () => {
       active = false;
     };
-  }, [apiKeyFilter, range, t]);
+  }, [apiKeyFilter, range, costBasis, t]);
 
   const selectedRangeLabel = t(
     RANGE_OPTIONS.find((option) => option.value === range)?.labelKey || "range30d"
@@ -443,11 +456,19 @@ export default function CostOverviewTab() {
       buildCostExplorerRows({
         analytics: localizedAnalytics,
         groupBy: explorerGroupBy,
+        costBasis,
         searchQuery: explorerSearch,
         sortKey: explorerSortKey,
         sortDirection: explorerSortDirection,
       }),
-    [localizedAnalytics, explorerGroupBy, explorerSearch, explorerSortDirection, explorerSortKey]
+    [
+      localizedAnalytics,
+      explorerGroupBy,
+      costBasis,
+      explorerSearch,
+      explorerSortDirection,
+      explorerSortKey,
+    ]
   );
   const explorerVisibleRows = explorerRows.slice(0, 50);
 
@@ -459,6 +480,20 @@ export default function CostOverviewTab() {
 
     setExplorerSortKey(sortKey);
     setExplorerSortDirection(sortKey === "name" ? "asc" : "desc");
+  }
+
+  function handleCostBasisChange(nextBasis: CostExplorerCostBasis) {
+    setCostBasis(nextBasis);
+    // The two basis-tied columns swap which one is "primary" — follow that swap
+    // in the active sort key too, so the default sort (desc by primary cost)
+    // keeps making sense after the toggle. Any other active sort key (requests,
+    // tokens, share, avg) is left alone.
+    setExplorerSortKey((currentSortKey) => {
+      if (currentSortKey === "cost" || currentSortKey === "normalizedCostUsd") {
+        return nextBasis === "billed" ? "normalizedCostUsd" : "cost";
+      }
+      return currentSortKey;
+    });
   }
 
   if (loading && !analytics) {
@@ -602,12 +637,14 @@ export default function CostOverviewTab() {
           value: option.value,
           label: t(option.labelKey),
         }))}
+        costBasis={costBasis}
         searchQuery={explorerSearch}
         sortKey={explorerSortKey}
         sortDirection={explorerSortDirection}
         locale={locale}
         hasCostData={hasCostData}
         onGroupByChange={setExplorerGroupBy}
+        onCostBasisChange={handleCostBasisChange}
         onSearchChange={setExplorerSearch}
         onSort={handleExplorerSort}
       />
@@ -903,17 +940,29 @@ export default function CostOverviewTab() {
   );
 }
 
+// Hardcoded English, matching the existing "Normalized cost" column/caption this toggle
+// extends (#omniroute-model-budget-family-routing Task 11) — that area of the Cost
+// Explorer never went through next-intl even though the rest of this file does, so new
+// strings here follow the LOCAL convention rather than half-introducing translation keys
+// for only this feature. See ui-followups-report.md for the full rationale.
+const COST_BASIS_OPTIONS: Array<{ value: CostExplorerCostBasis; label: string }> = [
+  { value: "real", label: "Real" },
+  { value: "billed", label: "Billed" },
+];
+
 function CostExplorerCard({
   rows,
   totalRows,
   groupBy,
   groupOptions,
+  costBasis,
   searchQuery,
   sortKey,
   sortDirection,
   locale,
   hasCostData,
   onGroupByChange,
+  onCostBasisChange,
   onSearchChange,
   onSort,
 }: {
@@ -921,12 +970,14 @@ function CostExplorerCard({
   totalRows: number;
   groupBy: CostExplorerGroupBy;
   groupOptions: Array<{ value: CostExplorerGroupBy; label: string }>;
+  costBasis: CostExplorerCostBasis;
   searchQuery: string;
   sortKey: CostExplorerSortKey;
   sortDirection: CostExplorerSortDirection;
   locale: string;
   hasCostData: boolean;
   onGroupByChange: (groupBy: CostExplorerGroupBy) => void;
+  onCostBasisChange: (costBasis: CostExplorerCostBasis) => void;
   onSearchChange: (query: string) => void;
   onSort: (sortKey: CostExplorerSortKey) => void;
 }) {
@@ -937,6 +988,10 @@ function CostExplorerCard({
     () => new Intl.NumberFormat(locale, { notation: "compact" }),
     [locale]
   );
+  const isBilled = costBasis === "billed";
+  // Which column is "the" cost in the active mode — bolded, and what
+  // avgCostPerRequest/sharePct/default-sort are computed from (buildCostExplorerRows).
+  const primaryCostKey: CostExplorerSortKey = isBilled ? "normalizedCostUsd" : "cost";
 
   const columns = useMemo<
     Array<{
@@ -947,14 +1002,18 @@ function CostExplorerCard({
   >(
     () => [
       { key: "name", label: t("dimension"), align: "left" },
-      { key: "cost", label: t("cost"), align: "right" },
-      { key: "normalizedCostUsd", label: "Normalized cost", align: "right" },
+      { key: "cost", label: isBilled ? "Real cost (as served)" : t("cost"), align: "right" },
+      {
+        key: "normalizedCostUsd",
+        label: isBilled ? "Billed cost" : "Normalized cost",
+        align: "right",
+      },
       { key: "requests", label: t("requests"), align: "right" },
       { key: "totalTokens", label: t("tokens"), align: "right" },
       { key: "avgCostPerRequest", label: t("avgCostPerRequest"), align: "right" },
       { key: "sharePct", label: t("share"), align: "right" },
     ],
-    [t]
+    [t, isBilled]
   );
 
   function renderSortIcon(columnKey: CostExplorerSortKey) {
@@ -994,6 +1053,13 @@ function CostExplorerCard({
             options={groupOptions}
             value={groupBy}
             onChange={(value) => onGroupByChange(value as CostExplorerGroupBy)}
+          />
+          <SegmentedControl
+            options={COST_BASIS_OPTIONS}
+            value={costBasis}
+            onChange={(value) => onCostBasisChange(value as CostExplorerCostBasis)}
+            size="sm"
+            aria-label="Cost basis"
           />
           <label className="relative block min-w-55">
             <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">
@@ -1060,10 +1126,22 @@ function CostExplorerCard({
                         ) : null}
                       </div>
                     </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
+                    <td
+                      className={`py-3 text-right font-mono ${
+                        primaryCostKey === "cost"
+                          ? "font-semibold text-text-main"
+                          : "text-text-muted"
+                      }`}
+                    >
                       {formatCost(row.cost)}
                     </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
+                    <td
+                      className={`py-3 text-right font-mono ${
+                        primaryCostKey === "normalizedCostUsd"
+                          ? "font-semibold text-text-main"
+                          : "text-text-muted"
+                      }`}
+                    >
                       {formatCost(row.normalizedCostUsd)}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
@@ -1097,9 +1175,22 @@ function CostExplorerCard({
           </div>
           <p className="mt-3 text-xs text-text-muted">{formatRowCount()}</p>
           <p className="mt-1 text-xs text-text-muted">
-            Normalized cost prices each request at the model the client asked for. It differs from
-            Cost only for requests a model budget rule rerouted, and it is the figure every API key
-            quota and <code>@@om-usage</code> reading is measured against.
+            {isBilled ? (
+              <>
+                Grouped by the model each request was <strong>billed</strong> as — what the client
+                asked for. Billed cost is the figure every API key quota and <code>@@om-usage</code>{" "}
+                reading is measured against; Real cost (as served) shows what actually ran. The two
+                differ, and requests move between rows, only for traffic a model budget rule
+                rerouted.
+              </>
+            ) : (
+              <>
+                Grouped by the model that actually <strong>served</strong> each request. Normalized
+                cost prices the same rows at what the client asked for — it only differs from Cost
+                for requests a model budget rule rerouted; switch to Billed to see those requests
+                counted under the family the client asked for instead.
+              </>
+            )}
           </p>
         </>
       )}
