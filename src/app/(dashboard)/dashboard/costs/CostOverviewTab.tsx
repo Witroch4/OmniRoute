@@ -26,6 +26,7 @@ import {
 
 import {
   buildCostExplorerRows,
+  resolveCostDisplayFractionDigits,
   type CostExplorerCostBasis,
   type CostExplorerGroupBy,
   type CostExplorerRow,
@@ -187,8 +188,10 @@ function formatCurrencyCost(locale: string, value: number): string {
     }).format(0);
   }
 
-  const absValue = Math.abs(numericValue);
-  const fractionDigits = absValue < 0.01 ? 6 : absValue < 1 ? 4 : 2;
+  // Shared with `costsMatchAtDisplayPrecision` (costExplorerUtils.ts) so the
+  // duplicate-value suppression rounds at the exact precision shown here, by
+  // construction rather than by keeping two copies of the same formula in sync.
+  const fractionDigits = resolveCostDisplayFractionDigits(numericValue);
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
@@ -1133,7 +1136,16 @@ function CostExplorerCard({
                           : "text-text-muted"
                       }`}
                     >
-                      {formatCost(row.cost)}
+                      {primaryCostKey !== "cost" && row.costsMatchDisplay ? (
+                        <span
+                          title="Same as the billed cost — this row was never redirected"
+                          aria-label="Same as the billed cost"
+                        >
+                          —
+                        </span>
+                      ) : (
+                        formatCost(row.cost)
+                      )}
                     </td>
                     <td
                       className={`py-3 text-right font-mono ${
@@ -1142,7 +1154,16 @@ function CostExplorerCard({
                           : "text-text-muted"
                       }`}
                     >
-                      {formatCost(row.normalizedCostUsd)}
+                      {primaryCostKey !== "normalizedCostUsd" && row.costsMatchDisplay ? (
+                        <span
+                          title="Same as Cost — this row was never redirected"
+                          aria-label="Same as Cost"
+                        >
+                          —
+                        </span>
+                      ) : (
+                        formatCost(row.normalizedCostUsd)
+                      )}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
                       {numberFormatter.format(row.requests)}
@@ -1181,14 +1202,17 @@ function CostExplorerCard({
                 asked for. Billed cost is the figure every API key quota and <code>@@om-usage</code>{" "}
                 reading is measured against; Real cost (as served) shows what actually ran. The two
                 differ, and requests move between rows, only for traffic a model budget rule
-                rerouted.
+                rerouted — a muted <span aria-hidden="true">—</span> in the Real cost column means
+                it&apos;s identical to Billed cost, not that data is missing.
               </>
             ) : (
               <>
                 Grouped by the model that actually <strong>served</strong> each request. Normalized
                 cost prices the same rows at what the client asked for — it only differs from Cost
                 for requests a model budget rule rerouted; switch to Billed to see those requests
-                counted under the family the client asked for instead.
+                counted under the family the client asked for instead. A muted{" "}
+                <span aria-hidden="true">—</span> in the Normalized cost column means it&apos;s
+                identical to Cost, not that data is missing.
               </>
             )}
           </p>

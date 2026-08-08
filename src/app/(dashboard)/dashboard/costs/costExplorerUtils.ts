@@ -75,6 +75,14 @@ export interface CostExplorerRow {
    * model budget rule rerouted the request — see `CostExplorerBreakdownRow`.
    */
   normalizedCostUsd: number;
+  /**
+   * `cost` and `normalizedCostUsd` render as the same number for this row (see
+   * `costsMatchAtDisplayPrecision`). The Cost Explorer table uses this to print
+   * "—" in the secondary cost column instead of repeating the number — never to
+   * change sorting/filtering, which always use the real underlying `cost`/
+   * `normalizedCostUsd` values regardless of this flag.
+   */
+  costsMatchDisplay: boolean;
   avgCostPerRequest: number;
   sharePct: number;
 }
@@ -90,6 +98,50 @@ const GROUP_LABEL_FIELDS: Record<CostExplorerGroupBy, Array<keyof CostExplorerBr
 function toFiniteNumber(value: unknown): number {
   const numericValue = Number(value || 0);
   return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+/**
+ * Fraction digits the Cost Explorer's currency formatter (`formatCurrencyCost` in
+ * `CostOverviewTab.tsx`) uses to display a given USD value. Exported so both the
+ * display formatter and the duplicate-value suppression below round at the exact
+ * same precision — a value that would render identically to another must be
+ * *treated* as identical, not just usually agree by coincidence.
+ */
+export function resolveCostDisplayFractionDigits(value: number): number {
+  const absValue = Math.abs(value);
+  if (absValue < 0.01) return 6;
+  if (absValue < 1) return 4;
+  return 2;
+}
+
+function roundToFractionDigits(value: number, fractionDigits: number): number {
+  const factor = 10 ** fractionDigits;
+  return Math.round(value * factor) / factor;
+}
+
+/**
+ * Whether `cost` (real) and `normalizedCostUsd` (billed) would render as the
+ * identical number in the Cost Explorer table — i.e. whether showing both is
+ * pointless duplication rather than a genuine real-vs-billed divergence. This is
+ * what a "—" in the secondary cost column means: not "no data", but "identical to
+ * the other column at the precision shown."
+ *
+ * Both values are rounded to the SAME fraction-digit count — derived from `cost`
+ * only, never independently per value — before comparing. Deriving fraction
+ * digits independently per value would let two numbers that sit on opposite
+ * sides of a fraction-digit threshold (0.01 or 1.00) get rounded at different
+ * precisions and spuriously compare unequal even though a human reading the
+ * rendered strings would see the same number; deriving both from one reference
+ * also means a sub-cent floating-point gap between two pricing-resolution passes
+ * (e.g. 0.0105000000000001 vs 0.0104999999999999) rounds to the same value on
+ * both sides and does not defeat the suppression.
+ */
+export function costsMatchAtDisplayPrecision(cost: number, normalizedCostUsd: number): boolean {
+  const fractionDigits = resolveCostDisplayFractionDigits(cost);
+  return (
+    roundToFractionDigits(cost, fractionDigits) ===
+    roundToFractionDigits(normalizedCostUsd, fractionDigits)
+  );
 }
 
 function getRowLabel(row: CostExplorerBreakdownRow, groupBy: CostExplorerGroupBy): string {
@@ -194,6 +246,7 @@ export function buildCostExplorerRows({
         totalTokens,
         cost,
         normalizedCostUsd,
+        costsMatchDisplay: costsMatchAtDisplayPrecision(cost, normalizedCostUsd),
         avgCostPerRequest: requests > 0 ? primaryCost / requests : 0,
         sharePct: shareBase > 0 ? (shareValue / shareBase) * 100 : 0,
       };

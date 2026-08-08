@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildCostExplorerRows,
+  costsMatchAtDisplayPrecision,
   type CostExplorerAnalyticsPayload,
 } from "../../src/app/(dashboard)/dashboard/costs/costExplorerUtils";
 
@@ -263,5 +264,73 @@ describe("buildCostExplorerRows", () => {
       rows.reduce((sum, row) => sum + row.sharePct, 0),
       100
     );
+  });
+
+  it("marks costsMatchDisplay=true for an unredirected row and false for a genuinely redirected one", () => {
+    const rows = buildCostExplorerRows({ analytics, groupBy: "provider" });
+    // None of the fixture rows carry `normalizedCost` — real === billed for all of them.
+    assert.ok(rows.every((row) => row.costsMatchDisplay === true));
+
+    const redirectedAnalytics: CostExplorerAnalyticsPayload = {
+      summary: { totalCost: 10.5, totalRequests: 1 },
+      byModel: [
+        {
+          provider: "anthropic",
+          model: "claude-sonnet",
+          requests: 1,
+          totalTokens: 1500,
+          cost: 10.5,
+          normalizedCost: 52.5,
+        },
+      ],
+    };
+    const redirectedRows = buildCostExplorerRows({
+      analytics: redirectedAnalytics,
+      groupBy: "model",
+    });
+    assert.equal(redirectedRows[0].costsMatchDisplay, false);
+  });
+});
+
+describe("costsMatchAtDisplayPrecision", () => {
+  it("treats exactly equal values as matching", () => {
+    assert.equal(costsMatchAtDisplayPrecision(0.0105, 0.0105), true);
+    assert.equal(costsMatchAtDisplayPrecision(0, 0), true);
+  });
+
+  it("treats a genuine, visible difference as not matching", () => {
+    // Both >= 0.01 and < 1, so 4 displayed fraction digits — 0.0525 vs 0.0105
+    // renders as "$0.0525" vs "$0.0105", a real difference a reader would see.
+    assert.equal(costsMatchAtDisplayPrecision(0.0105, 0.0525), false);
+  });
+
+  it("treats a sub-cent floating-point gap below the displayed precision as matching (the rounding edge)", () => {
+    // Two numbers meant to be the identical $0.0105, but arrived at via separate
+    // pricing-resolution passes with different floating-point rounding noise —
+    // the exact scenario the suppression exists to survive. At 0.0105's 4
+    // displayed fraction digits, both round to 0.0105.
+    assert.equal(costsMatchAtDisplayPrecision(0.0105000000000001, 0.0104999999999999), true);
+  });
+
+  it("does not let independent per-value fraction-digit selection defeat the comparison at a threshold boundary", () => {
+    // cost=0.0100000001 sits just above the 0.01 threshold (4 displayed digits);
+    // normalizedCostUsd=0.0099999999 sits just below it. Naively picking fraction
+    // digits per-value independently could format these as different-looking
+    // strings even though they're the same number to well beyond any displayed
+    // precision. Rounding both from cost's fraction-digit count keeps them equal.
+    assert.equal(costsMatchAtDisplayPrecision(0.0100000001, 0.0099999999), true);
+  });
+
+  it("still finds a real difference when it lands exactly on a fraction-digit boundary", () => {
+    // 0.01 sits exactly on the 0.01 threshold (4 displayed digits, since the
+    // check is strictly-less-than) vs 0.02 — a full cent apart, unambiguously a
+    // different number at the precision shown.
+    assert.equal(costsMatchAtDisplayPrecision(0.01, 0.02), false);
+  });
+
+  it("scales fraction digits with magnitude — a sub-cent gap matters below the $0.01 threshold", () => {
+    // Below $0.01, the display uses 6 fraction digits, so a gap this size (5e-6)
+    // is visible at that precision and must NOT be suppressed.
+    assert.equal(costsMatchAtDisplayPrecision(0.000001, 0.000006), false);
   });
 });
