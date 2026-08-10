@@ -31,6 +31,50 @@ const combosDb = await import("../../src/lib/db/combos.ts");
 const modelComboMappingsDb = await import("../../src/lib/db/modelComboMappings.ts");
 const costRules = await import("../../src/domain/costRules.ts");
 const rateLimiter = await import("../../src/shared/utils/rateLimiter.ts");
+const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
+const localDb = await import("../../src/lib/localDb.ts");
+const usageLimits = await import("../../src/lib/usage/apiKeyUsageLimits.ts");
+const familyMultipliersDb = await import("../../src/lib/db/apiKeyModelFamilyMultipliers.ts");
+
+/**
+ * Seed a normalized-basis spend for Check 4 (family-multiplier fix-round, final-
+ * review Finding 1): Check 4 now reads live from `usage_history` via
+ * `checkBudgetNormalized` instead of the write-time-frozen
+ * `domain_cost_history.billed_cost`, so tests exercising it must seed real request
+ * rows (priced through the actual pricing table), not just call `costRules.recordCost`.
+ * `billedProvider`/`billedModel` are omitted when equal to `provider`/`model` (no
+ * redirect — normalized cost equals real cost).
+ */
+async function seedNormalizedSpend(
+  apiKeyId: string,
+  args: {
+    realPricePerMillion: number;
+    billedPricePerMillion?: number;
+    tag: string;
+  }
+) {
+  const provider = "policy-test-provider";
+  const servedModel = `${args.tag}-served`;
+  const billedModel = args.billedPricePerMillion !== undefined ? `${args.tag}-billed` : servedModel;
+  await localDb.updatePricing({
+    [provider]: {
+      [servedModel]: { input: args.realPricePerMillion, output: 0 },
+      ...(args.billedPricePerMillion !== undefined
+        ? { [billedModel]: { input: args.billedPricePerMillion, output: 0 } }
+        : {}),
+    },
+  });
+  await usageHistory.saveRequestUsage({
+    provider,
+    model: servedModel,
+    billedProvider: args.billedPricePerMillion !== undefined ? provider : null,
+    billedModel: args.billedPricePerMillion !== undefined ? billedModel : null,
+    apiKeyId,
+    tokens: { input: 1_000_000, output: 0 },
+    success: true,
+    timestamp: new Date().toISOString(),
+  });
+}
 
 rateLimiter.setRateLimiterTestMode(true);
 
@@ -473,7 +517,9 @@ test("enforceApiKeyPolicy rejects disallowed models and exhausted budgets", asyn
 
   const budgetMeta = await apiKeysDb.getApiKeyMetadata(budgetedKey.key);
   costRules.setBudget(budgetMeta.id, { dailyLimitUsd: 1, warningThreshold: 0.5 });
-  costRules.recordCost(budgetMeta.id, 2);
+  // Check 4 reads live, normalized spend from usage_history (family-multiplier
+  // fix-round) — seed a real request priced at $2 (no redirect, so normalized == real).
+  await seedNormalizedSpend(budgetMeta.id, { realPricePerMillion: 2, tag: "exhausted" });
 
   const overBudget = await policy.enforceApiKeyPolicy(
     makePolicyRequest(budgetedKey.key),
@@ -490,15 +536,26 @@ test("enforceApiKeyPolicy's budget Check 4 enforces the cap against normalized (
   const budgetMeta = await apiKeysDb.getApiKeyMetadata(budgetedKey.key);
   costRules.setBudget(budgetMeta.id, { dailyLimitUsd: 1, warningThreshold: 0.5 });
 
-  // A model-budget redirect: OmniRoute's real upstream spend (cost) is cheap because the
+  // A model-budget redirect: OmniRoute's real upstream spend is cheap because the
   // request was silently served by a cheaper family, but the client is BILLED at the
-  // originally-requested model's rate (billedCost). Real spend alone ($0.10) is well under
-  // the $1 daily cap; normalized/billed spend ($5) is far over it.
-  costRules.recordCost(budgetMeta.id, 0.1, 5);
+  // originally-requested model's rate. Real spend alone ($0.10) is well under the $1
+  // daily cap; normalized/billed spend ($5) is far over it. Check 4 reads live,
+  // normalized spend from usage_history (family-multiplier fix-round) — seed a real
+  // request row carrying both the real and billed pair, not `costRules.recordCost`
+  // (which only reaches the now-stale `domain_cost_history.billed_cost`).
+  await seedNormalizedSpend(budgetMeta.id, {
+    realPricePerMillion: 0.1,
+    billedPricePerMillion: 5,
+    tag: "redirect-over",
+  });
 
-  // Before this fix, Check 4 called checkBudget() with the default "real" basis, so this
-  // key would sail past the cap forever (real spend keeps growing slowly at the redirected
-  // rate) even though GET /v1/me/status already reports usedPercent > 100 to the client.
+  // Before the original fix, Check 4 called checkBudget() with the default "real" basis,
+  // so this key would sail past the cap forever (real spend keeps growing slowly at the
+  // redirected rate) even though GET /v1/me/status already reports usedPercent > 100 to
+  // the client. Before THIS fix-round, Check 4 read `domain_cost_history.billed_cost`
+  // (write-time, frozen) instead of live usage_history — passing this same assertion by
+  // coincidence for freshly-recorded spend, but going stale the moment a multiplier
+  // changed after the fact (see the dedicated staleness test below).
   const rejected = await policy.enforceApiKeyPolicy(
     makePolicyRequest(budgetedKey.key),
     "openai/gpt-4.1"
@@ -510,13 +567,64 @@ test("enforceApiKeyPolicy's budget Check 4 enforces the cap against normalized (
   const healthyKey = await createKeyWithPolicy();
   const healthyMeta = await apiKeysDb.getApiKeyMetadata(healthyKey.key);
   costRules.setBudget(healthyMeta.id, { dailyLimitUsd: 1, warningThreshold: 0.5 });
-  costRules.recordCost(healthyMeta.id, 0.1, 0.2);
+  await seedNormalizedSpend(healthyMeta.id, {
+    realPricePerMillion: 0.1,
+    billedPricePerMillion: 0.2,
+    tag: "redirect-healthy",
+  });
 
   const allowed = await policy.enforceApiKeyPolicy(
     makePolicyRequest(healthyKey.key),
     "openai/gpt-4.1"
   );
   assert.equal(allowed.rejection, null);
+});
+
+// Final-review Finding 1 (fix-round): this is the reviewer's exact repro end to end
+// through the real enforcement gate — spend recorded BEFORE any multiplier exists, a
+// live request allowed through, the operator then raises a model-family multiplier
+// (migration 128, independent of the redirect rules above) on ALREADY-RECORDED
+// traffic, and Check 4 must catch it on the very next request. Before this fix-round,
+// Check 4 read `domain_cost_history.billed_cost` — frozen the moment `recordCost` ran
+// — so a multiplier raised afterward had NO effect on enforcement until, in the worst
+// case (a `monthly` budget), up to ~30 days later.
+test("enforceApiKeyPolicy's budget Check 4 catches a model-family multiplier raised AFTER the spend it now applies to", async () => {
+  const key = await createKeyWithPolicy();
+  const policy = await loadPolicy("retroactive-multiplier-4");
+
+  const meta = await apiKeysDb.getApiKeyMetadata(key.key);
+  // $10.50 real spend, well under a $12 cap — no multiplier configured yet.
+  costRules.setBudget(meta.id, { dailyLimitUsd: 12, warningThreshold: 0.5 });
+  await seedNormalizedSpend(meta.id, { realPricePerMillion: 10.5, tag: "retro-pre" });
+
+  const beforeMultiplier = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(key.key),
+    "openai/gpt-4.1"
+  );
+  assert.equal(beforeMultiplier.rejection, null, "no multiplier yet — well under the $12 cap");
+
+  // Operator raises a 1.5x multiplier on the family that already ran: $10.50 * 1.5 =
+  // $15.75, now over the $12 cap, entirely from traffic that happened before this line.
+  familyMultipliersDb.replaceFamilyMultipliers(meta.id, [
+    {
+      enabled: true,
+      priority: 0,
+      provider: "policy-test-provider",
+      familyGlob: "retro-pre-served*",
+      multiplier: 1.5,
+    },
+  ]);
+  // checkBudgetNormalized reads through a 60s TTL cache by design (bounds the cost of a
+  // live per-request gate) — clear it to simulate the TTL boundary rather than sleeping
+  // in the test. The contract is "at most one cache TTL stale", not instant.
+  usageLimits.clearApiKeyNormalizedSpendCacheForTests();
+
+  const afterMultiplier = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(key.key),
+    "openai/gpt-4.1"
+  );
+  assert.equal(afterMultiplier.rejection.status, 429);
+  assert.match(await readErrorMessage(afterMultiplier.rejection), /Daily budget exceeded/);
 });
 
 test("enforceApiKeyPolicy returns Anthropic error envelope for /v1/messages model denials", async () => {

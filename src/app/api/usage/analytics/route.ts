@@ -88,8 +88,22 @@ async function resolveSinceResetRangeWindow(apiKeyIds: string[]): Promise<{
   windowStartIso: string;
   resetAtIso: string | null;
   isObserved: boolean;
+  /**
+   * False when the caller asked for a single-key-scoped window
+   * (`apiKeyIds.length === 1`) but that id didn't resolve to a real key —
+   * e.g. `apiKeyIds` held a legacy display name instead of an id
+   * (`apiKeyWhere` accepts both: `api_key_name IN (...) OR api_key_id IN
+   * (...)`). Previously this silently fell through to the same
+   * all-active-connections window a genuinely unscoped request gets, with no
+   * signal that the requested scope was never actually honored (final-review
+   * Minor 5 — same "explicit flag over silent fallback" class as Finding 2).
+   * True whenever the filter is scoped-and-resolved OR genuinely unscoped
+   * (0 or 2+ keys, where "all connections" is the correct, intended answer).
+   */
+  scopeResolved: boolean;
 }> {
   let metadata: ApiKeyUsageLimitMetadata = { id: "", allowedConnections: [] };
+  let scopeResolved = true;
 
   if (apiKeyIds.length === 1) {
     const key = await getApiKeyById(apiKeyIds[0]);
@@ -98,10 +112,13 @@ async function resolveSinceResetRangeWindow(apiKeyIds: string[]): Promise<{
         id: key.id,
         allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
       };
+    } else {
+      scopeResolved = false;
     }
   }
 
-  return resolveApiKeyWeeklyWindow(metadata);
+  const resolved = await resolveApiKeyWeeklyWindow(metadata);
+  return { ...resolved, scopeResolved };
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -275,20 +292,23 @@ function computeUsageRowCost(
  * full basis contract, and `resolveFamilyMultiplier`'s doc comment for why
  * the multiplier is per-key.
  *
- * `multiplierRules` selection is the dashboard's own scoping decision, not
- * part of the shared multiplier contract: the multiplier is inherently
- * per-API-key, but most of this route's buckets (byModel/byProvider/
- * byAccount/byServiceTier, and the daily trend) aggregate `usage_history`
- * rows WITHOUT an api_key_id dimension — a bucket can legitimately mix
- * several keys' traffic into one merged row. Applying any single key's
- * multiplier to such a merged row would misattribute it to whichever key's
- * multiplier happened to be passed in, so callers pass rules ONLY when the
- * request is scoped to exactly one key (`apiKeyIds.length === 1`, i.e. an
- * unambiguous single-key view) — see `scopedMultiplierRules` in `GET`. The
- * one exception is `byApiKey` (`getApiKeyUsageRows`), which DOES carry a real
- * per-row `apiKeyId` regardless of the filter, so it resolves each row's own
- * key's rules individually (`apiKeyMultiplierRulesById`) instead of the
- * request-wide scoped set.
+ * `multiplierRules` (final-review Finding 2 fix): every caller passes
+ * `multiplierRulesForRow(row)` — the SAME shared, per-row resolver, built
+ * once in `GET` from every row set's OWN `api_key_id` column. Every bucket in
+ * this route (byModel/byProvider/byAccount/byServiceTier/byApiKey) now
+ * resolves the multiplier per SQL row, before re-merging into the coarser
+ * output bucket — never a single request-wide scope. This is what closes the
+ * original bug: `byApiKey` used to resolve a real per-row multiplier while
+ * every other bucket only did so when the request happened to be filtered to
+ * one key, so the exact same underlying traffic could show
+ * `byApiKey.normalizedCost` disagreeing with `byModel.normalizedCost` inside
+ * one response. The one gap that remains, and is impossible to close without
+ * fabricating an attribution: a row whose `api_key_id` is NULL (rolled up
+ * into `daily_usage_summary`, which drops per-key attribution by design, or a
+ * request that genuinely had no api key) resolves to an empty rule set
+ * (neutral, 1.0x) for THAT row only — surfaced honestly via the response's
+ * `normalizedCostCoverage` flags rather than silently mixed into a
+ * precise-looking total.
  */
 function computeUsageRowNormalizedCost(
   row: Record<string, unknown>,
@@ -337,7 +357,7 @@ function buildBilledProviderRows(
   modelRows: Array<Record<string, unknown>>,
   pricingByProvider: PricingByProvider,
   computeCostFromPricing: ComputeCostFromPricing,
-  multiplierRules: FamilyMultiplierRule[] = []
+  multiplierRulesForRow: (row: Record<string, unknown>) => FamilyMultiplierRule[]
 ): BilledProviderRow[] {
   const providerMap = new Map<
     string,
@@ -386,7 +406,7 @@ function buildBilledProviderRows(
       row,
       pricingByProvider,
       computeCostFromPricing,
-      multiplierRules
+      multiplierRulesForRow(row)
     );
     providerMap.set(billedProvider, existing);
   }
@@ -463,6 +483,7 @@ export async function GET(request: Request) {
       resetAtIso: string | null;
       isObserved: boolean;
       windowStartIso: string;
+      scopeResolved: boolean;
     } | null = null;
     if (startDate) {
       sinceIso = startDate;
@@ -473,6 +494,10 @@ export async function GET(request: Request) {
         resetAtIso: resolved.resetAtIso,
         isObserved: resolved.isObserved,
         windowStartIso: resolved.windowStartIso,
+        // False = the apiKeyIds filter named exactly one id but it wasn't a real key
+        // (e.g. a legacy display name) — the window below silently widened to "all
+        // active connections" instead of the single-key scope that was asked for.
+        scopeResolved: resolved.scopeResolved,
       };
     } else {
       sinceIso = getRangeStartIso(range);
@@ -487,24 +512,6 @@ export async function GET(request: Request) {
         currentApiKeyNames.set(apiKey.id, apiKey.name);
       }
     }
-
-    // Model-family multiplier (migration 128) is per-API-KEY-ID, never per-name — and
-    // `apiKeyIds` here can itself hold legacy display names (`apiKeyWhere` matches
-    // `api_key_name IN (...) OR api_key_id IN (...)`). Every bucket below EXCEPT
-    // byApiKey aggregates rows with no api_key_id dimension at all, so a multiplier can
-    // only be attributed unambiguously when the filter names exactly one REAL key id —
-    // see computeUsageRowNormalizedCost's doc comment for why a merged multi-key row
-    // can never be scaled by a single key's multiplier.
-    const validApiKeyIds = new Set(
-      apiKeys
-        .map((apiKey) => (typeof apiKey.id === "string" ? apiKey.id : null))
-        .filter((id): id is string => Boolean(id))
-    );
-    const singleApiKeyId =
-      apiKeyIds.length === 1 && validApiKeyIds.has(apiKeyIds[0]) ? apiKeyIds[0] : null;
-    const scopedMultiplierRules = singleApiKeyId
-      ? await loadFamilyMultiplierRules(singleApiKeyId)
-      : [];
 
     // Compute the raw-data cutoff: rows older than this may have been rolled up to
     // daily_usage_summary and deleted from usage_history.
@@ -636,6 +643,52 @@ export async function GET(request: Request) {
     const serviceTierRows = getServiceTierUsageRows(unifiedSource, unifiedParams) as Array<
       Record<string, unknown>
     >;
+
+    // Model-family multiplier (migration 128) is per-API-KEY-ID. Every row set fetched
+    // above now carries its OWN api_key_id (final-review Finding 2 fix) — except rows
+    // that came from the rolled-up `daily_usage_summary` leg (key attribution is
+    // intentionally dropped on rollup, see usageAnalytics/sources.ts) or requests with
+    // no api key, where `apiKeyId` is NULL and the multiplier cannot be resolved for
+    // that row at all. One shared cache, loaded once per distinct key seen across every
+    // row set (never re-fetched per bucket), and one resolver every bucket below uses
+    // uniformly — this is what closes Finding 2: `byApiKey` used to resolve a real
+    // per-row multiplier while every OTHER bucket only did so when the request
+    // happened to be scoped to a single filtered key, so the same response could show
+    // `byApiKey.normalizedCost` and `byModel.normalizedCost` disagreeing for the exact
+    // same underlying traffic.
+    const distinctApiKeyIdsInRows = Array.from(
+      new Set(
+        [...modelRows, ...providerCostRows, ...accountCostRows, ...serviceTierRows, ...apiKeyRows]
+          .map((row) => toStringValue(row.apiKeyId))
+          .filter(Boolean)
+      )
+    );
+    const apiKeyMultiplierRulesById = new Map<string, FamilyMultiplierRule[]>(
+      await Promise.all(
+        distinctApiKeyIdsInRows.map(
+          async (id) => [id, await loadFamilyMultiplierRules(id)] as const
+        )
+      )
+    );
+    function multiplierRulesForRow(row: Record<string, unknown>): FamilyMultiplierRule[] {
+      const apiKeyId = toStringValue(row.apiKeyId);
+      return apiKeyId ? (apiKeyMultiplierRulesById.get(apiKeyId) ?? []) : [];
+    }
+    function rowHasKeyAttribution(row: Record<string, unknown>): boolean {
+      return Boolean(toStringValue(row.apiKeyId));
+    }
+    /**
+     * True only when EVERY row behind a bucket had real key attribution, so its
+     * normalizedCost is a complete, multiplier-aware figure. False means at least one
+     * contributing row (almost always: old traffic rolled up into
+     * `daily_usage_summary`) had no `api_key_id` and was priced at a neutral (1.0)
+     * multiplier for that slice — an explicit signal instead of a silently-mixed
+     * number, per final-review Finding 2 ("must carry an explicit flag rather than
+     * silently mixing bases").
+     */
+    function computeMultiplierCoverage(rows: Array<Record<string, unknown>>): boolean {
+      return rows.every(rowHasKeyAttribution);
+    }
 
     const apiKeyMetadataRows = getApiKeyMetadataRows(apiKeyWhereClause, params) as Array<
       Record<string, unknown>
@@ -771,7 +824,7 @@ export async function GET(request: Request) {
         row,
         pricingByProvider,
         computeCostFromPricing,
-        scopedMultiplierRules
+        multiplierRulesForRow(row)
       );
       const key = `${groupProvider}::${groupModel}`;
       const existing = modelMap.get(key) || {
@@ -843,7 +896,7 @@ export async function GET(request: Request) {
         row,
         pricingByProvider,
         computeCostFromPricing,
-        scopedMultiplierRules
+        multiplierRulesForRow(row)
       );
       providerCostByProvider.set(provider, (providerCostByProvider.get(provider) || 0) + cost);
       providerNormalizedCostByProvider.set(
@@ -873,7 +926,7 @@ export async function GET(request: Request) {
             modelRows,
             pricingByProvider,
             computeCostFromPricing,
-            scopedMultiplierRules
+            multiplierRulesForRow
           )
         : providerRows.map((row) => ({
             provider: row.provider,
@@ -901,7 +954,7 @@ export async function GET(request: Request) {
         row,
         pricingByProvider,
         computeCostFromPricing,
-        scopedMultiplierRules
+        multiplierRulesForRow(row)
       );
       accountCostByAccount.set(account, (accountCostByAccount.get(account) || 0) + cost);
       accountNormalizedCostByAccount.set(
@@ -923,23 +976,6 @@ export async function GET(request: Request) {
         accountNormalizedCostByAccount.get(toStringValue(row.account, "unknown")) || 0
       ),
     }));
-
-    // byApiKey is the one bucket with a real per-row api_key_id, so — unlike every
-    // other bucket above, which shares `scopedMultiplierRules` (only non-empty for an
-    // unambiguous single-key filter) — it resolves each row's OWN key's multiplier
-    // rules individually, filter or not. Reuses `scopedMultiplierRules` for
-    // `singleApiKeyId` instead of re-querying it a second time.
-    const distinctApiKeyIdsForMultiplier = Array.from(
-      new Set(apiKeyRows.map((row) => toStringValue(row.apiKeyId)).filter(Boolean))
-    );
-    const apiKeyMultiplierRulesById = new Map<string, FamilyMultiplierRule[]>(
-      await Promise.all(
-        distinctApiKeyIdsForMultiplier.map(async (id) => {
-          if (id === singleApiKeyId) return [id, scopedMultiplierRules] as const;
-          return [id, await loadFamilyMultiplierRules(id)] as const;
-        })
-      )
-    );
 
     const apiKeyMap = new Map<
       string,
@@ -989,7 +1025,7 @@ export async function GET(request: Request) {
         row,
         pricingByProvider,
         computeCostFromPricing,
-        (apiKeyId && apiKeyMultiplierRulesById.get(apiKeyId)) || []
+        multiplierRulesForRow(row)
       );
       apiKeyMap.set(key, existing);
     }
@@ -1040,7 +1076,7 @@ export async function GET(request: Request) {
         row,
         pricingByProvider,
         computeCostFromPricing,
-        scopedMultiplierRules
+        multiplierRulesForRow(row)
       );
       if (serviceTier === "flex") {
         const standardCost = computeUsageRowStandardCost(
@@ -1112,6 +1148,21 @@ export async function GET(request: Request) {
       .map((date) => ({ date, ...dailyByModelMap[date] }));
     const modelNames = Array.from(allModels);
 
+    // Final-review Finding 2: explicit, per-bucket signal for whether EVERY row behind
+    // that bucket's normalizedCost had real key attribution (so the multiplier could be
+    // resolved for all of it) — false means some contributing traffic (almost always
+    // old rows rolled up into daily_usage_summary, which drops api_key_id by design)
+    // was priced at a neutral 1.0x multiplier because there was no key to look rules up
+    // for. `byProvider`'s source row set depends on `costBasis` — real groups from
+    // `providerCostRows`, billed groups from `modelRows` (via `buildBilledProviderRows`).
+    const normalizedCostCoverage = {
+      byModel: computeMultiplierCoverage(modelRows),
+      byProvider: computeMultiplierCoverage(costBasis === "billed" ? modelRows : providerCostRows),
+      byAccount: computeMultiplierCoverage(accountCostRows),
+      byServiceTier: computeMultiplierCoverage(serviceTierRows),
+      byApiKey: computeMultiplierCoverage(apiKeyRows),
+    };
+
     const analytics = {
       summary,
       pricingGaps,
@@ -1133,6 +1184,7 @@ export async function GET(request: Request) {
       // UI must not present a `!isObserved` window as "since the provider
       // reset"; it is a rolling-7d fallback wearing that range's clothes.
       resetWindow,
+      normalizedCostCoverage,
     } as any;
 
     if (presetsParam) {

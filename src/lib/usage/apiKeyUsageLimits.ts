@@ -561,6 +561,51 @@ export async function getApiKeyUsdSpendSince(
   return sumUsageCostRows(rows, multiplierRules);
 }
 
+const NORMALIZED_SPEND_CACHE_TTL_MS = 60_000;
+interface NormalizedSpendCacheEntry {
+  value: number;
+  expiresAt: number;
+}
+const normalizedSpendCache = new Map<string, NormalizedSpendCacheEntry>();
+
+/** Testing seam: clears the short-TTL cache below between test cases. */
+export function clearApiKeyNormalizedSpendCacheForTests(): void {
+  normalizedSpendCache.clear();
+}
+
+/**
+ * Cached wrapper around `getApiKeyUsdSpendSince(..., { basis: "normalized" })`
+ * for request-path callers that need the figure on EVERY request — the live
+ * budget-enforcement gate (`checkBudgetNormalized` in `costRules.ts`, called
+ * from `apiKeyPolicy.ts`'s Check 4) — and for the client-facing self-service
+ * status read (`apiKeySelfService.ts`), which both moved off
+ * `domain_cost_history.billed_cost` (final-review Finding 1: that column is
+ * frozen at write time, so it silently under/over-enforces after any
+ * multiplier edit — see the doc comment on `checkBudgetNormalized`).
+ *
+ * A 60s TTL — same pattern and magnitude as `modelBudgetRouting.ts`'s
+ * `spendCache` — bounds the cost of paying a full `GROUP BY` +
+ * per-group `calculateCost` pass on every single proxied request, while
+ * still keeping a multiplier edit's effect on enforcement bounded to at most
+ * one TTL window (never "up to a month" the way the frozen write-time figure
+ * was). Keyed on `${apiKeyId}::${sinceIso}` so different windows (a budget
+ * period roll, a different reset boundary) never share a stale entry.
+ */
+export async function getApiKeyUsdSpendSinceCached(
+  apiKeyId: string,
+  sinceIso: string,
+  now: number = Date.now()
+): Promise<number> {
+  if (!apiKeyId) return 0;
+  const key = `${apiKeyId}::${sinceIso}`;
+  const cached = normalizedSpendCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const value = await getApiKeyUsdSpendSince(apiKeyId, sinceIso);
+  normalizedSpendCache.set(key, { value, expiresAt: now + NORMALIZED_SPEND_CACHE_TTL_MS });
+  return value;
+}
+
 /**
  * Real USD spend for one provider + model family (glob over the bare model id),
  * for one API key, since `sinceIso`. Always priced by the model that actually

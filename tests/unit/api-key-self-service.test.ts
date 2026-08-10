@@ -68,7 +68,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     dbParams,
     deps: {
       now: () => Date.UTC(2026, 4, 29, 12, 0, 0),
-      getCostSummary: () => ({
+      getCostSummaryNormalized: () => ({
         budget: null,
         totalCostMonth: 12.34,
         totalCostPeriod: 0,
@@ -81,7 +81,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
         nextResetAt: null,
         warningThreshold: null,
       }),
-      checkBudget: () => ({ allowed: true }),
+      checkBudgetNormalized: () => ({ allowed: true }),
       getDbInstance: () => ({
         prepare: () => ({
           get: (...params: unknown[]) => {
@@ -133,7 +133,7 @@ test("self-service status reports USD budget percentage using the budget period"
   const periodStart = Date.UTC(2026, 4, 1, 0, 0, 0);
   const nextReset = Date.UTC(2026, 5, 1, 0, 0, 0);
   const { deps } = makeDeps({
-    getCostSummary: () => ({
+    getCostSummaryNormalized: () => ({
       budget: { resetInterval: "monthly" },
       totalCostMonth: 99,
       totalCostPeriod: 12.5,
@@ -166,7 +166,7 @@ test("self-service status preserves ISO and Date budget timestamps", async () =>
     allowedConnections: [],
   };
   const { deps, dbParams } = makeDeps({
-    getCostSummary: () => ({
+    getCostSummaryNormalized: () => ({
       budget: { resetInterval: "weekly" },
       totalCostMonth: 99,
       totalCostPeriod: 15,
@@ -433,24 +433,31 @@ test("self-service status normalizes Codex account quota for one explicit connec
   });
 });
 
-// Final-review Finding 2: this route authenticates with the API key itself (self:usage
-// scope) — it's client-facing, so it must read domain_cost_history at the BILLED
-// (normalized) rate, not the served (real) rate a model-budget redirect priced the
-// traffic at. Asserts the real production call site (apiKeySelfService.ts) actually
-// requests basis: "normalized" from getCostSummary — a revert to the old
-// `getCostSummary(metadata.id)` call (no options) would make this fail while every
-// other test in this file, which ignores the args entirely, would stay green.
-test("self-service status requests the NORMALIZED cost basis, not the real one", async () => {
+// Final-review Finding 2 (original) + Finding 1 (fix-round): this route authenticates
+// with the API key itself (self:usage scope) — it's client-facing, so it must report
+// what the client is BILLED, never the served (real) rate. Originally that meant
+// requesting `basis: "normalized"` from `getCostSummary`/`checkBudget` (backed by
+// `domain_cost_history.billed_cost`); the fix-round moved both off that write-time-
+// frozen column entirely (Finding 1: a multiplier raised after traffic already
+// happened left that column stale) onto the async, ALWAYS-normalized
+// `getCostSummaryNormalized`/`checkBudgetNormalized` (re-derived live from
+// usage_history). This test now locks in THAT contract: the production call site
+// must use the normalized-only functions — via their own dedicated DI slots, so a
+// revert back to injecting `getCostSummary`/`checkBudget` (the old, basis-toggleable,
+// write-time-backed shape) would make this fail, while every other test in this file
+// (which ignores call args entirely) would stay green.
+test("self-service status calls the ALWAYS-normalized cost summary and budget check, not the real-by-default ones", async () => {
   const metadata = {
     id: "key-basis",
     name: "basis-check",
     scopes: [SELF_USAGE_SCOPE],
     allowedConnections: [],
   };
-  const getCostSummaryCalls: unknown[][] = [];
+  const getCostSummaryNormalizedCalls: unknown[][] = [];
+  const checkBudgetNormalizedCalls: unknown[][] = [];
   const { deps } = makeDeps({
-    getCostSummary: (...args: unknown[]) => {
-      getCostSummaryCalls.push(args);
+    getCostSummaryNormalized: (...args: unknown[]) => {
+      getCostSummaryNormalizedCalls.push(args);
       return {
         budget: null,
         totalCostMonth: 12.34,
@@ -465,11 +472,19 @@ test("self-service status requests the NORMALIZED cost basis, not the real one",
         warningThreshold: null,
       };
     },
+    checkBudgetNormalized: (...args: unknown[]) => {
+      checkBudgetNormalizedCalls.push(args);
+      return { allowed: true };
+    },
   });
 
   await buildApiKeySelfServiceStatus(metadata, deps);
 
-  assert.equal(getCostSummaryCalls.length, 1);
-  assert.equal(getCostSummaryCalls[0][0], "key-basis");
-  assert.deepEqual(getCostSummaryCalls[0][1], { basis: "normalized" });
+  // Exactly one call each, with the api key id and NO basis/options argument — the
+  // function's own name/identity IS the normalized contract now, not a togglable param.
+  assert.equal(getCostSummaryNormalizedCalls.length, 1);
+  assert.deepEqual(getCostSummaryNormalizedCalls[0], ["key-basis"]);
+  assert.equal(checkBudgetNormalizedCalls.length, 1);
+  assert.equal(checkBudgetNormalizedCalls[0][0], "key-basis");
+  assert.equal(checkBudgetNormalizedCalls[0][1], 0);
 });

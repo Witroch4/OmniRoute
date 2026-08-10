@@ -52,8 +52,15 @@ export function recordStreamingCost(args: {
       if (estimatedCost <= 0) return;
       // The billed pair is the redirect target's ORIGIN when redirected, otherwise the
       // served pair itself — either way, this is what the client was actually charged
-      // for, and what the family multiplier (migration 128) must key off.
-      const billedProviderForCost = args.billedProvider || args.provider;
+      // for, and what the family multiplier (migration 128) must key off. Both fields
+      // gated on `isRedirect` together (mirrors chatCore.ts's billedProviderForCost/
+      // billedModelForCost) — `billedProvider` and `billedModel` are captured in
+      // lockstep by the real production caller today, but gating only one of them
+      // would let a future/malformed caller that sets one without the other pick a
+      // multiplier for a provider that was never actually billed (final-review Minor 3).
+      const billedProviderForCost = isRedirect
+        ? args.billedProvider || args.provider
+        : args.provider;
       const billedModelForCost = isRedirect ? (args.billedModel as string) : args.model;
       const normalizedBaseCost = isRedirect
         ? await args.calculateCost(

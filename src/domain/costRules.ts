@@ -27,6 +27,10 @@ import {
   resetSpendBatchWriterForTests,
   spendBatchWriter,
 } from "@/lib/spend/batchWriter";
+import {
+  clearApiKeyNormalizedSpendCacheForTests,
+  getApiKeyUsdSpendSinceCached,
+} from "@/lib/usage/apiKeyUsageLimits";
 
 export type BudgetResetInterval = "daily" | "weekly" | "monthly";
 
@@ -451,27 +455,60 @@ export function syncAllBudgetSchedules(now = Date.now()) {
  *   Finding 2's follow-up).
  * @returns {{ allowed: boolean, reason?: string, dailyUsed: number, dailyLimit: number, warningReached: boolean, remaining: number, periodUsed: number, activeLimitUsd: number, resetInterval: BudgetResetInterval | null, resetTime: string | null, budgetResetAt: number | null, lastBudgetResetAt: number | null, periodStartAt: number | null }}
  */
-export function checkBudget(apiKeyId: string, additionalCost = 0, basis: CostBasis = "real") {
-  const budget = getBudget(apiKeyId);
-  if (!budget) {
-    return {
-      allowed: true,
-      dailyUsed: 0,
-      dailyLimit: 0,
-      warningReached: false,
-      remaining: 0,
-      periodUsed: 0,
-      activeLimitUsd: 0,
-      resetInterval: null,
-      resetTime: null,
-      budgetResetAt: null,
-      lastBudgetResetAt: null,
-      periodStartAt: null,
-    };
-  }
+/**
+ * Explicit shared return shape for `checkBudget`/`checkBudgetNormalized` —
+ * `reason` is optional (present only when `allowed` is `false`) rather than
+ * relying on TypeScript to infer a clean discriminated union across three
+ * return sites (the neutral no-budget case, the exceeded case, the allowed
+ * case) spread across two functions. Without this explicit annotation, the
+ * neutral case's `as const`-narrowed literal type does not always narrow away
+ * cleanly at call sites doing `if (!result.allowed) result.reason`.
+ */
+interface BudgetDecision {
+  allowed: boolean;
+  reason?: string;
+  dailyUsed: number;
+  dailyLimit: number;
+  warningReached: boolean;
+  remaining: number;
+  periodUsed: number;
+  activeLimitUsd: number;
+  resetInterval: BudgetResetInterval | null;
+  resetTime: string | null;
+  budgetResetAt: number | null;
+  lastBudgetResetAt: number | null;
+  periodStartAt: number | null;
+}
 
-  const window = getBudgetWindow(budget.resetInterval, budget.resetTime);
-  const periodUsed = getBudgetWindowTotal(apiKeyId, window.periodStartAt, basis);
+const NEUTRAL_BUDGET_DECISION: BudgetDecision = {
+  allowed: true,
+  dailyUsed: 0,
+  dailyLimit: 0,
+  warningReached: false,
+  remaining: 0,
+  periodUsed: 0,
+  activeLimitUsd: 0,
+  resetInterval: null,
+  resetTime: null,
+  budgetResetAt: null,
+  lastBudgetResetAt: null,
+  periodStartAt: null,
+};
+
+/**
+ * Shared decision logic once `periodUsed` is known — the warning-threshold
+ * side effect and the allow/deny response shape, identical regardless of
+ * WHICH basis (`checkBudget`'s real, or `checkBudgetNormalized`'s normalized)
+ * produced that number. Factored out so the two callers can never drift on
+ * the reason string, the warning persistence, or the response contract.
+ */
+function finalizeBudgetDecision(
+  apiKeyId: string,
+  budget: NormalizedBudgetConfig,
+  window: BudgetWindow,
+  periodUsed: number,
+  additionalCost: number
+): BudgetDecision {
   const projectedTotal = periodUsed + additionalCost;
   const activeLimitUsd = getActiveBudgetLimit(budget);
   const warningReached =
@@ -533,6 +570,81 @@ export function checkBudget(apiKeyId: string, additionalCost = 0, basis: CostBas
   };
 }
 
+const normalizedBasisWarnedOnce = new Set<string>();
+
+/**
+ * `basis: "normalized"` still works but is now STALE by construction — it
+ * reads `domain_cost_history.billed_cost`, frozen at request-completion time
+ * (final-review Finding 1). Warn once per process so a future caller reaching
+ * for `checkBudget(id, cost, "normalized")` instead of `checkBudgetNormalized`
+ * gets a loud signal rather than silently reintroducing the under/over-
+ * enforcement bug this fix closed (a client told 15.75, quota cutting at
+ * 15.75, but this gate — and only this gate — still enforcing against a
+ * stale 10.50).
+ */
+function warnStaleNormalizedBasisOnce(caller: string): void {
+  if (normalizedBasisWarnedOnce.has(caller)) return;
+  normalizedBasisWarnedOnce.add(caller);
+  console.warn(
+    `[costRules] ${caller} called with basis:"normalized" — this reads ` +
+      `domain_cost_history.billed_cost, which is frozen at request time and does NOT ` +
+      `reflect a multiplier changed since. Use checkBudgetNormalized()/getCostSummaryNormalized() ` +
+      `instead for any live-enforcement or client-facing normalized read.`
+  );
+}
+
+export function checkBudget(
+  apiKeyId: string,
+  additionalCost = 0,
+  basis: CostBasis = "real"
+): BudgetDecision {
+  if (basis === "normalized") warnStaleNormalizedBasisOnce("checkBudget");
+  const budget = getBudget(apiKeyId);
+  if (!budget) return NEUTRAL_BUDGET_DECISION;
+
+  const window = getBudgetWindow(budget.resetInterval, budget.resetTime);
+  const periodUsed = getBudgetWindowTotal(apiKeyId, window.periodStartAt, basis);
+  return finalizeBudgetDecision(apiKeyId, budget, window, periodUsed, additionalCost);
+}
+
+/**
+ * Async, read-time twin of `checkBudget` for the NORMALIZED basis only —
+ * final-review Finding 1's fix. `checkBudget(..., "normalized")` priced
+ * against `domain_cost_history.billed_cost`, which is written once at request
+ * completion and never revisited; raising a multiplier after traffic already
+ * happened left this gate enforcing against a stale, too-low number (client
+ * told $15.75 was spent, quota agreeing, but this gate letting requests
+ * through until $10.50 real-priced-at-old-multiplier accumulated) for up to a
+ * full budget period (`monthly` intervals: up to ~30 days).
+ *
+ * Recomputes from `usage_history` via the SAME shared multiplier resolver
+ * every other normalized reader uses
+ * (`getApiKeyUsdSpendSinceCached` -> `getApiKeyUsdSpendSince` ->
+ * `resolveFamilyMultiplier`), so this gate, the USD quota, and the cost
+ * dashboard can never disagree about "what is this key's normalized spend
+ * right now" — only about staleness bounded by the cache's 60s TTL, never
+ * about which basis they used.
+ *
+ * Used by `apiKeyPolicy.ts`'s Check 4 (the live per-request enforcement gate
+ * — hence the cached lookup, not a raw `getApiKeyUsdSpendSince` call) and
+ * `apiKeySelfService.ts` (the client-facing status read's warning side
+ * effect).
+ */
+export async function checkBudgetNormalized(
+  apiKeyId: string,
+  additionalCost = 0
+): Promise<BudgetDecision> {
+  const budget = getBudget(apiKeyId);
+  if (!budget) return NEUTRAL_BUDGET_DECISION;
+
+  const window = getBudgetWindow(budget.resetInterval, budget.resetTime);
+  const periodUsed = await getApiKeyUsdSpendSinceCached(
+    apiKeyId,
+    new Date(window.periodStartAt).toISOString()
+  );
+  return finalizeBudgetDecision(apiKeyId, budget, window, periodUsed, additionalCost);
+}
+
 /**
  * Get daily total cost for an API key.
  *
@@ -576,6 +688,7 @@ export function getDailyTotal(apiKeyId: string, options?: { basis?: CostBasis })
  */
 export function getCostSummary(apiKeyId: string, options?: { basis?: CostBasis }): BudgetSummary {
   const basis = options?.basis ?? "real";
+  if (basis === "normalized") warnStaleNormalizedBasisOnce("getCostSummary");
   const now = new Date();
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
@@ -666,11 +779,90 @@ export function getCostSummary(apiKeyId: string, options?: { basis?: CostBasis }
 }
 
 /**
+ * Async, read-time twin of `getCostSummary` for the NORMALIZED basis only —
+ * companion to `checkBudgetNormalized`, same final-review Finding 1 fix.
+ * `getCostSummary(id, { basis: "normalized" })` priced `totalCostMonth` /
+ * `totalCostPeriod` from `domain_cost_history.billed_cost`, frozen at write
+ * time; this recomputes them from `usage_history` via the cached shared
+ * resolver (`getApiKeyUsdSpendSinceCached`) instead, so `GET /v1/me/status`
+ * (`apiKeySelfService.ts`) reports the SAME normalized figure the USD quota
+ * and the cost dashboard would report for the same instant, not a stale one.
+ *
+ * Narrower than `getCostSummary`: `totalEntries` (a `domain_cost_history` row
+ * count) has no meaningful equivalent for a re-derived sum and is always `0`
+ * here — no current caller of the normalized basis reads it (verified: only
+ * `apiKeySelfService.ts`'s `CostSummaryLike`, which doesn't have this field).
+ */
+export async function getCostSummaryNormalized(apiKeyId: string): Promise<BudgetSummary> {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const budget = getBudget(apiKeyId);
+  const window = budget ? getBudgetWindow(budget.resetInterval, budget.resetTime) : null;
+
+  try {
+    const [dailyTotal, monthlyTotal, periodTotal] = await Promise.all([
+      getApiKeyUsdSpendSinceCached(apiKeyId, todayStart.toISOString()),
+      getApiKeyUsdSpendSinceCached(apiKeyId, monthStart.toISOString()),
+      window
+        ? getApiKeyUsdSpendSinceCached(apiKeyId, new Date(window.periodStartAt).toISOString())
+        : Promise.resolve(0),
+    ]);
+    const activeLimitUsd = budget ? getActiveBudgetLimit(budget) : 0;
+
+    return {
+      dailyTotal,
+      monthlyTotal,
+      totalEntries: 0,
+      budget,
+      totalCostToday: dailyTotal,
+      totalCostMonth: monthlyTotal,
+      totalCostPeriod: periodTotal,
+      activeLimitUsd,
+      resetInterval: budget?.resetInterval ?? null,
+      resetTime: budget?.resetTime ?? null,
+      budgetResetAt: window?.nextResetAt ?? budget?.budgetResetAt ?? null,
+      lastBudgetResetAt: window?.periodStartAt ?? budget?.lastBudgetResetAt ?? null,
+      periodStartAt: window?.periodStartAt ?? null,
+      nextResetAt: window?.nextResetAt ?? null,
+      dailyLimitUsd: budget?.dailyLimitUsd ?? 0,
+      weeklyLimitUsd: budget?.weeklyLimitUsd ?? 0,
+      monthlyLimitUsd: budget?.monthlyLimitUsd ?? 0,
+      warningThreshold: budget?.warningThreshold ?? null,
+    };
+  } catch {
+    return {
+      dailyTotal: 0,
+      monthlyTotal: 0,
+      totalEntries: 0,
+      budget,
+      totalCostToday: 0,
+      totalCostMonth: 0,
+      totalCostPeriod: 0,
+      activeLimitUsd: budget ? getActiveBudgetLimit(budget) : 0,
+      resetInterval: budget?.resetInterval ?? null,
+      resetTime: budget?.resetTime ?? null,
+      budgetResetAt: budget?.budgetResetAt ?? null,
+      lastBudgetResetAt: budget?.lastBudgetResetAt ?? null,
+      periodStartAt: budget?.lastBudgetResetAt ?? null,
+      nextResetAt: budget?.budgetResetAt ?? null,
+      dailyLimitUsd: budget?.dailyLimitUsd ?? 0,
+      weeklyLimitUsd: budget?.weeklyLimitUsd ?? 0,
+      monthlyLimitUsd: budget?.monthlyLimitUsd ?? 0,
+      warningThreshold: budget?.warningThreshold ?? null,
+    };
+  }
+}
+
+/**
  * Clear all cost data (for testing).
  */
 export function resetCostData() {
   budgets.clear();
   resetSpendBatchWriterForTests();
+  clearApiKeyNormalizedSpendCacheForTests();
   try {
     deleteAllCostData();
   } catch {

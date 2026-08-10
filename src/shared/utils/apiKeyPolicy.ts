@@ -17,7 +17,7 @@ import {
 } from "@/lib/localDb";
 import { isDashboardSessionAuthenticated } from "./apiAuth";
 import { resolveComboForModel } from "@/lib/db/modelComboMappings";
-import { checkBudget } from "@/domain/costRules";
+import { checkBudgetNormalized } from "@/domain/costRules";
 import { checkTokenLimits } from "@omniroute/open-sse/services/tokenLimitCounter.ts";
 import {
   errorResponse,
@@ -588,9 +588,16 @@ export async function enforceApiKeyPolicy(
   // behalf of the client, so it must fire at the same normalized number the client's
   // own GET /v1/me/status (`usedUsd`/`usedPercent`) already reports — otherwise a
   // redirected key can show usedPercent > 100 there while still being served here.
+  // Family-multiplier fix-round (final-review Finding 1): reads through
+  // `checkBudgetNormalized` (async, cached 60s) instead of the old sync
+  // `checkBudget(id, 0, "normalized")`, which priced against
+  // `domain_cost_history.billed_cost` — frozen at write time, so raising a
+  // multiplier after traffic already happened left THIS gate under-enforcing
+  // against a stale figure while the USD quota and the dashboard had already
+  // moved to the new one. See checkBudgetNormalized's doc comment.
   if (apiKeyInfo.id) {
     try {
-      const budgetOk = checkBudget(apiKeyInfo.id, 0, "normalized");
+      const budgetOk = await checkBudgetNormalized(apiKeyInfo.id, 0);
       if (!budgetOk.allowed) {
         return {
           apiKey,

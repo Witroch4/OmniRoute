@@ -193,6 +193,14 @@ export interface ModelUsageRow {
   serviceTier: string;
   billedModel: string | null;
   billedProvider: string | null;
+  /** NULL when this row came from the rolled-up `daily_usage_summary` leg (key
+   * attribution is dropped on rollup) OR the request had no api key. See the
+   * doc comment below and `resolveFamilyMultiplier`'s per-row callers in
+   * `src/app/api/usage/analytics/route.ts` — a NULL here means the
+   * per-key model-family multiplier (migration 128) cannot be resolved for
+   * this row and it is priced neutrally, flagged via the response's
+   * `normalizedCostCoverage`. */
+  apiKeyId: string | null;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -214,6 +222,18 @@ export interface ModelUsageRow {
  * (#omniroute-model-budget-family-routing Task 11). Real (provider, model)
  * grouping is unchanged; callers that only merge rows by real model see the
  * same totals as before, just spread over more source rows.
+ *
+ * Grouped an additional extra level by `api_key_id` (final-review Finding 2,
+ * family-multiplier fix-round) so the route can resolve each row's OWN key's
+ * model-family multiplier before re-merging into the final by-model total —
+ * a merged row spanning several keys can never be scaled by a single key's
+ * multiplier correctly. `apiKeyId` is NULL for `daily_usage_summary` rows
+ * (rollup drops per-key attribution by design, see `sources.ts`) or requests
+ * with no api key; those rows price neutrally and the gap is surfaced via
+ * `normalizedCostCoverage`, never silently absorbed into the total. This
+ * extra grouping dimension is arithmetically transparent to every OTHER
+ * consumer: cost/token sums are linear in tokens, so re-merging finer rows by
+ * (provider, model, ...) produces byte-identical totals to before.
  */
 export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams): ModelUsageRow[] {
   const db = getDbInstance();
@@ -226,6 +246,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
         LOWER(NULLIF(billed_model, '')) as billedModel,
         LOWER(NULLIF(billed_provider, '')) as billedProvider,
+        NULLIF(api_key_id, '') as apiKeyId,
         COUNT(*) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
@@ -237,7 +258,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
         COALESCE(MAX(timestamp), '') as lastUsed
       FROM ${unifiedSource} AS _u
-      GROUP BY LOWER(model), LOWER(provider), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
+      GROUP BY LOWER(model), LOWER(provider), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, '')), NULLIF(api_key_id, '')
       ORDER BY requests DESC
     `
     )
@@ -252,6 +273,8 @@ export interface ProviderCostRow {
   serviceTier: string;
   billedModel: string | null;
   billedProvider: string | null;
+  /** See the doc comment on `ModelUsageRow.apiKeyId` — same NULL-on-rollup contract. */
+  apiKeyId: string | null;
   promptTokens: number;
   completionTokens: number;
   cacheReadTokens: number;
@@ -263,7 +286,9 @@ export interface ProviderCostRow {
  * Per-provider, per-model token breakdown for provider cost calculation.
  * Also grouped by (billed_provider, billed_model) — see the note on
  * `getModelUsageRows` — so callers can price the normalized total alongside
- * the real one without a second aggregation pass.
+ * the real one without a second aggregation pass. Also grouped by
+ * `api_key_id` (final-review Finding 2) — same per-key multiplier
+ * resolution rationale as `getModelUsageRows`.
  */
 export function getProviderCostRows(
   unifiedSource: string,
@@ -279,13 +304,14 @@ export function getProviderCostRows(
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
         LOWER(NULLIF(billed_model, '')) as billedModel,
         LOWER(NULLIF(billed_provider, '')) as billedProvider,
+        NULLIF(api_key_id, '') as apiKeyId,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
       FROM ${unifiedSource} AS _u
-      GROUP BY LOWER(provider), LOWER(model), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
+      GROUP BY LOWER(provider), LOWER(model), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, '')), NULLIF(api_key_id, '')
     `
     )
     .all(params) as ProviderCostRow[];
@@ -339,6 +365,10 @@ export interface AccountCostRow {
   serviceTier: string;
   billedModel: string | null;
   billedProvider: string | null;
+  /** See the doc comment on `ModelUsageRow.apiKeyId`. Always sourced straight from
+   * `usage_history` here (this query never reads the rolled-up leg), so NULL only
+   * means "this request had no api key attached", not a rollup gap. */
+  apiKeyId: string | null;
   promptTokens: number;
   completionTokens: number;
   cacheReadTokens: number;
@@ -349,6 +379,8 @@ export interface AccountCostRow {
 /**
  * Per-account cost breakdown joined with provider_connections for display names.
  * Uses `usage_history` directly (JOIN requires real table, not a subquery alias).
+ * Also grouped by `api_key_id` (final-review Finding 2) — same per-key
+ * multiplier resolution rationale as `getModelUsageRows`.
  *
  * @param whereClause - SQL WHERE clause (may be empty string); column refs already
  *                      prefixed with `usage_history.` by the caller.
@@ -366,6 +398,7 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
         COALESCE(NULLIF(usage_history.service_tier, ''), 'standard') as serviceTier,
         LOWER(NULLIF(usage_history.billed_model, '')) as billedModel,
         LOWER(NULLIF(usage_history.billed_provider, '')) as billedProvider,
+        NULLIF(usage_history.api_key_id, '') as apiKeyId,
         COALESCE(SUM(usage_history.tokens_input), 0) as promptTokens,
         COALESCE(SUM(usage_history.tokens_output), 0) as completionTokens,
         COALESCE(SUM(usage_history.tokens_cache_read), 0) as cacheReadTokens,
@@ -374,7 +407,7 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
       FROM usage_history
       LEFT JOIN provider_connections c ON c.id = usage_history.connection_id
       ${whereClause}
-      GROUP BY account, LOWER(usage_history.provider), LOWER(usage_history.model), serviceTier, LOWER(NULLIF(usage_history.billed_model, '')), LOWER(NULLIF(usage_history.billed_provider, ''))
+      GROUP BY account, LOWER(usage_history.provider), LOWER(usage_history.model), serviceTier, LOWER(NULLIF(usage_history.billed_model, '')), LOWER(NULLIF(usage_history.billed_provider, '')), NULLIF(usage_history.api_key_id, '')
     `
     )
     .all(params) as AccountCostRow[];
@@ -490,6 +523,8 @@ export interface ServiceTierUsageRow {
   model: string;
   billedModel: string | null;
   billedProvider: string | null;
+  /** See the doc comment on `ModelUsageRow.apiKeyId` — same NULL-on-rollup contract. */
+  apiKeyId: string | null;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -500,7 +535,9 @@ export interface ServiceTierUsageRow {
 }
 
 /**
- * Per-service-tier, per-provider, per-model usage aggregates.
+ * Per-service-tier, per-provider, per-model usage aggregates. Also grouped by
+ * `api_key_id` (final-review Finding 2) — same per-key multiplier resolution
+ * rationale as `getModelUsageRows`.
  */
 export function getServiceTierUsageRows(
   unifiedSource: string,
@@ -516,6 +553,7 @@ export function getServiceTierUsageRows(
         LOWER(model) as model,
         LOWER(NULLIF(billed_model, '')) as billedModel,
         LOWER(NULLIF(billed_provider, '')) as billedProvider,
+        NULLIF(api_key_id, '') as apiKeyId,
         COUNT(*) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
@@ -524,7 +562,7 @@ export function getServiceTierUsageRows(
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
       FROM ${unifiedSource} AS _u
-      GROUP BY serviceTier, LOWER(provider), LOWER(model), LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, ''))
+      GROUP BY serviceTier, LOWER(provider), LOWER(model), LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, '')), NULLIF(api_key_id, '')
     `
     )
     .all(params) as ServiceTierUsageRow[];

@@ -73,6 +73,13 @@ const NEUTRAL_MULTIPLIER = 1.0;
  * backup from before the cap existed) and guarantees a single malformed row
  * can never multiply spend past a bounded ceiling.
  */
+const clampWarnedOnce = new Set<string>();
+
+/** Testing seam: clears the once-per-value clamp-warning dedupe. */
+export function resetFamilyMultiplierClampWarningsForTests(): void {
+  clampWarnedOnce.clear();
+}
+
 export function normalizeFamilyMultiplier(raw: unknown): number {
   const value =
     typeof raw === "number"
@@ -82,7 +89,32 @@ export function normalizeFamilyMultiplier(raw: unknown): number {
         : Number.NaN;
 
   if (!Number.isFinite(value) || value <= 0) return NEUTRAL_MULTIPLIER;
-  return Math.min(value, MAX_FAMILY_MULTIPLIER);
+
+  if (value > MAX_FAMILY_MULTIPLIER) {
+    // A row above the cap should be impossible through the normal save path
+    // (`requireValidMultiplier` in apiKeyModelFamilyMultipliers.ts rejects it
+    // outright) — reaching this branch means a row bypassed that write-time
+    // validation (direct DB edit, restored backup, a future migration). Silently
+    // clamping it forever with no signal is exactly the kind of "explicit flag,
+    // not silent mixing" gap final-review Finding 2 called out elsewhere — warn
+    // once per distinct value so an operator can find and fix the offending row,
+    // the same pattern `pricingResolution.ts`'s `reportMissingPricing` and
+    // `modelBudgetRouting.ts`'s `structuralSpendMismatchWarned` already use.
+    const dedupeKey = String(value);
+    if (!clampWarnedOnce.has(dedupeKey)) {
+      clampWarnedOnce.add(dedupeKey);
+      console.warn(
+        `[modelFamilyMultiplier] a stored multiplier of ${value} exceeds ` +
+          `MAX_FAMILY_MULTIPLIER (${MAX_FAMILY_MULTIPLIER}) and is being clamped to ` +
+          `${MAX_FAMILY_MULTIPLIER}x on every read. This should be unreachable through ` +
+          `the normal save path (src/lib/db/apiKeyModelFamilyMultipliers.ts rejects it) ` +
+          `— find and fix the row that bypassed it.`
+      );
+    }
+    return MAX_FAMILY_MULTIPLIER;
+  }
+
+  return value;
 }
 
 /**
