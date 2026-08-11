@@ -119,15 +119,64 @@ const SORTED_PREFIXES: readonly { prefix: string; categoryId: string }[] =
     cat.prefixes.map((prefix) => ({ prefix, categoryId: cat.id }))
   ).sort((a, b) => b.prefix.length - a.prefix.length);
 
-/**
- * Map a request pathname to its endpoint category ID.
- * Returns `null` if the path doesn't match any category (e.g. management routes).
- */
-export function resolveEndpointCategory(pathname: string): string | null {
+function matchPrefix(path: string): string | null {
   for (const { prefix, categoryId } of SORTED_PREFIXES) {
-    if (pathname === prefix || pathname.startsWith(prefix + "/")) {
+    if (path === prefix || path.startsWith(prefix + "/")) {
       return categoryId;
     }
   }
+  return null;
+}
+
+/**
+ * Path aliases that `next.config.mjs` rewrites onto a `/v1/...` handler under a
+ * DIFFERENT name, so prefixing `/v1` is not enough to recover the canonical path.
+ * Today only `/codex/:path*` -> `/api/v1/responses`.
+ */
+const ALIAS_TO_CANONICAL: readonly (readonly [string, string])[] = [["/codex", "/v1/responses"]];
+
+/**
+ * Collapse the equivalent spellings of the same route before category matching.
+ *
+ * `next.config.mjs` rewrites several unversioned/duplicated forms onto the very same
+ * handler — `/chat/completions`, `/responses`, `/models`, `/v1/v1/:path*`, `/codex/:path*`
+ * — and the App Router handler observes the ORIGINAL pathname, not the destination
+ * (proved by `usage_history`, which records `/chat/completions` and `/v1/chat/completions`
+ * as distinct values for the same endpoint).
+ */
+function normalizeEndpointPath(pathname: string): string {
+  let path = pathname;
+  // A handler that sees the rewrite destination must resolve like one that sees the source.
+  if (path === "/api/v1" || path.startsWith("/api/v1/")) path = path.slice(4);
+  // `/v1/v1/:path*` is an accepted alias — collapse the duplicate segment.
+  while (path.startsWith("/v1/v1/") || path === "/v1/v1") path = path.slice(3);
+  return path;
+}
+
+/**
+ * Map a request pathname to its endpoint category ID.
+ * Returns `null` if the path doesn't match any category (e.g. management routes).
+ *
+ * Security note: `apiKeyPolicy`'s endpoint restriction SKIPS enforcement on a `null`
+ * category, so every spelling that reaches an inference handler must resolve here.
+ * Before normalization, dropping `/v1` (`POST /chat/completions`) resolved to `null`
+ * and silently bypassed the restriction entirely — real traffic already used that
+ * unversioned form. Only the endpoint restriction was affected: every other policy
+ * check keys off the API key and the model string, never the path.
+ */
+export function resolveEndpointCategory(pathname: string): string | null {
+  const path = normalizeEndpointPath(pathname);
+
+  const direct = matchPrefix(path);
+  if (direct) return direct;
+
+  for (const [alias, canonical] of ALIAS_TO_CANONICAL) {
+    if (path === alias || path.startsWith(alias + "/")) return matchPrefix(canonical);
+  }
+
+  // Unversioned aliases (`/chat/completions`, `/models`, `/responses`, …) rewrite onto
+  // their `/v1` twin, so they must resolve to the same category as the versioned form.
+  if (!path.startsWith("/v1")) return matchPrefix("/v1" + path);
+
   return null;
 }
