@@ -3328,31 +3328,79 @@ const PermissionsModal = memo(function PermissionsModal({
               {ENDPOINT_CATEGORIES.map((cat) => {
                 const isSelected = selectedEndpoints.includes(cat.id);
                 return (
-                  <button
-                    key={cat.id}
-                    onClick={() => handleToggleEndpoint(cat.id)}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs transition-all ${
-                      isSelected
-                        ? "bg-primary/10 text-primary"
-                        : "text-text-muted hover:bg-surface/50 hover:text-text-main"
-                    }`}
-                  >
-                    <div
-                      className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                        isSelected ? "bg-primary border-primary" : "border-border"
+                  <div key={cat.id} className="flex flex-col gap-1">
+                    <button
+                      onClick={() => handleToggleEndpoint(cat.id)}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs transition-all ${
+                        isSelected
+                          ? "bg-primary/10 text-primary"
+                          : "text-text-muted hover:bg-surface/50 hover:text-text-main"
                       }`}
                     >
-                      {isSelected && (
-                        <span className="material-symbols-outlined text-white text-[10px]">
-                          check
-                        </span>
-                      )}
-                    </div>
-                    <span className="truncate flex-1">{cat.label}</span>
-                    <span className="text-[10px] text-text-muted shrink-0 truncate max-w-[140px]">
-                      {cat.description}
-                    </span>
-                  </button>
+                      <div
+                        className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                          isSelected ? "bg-primary border-primary" : "border-border"
+                        }`}
+                      >
+                        {isSelected && (
+                          <span className="material-symbols-outlined text-white text-[10px]">
+                            check
+                          </span>
+                        )}
+                      </div>
+                      <span className="truncate flex-1">{cat.label}</span>
+                      <span className="text-[10px] text-text-muted shrink-0 truncate max-w-[140px]">
+                        {cat.description}
+                      </span>
+                    </button>
+
+                    {/* Selecting the parent already allows every subcategory, so the
+                        narrow rows only become actionable once the parent is unchecked. */}
+                    {cat.subcategories?.map((sub) => {
+                      const subSelected = selectedEndpoints.includes(sub.id);
+                      const impliedByParent = isSelected;
+                      const checked = impliedByParent || subSelected;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => handleToggleEndpoint(sub.id)}
+                          disabled={impliedByParent}
+                          title={
+                            impliedByParent
+                              ? "Already allowed by the parent category — uncheck it to narrow"
+                              : undefined
+                          }
+                          className={`w-full flex items-center gap-2 pl-7 pr-2 py-1.5 rounded text-left text-xs transition-all ${
+                            impliedByParent
+                              ? "text-text-muted/60 cursor-not-allowed"
+                              : subSelected
+                                ? "bg-primary/10 text-primary"
+                                : "text-text-muted hover:bg-surface/50 hover:text-text-main"
+                          }`}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                              checked && !impliedByParent
+                                ? "bg-primary border-primary"
+                                : checked
+                                  ? "bg-border border-border"
+                                  : "border-border"
+                            }`}
+                          >
+                            {checked && (
+                              <span className="material-symbols-outlined text-white text-[10px]">
+                                check
+                              </span>
+                            )}
+                          </div>
+                          <span className="truncate flex-1">{sub.label}</span>
+                          <span className="text-[10px] text-text-muted shrink-0 truncate max-w-[140px]">
+                            {sub.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </div>

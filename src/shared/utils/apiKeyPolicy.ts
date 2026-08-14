@@ -27,7 +27,7 @@ import {
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import * as log from "@/sse/utils/logger";
 import { checkRateLimit, RateLimitRule } from "./rateLimiter";
-import { resolveEndpointCategory } from "@/shared/constants/endpointCategories";
+import { isEndpointAllowed } from "@/shared/constants/endpointCategories";
 import { resolveQuotaKeyScope } from "@/lib/quota/quotaKey";
 import { isQuotaModelName, parseQuotaModelName } from "@/lib/quota/quotaModelNaming";
 import { buildApiKeyUsageLimitPolicyRejection } from "@/lib/usage/apiKeyUsageLimits";
@@ -413,14 +413,14 @@ export async function enforceApiKeyPolicy(
   if (apiKeyInfo.allowedEndpoints && apiKeyInfo.allowedEndpoints.length > 0) {
     try {
       const url = new URL(request.url);
-      const category = resolveEndpointCategory(url.pathname);
-      if (category && !apiKeyInfo.allowedEndpoints.includes(category)) {
+      const verdict = isEndpointAllowed(url.pathname, apiKeyInfo.allowedEndpoints);
+      if (!verdict.allowed) {
         return {
           apiKey,
           apiKeyInfo,
           rejection: errorResponse(
             HTTP_STATUS.FORBIDDEN,
-            `Endpoint category "${category}" is not allowed for this API key`
+            `Endpoint category "${verdict.deniedSelector}" is not allowed for this API key`
           ),
         };
       }

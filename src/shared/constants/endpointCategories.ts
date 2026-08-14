@@ -10,11 +10,26 @@
  * @module shared/constants/endpointCategories
  */
 
+/**
+ * A narrower selection *inside* a category, so a key can be restricted to one wire
+ * protocol rather than to the whole family of chat-shaped routes.
+ *
+ * Selecting the parent category still allows every subcategory (backward compatible);
+ * selecting a subcategory allows ONLY its own prefixes.
+ */
+export interface EndpointSubcategory {
+  id: string;
+  label: string;
+  description: string;
+  prefixes: string[];
+}
+
 export interface EndpointCategory {
   id: string;
   label: string;
   description: string;
   prefixes: string[];
+  subcategories?: readonly EndpointSubcategory[];
 }
 
 export const ENDPOINT_CATEGORIES: readonly EndpointCategory[] = [
@@ -23,6 +38,26 @@ export const ENDPOINT_CATEGORIES: readonly EndpointCategory[] = [
     label: "Chat / Messages",
     description: "Chat completions, text completions, messages, and responses",
     prefixes: ["/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/responses"],
+    subcategories: [
+      {
+        id: "chat:messages",
+        label: "└ Anthropic-native only (Claude Code)",
+        description: "/v1/messages — rejects OpenAI-format clients",
+        prefixes: ["/v1/messages"],
+      },
+      {
+        id: "chat:completions",
+        label: "└ OpenAI-compatible chat",
+        description: "/v1/chat/completions, /v1/completions",
+        prefixes: ["/v1/chat/completions", "/v1/completions"],
+      },
+      {
+        id: "chat:responses",
+        label: "└ OpenAI Responses (Codex)",
+        description: "/v1/responses",
+        prefixes: ["/v1/responses"],
+      },
+    ],
   },
   {
     id: "search",
@@ -165,18 +200,98 @@ function normalizeEndpointPath(pathname: string): string {
  * check keys off the API key and the model string, never the path.
  */
 export function resolveEndpointCategory(pathname: string): string | null {
+  const canonical = canonicalEndpointPath(pathname);
+  return canonical === null ? null : matchPrefix(canonical);
+}
+
+/**
+ * Reduce every accepted spelling of a route to the single `/v1/...` form the
+ * category table is written against, so category and subcategory matching cannot
+ * disagree about which route was hit. Returns `null` for paths outside the table
+ * (management routes, unknown paths) — those stay unrestricted, as before.
+ */
+function canonicalEndpointPath(pathname: string): string | null {
   const path = normalizeEndpointPath(pathname);
 
-  const direct = matchPrefix(path);
-  if (direct) return direct;
+  if (matchPrefix(path)) return path;
 
   for (const [alias, canonical] of ALIAS_TO_CANONICAL) {
-    if (path === alias || path.startsWith(alias + "/")) return matchPrefix(canonical);
+    if (path === alias || path.startsWith(alias + "/")) {
+      return matchPrefix(canonical) ? canonical : null;
+    }
   }
 
   // Unversioned aliases (`/chat/completions`, `/models`, `/responses`, …) rewrite onto
   // their `/v1` twin, so they must resolve to the same category as the versioned form.
-  if (!path.startsWith("/v1")) return matchPrefix("/v1" + path);
+  if (!path.startsWith("/v1")) {
+    const versioned = "/v1" + path;
+    if (matchPrefix(versioned)) return versioned;
+  }
 
   return null;
+}
+
+/** Longest-prefix-first, same rule as `SORTED_PREFIXES` but across subcategories. */
+const SORTED_SUB_PREFIXES: readonly {
+  prefix: string;
+  categoryId: string;
+  subcategoryId: string;
+}[] = ENDPOINT_CATEGORIES.flatMap((cat) =>
+  (cat.subcategories ?? []).flatMap((sub) =>
+    sub.prefixes.map((prefix) => ({ prefix, categoryId: cat.id, subcategoryId: sub.id }))
+  )
+).sort((a, b) => b.prefix.length - a.prefix.length);
+
+export interface EndpointSelectors {
+  /** `null` when the path is outside the category table (stays unrestricted). */
+  categoryId: string | null;
+  /** `null` when the category has no subcategory covering this path. */
+  subcategoryId: string | null;
+}
+
+/**
+ * Resolve a request path to the permission tokens that may authorize it.
+ *
+ * A key authorizes the request if `allowedEndpoints` contains EITHER the category
+ * (coarse, pre-existing behaviour) OR the subcategory (narrow). That ordering is what
+ * keeps stored `["chat"]` values working untouched while `["chat:messages"]` becomes
+ * strictly narrower than `["chat"]` rather than a different axis.
+ */
+export function resolveEndpointSelectors(pathname: string): EndpointSelectors {
+  const canonical = canonicalEndpointPath(pathname);
+  if (canonical === null) return { categoryId: null, subcategoryId: null };
+
+  const categoryId = matchPrefix(canonical);
+  let subcategoryId: string | null = null;
+  for (const sub of SORTED_SUB_PREFIXES) {
+    if (canonical === sub.prefix || canonical.startsWith(sub.prefix + "/")) {
+      subcategoryId = sub.subcategoryId;
+      break;
+    }
+  }
+
+  return { categoryId, subcategoryId };
+}
+
+/**
+ * Single source of truth for the endpoint restriction decision.
+ *
+ * An empty/absent `allowedEndpoints` means "all endpoints" (backward compatible), and a
+ * path outside the category table is left alone — both mirror the original policy.
+ */
+export function isEndpointAllowed(
+  pathname: string,
+  allowedEndpoints: readonly string[] | null | undefined
+): { allowed: true } | { allowed: false; deniedSelector: string } {
+  if (!allowedEndpoints || allowedEndpoints.length === 0) return { allowed: true };
+
+  const { categoryId, subcategoryId } = resolveEndpointSelectors(pathname);
+  if (categoryId === null) return { allowed: true };
+
+  if (allowedEndpoints.includes(categoryId)) return { allowed: true };
+  if (subcategoryId !== null && allowedEndpoints.includes(subcategoryId)) {
+    return { allowed: true };
+  }
+
+  return { allowed: false, deniedSelector: subcategoryId ?? categoryId };
 }
