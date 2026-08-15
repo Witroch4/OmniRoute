@@ -1045,7 +1045,20 @@ function CostExplorerCard({
         align: "right",
       },
       { key: "requests", label: t("requests"), align: "right" },
+      // The other side of the redirect, mirroring the Cost / Normalized cost pair:
+      // the basis-tied column above is primary, this one carries what the toggle
+      // would otherwise make you flip to see.
+      {
+        key: isBilled ? "servedRequests" : "requestedRequests",
+        label: isBilled ? "Served requests" : "Requested requests",
+        align: "right",
+      },
       { key: "totalTokens", label: t("tokens"), align: "right" },
+      {
+        key: isBilled ? "servedTotalTokens" : "requestedTotalTokens",
+        label: isBilled ? "Served tokens" : "Requested tokens",
+        align: "right",
+      },
       { key: "avgCostPerRequest", label: t("avgCostPerRequest"), align: "right" },
       { key: "sharePct", label: t("share"), align: "right" },
     ],
@@ -1123,7 +1136,9 @@ function CostExplorerCard({
       ) : (
         <>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-205 text-sm">
+            {/* Two extra numeric columns — widen the scroll floor so the added
+                cells don't squeeze the dimension label into an ellipsis. */}
+            <table className="w-full min-w-250 text-sm">
               <thead>
                 <tr className="border-b border-border/30 text-[11px] uppercase text-text-muted">
                   {columns.map((column) => (
@@ -1202,7 +1217,35 @@ function CostExplorerCard({
                       {numberFormatter.format(row.requests)}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
+                      {row.volumeSplitDiffers ? (
+                        numberFormatter.format(
+                          isBilled ? row.servedRequests : row.requestedRequests
+                        )
+                      ) : (
+                        <span
+                          title="No model budget rule redirected this row — served and requested are the same"
+                          aria-label="Served and requested are the same"
+                        >
+                          —
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 text-right font-mono text-text-muted">
                       {compactFormatter.format(row.totalTokens)}
+                    </td>
+                    <td className="py-3 text-right font-mono text-text-muted">
+                      {row.volumeSplitDiffers ? (
+                        compactFormatter.format(
+                          isBilled ? row.servedTotalTokens : row.requestedTotalTokens
+                        )
+                      ) : (
+                        <span
+                          title="No model budget rule redirected this row — served and requested are the same"
+                          aria-label="Served and requested are the same"
+                        >
+                          —
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 text-right font-mono text-text-muted">
                       {row.avgCostPerRequest > 0

@@ -806,6 +806,36 @@ export async function GET(request: Request) {
     }
     summary.streak = computeActivityStreak(activityMap);
 
+    // Volume counted under BOTH identities, independent of `costBasis`.
+    //
+    // `requests`/`totalTokens` below follow the active basis, so in `real` they are
+    // served-side and in `billed` they are requested-side — which makes a redirected
+    // row visible only by flipping the toggle and diffing two screens by hand. These
+    // two maps let a single row carry both, so `claude-sonnet-5` can read
+    // "721 served / 286 requested" without changing view. Keyed the same way the
+    // bucket is (`provider::model`), so the lookup is exact rather than by label.
+    const servedVolumeByKey = new Map<string, { requests: number; totalTokens: number }>();
+    const requestedVolumeByKey = new Map<string, { requests: number; totalTokens: number }>();
+    for (const row of modelRows) {
+      const realModel = row.model as string;
+      const realProvider = row.provider as string;
+      if (!realModel || !realProvider) continue;
+      const requestedProvider = toStringValue(row.billedProvider) || realProvider;
+      const requestedModel = toStringValue(row.billedModel) || realModel;
+      const requests = Number(row.requests) || 0;
+      const totalTokens = Number(row.totalTokens) || 0;
+
+      for (const [map, key] of [
+        [servedVolumeByKey, `${realProvider}::${realModel}`],
+        [requestedVolumeByKey, `${requestedProvider}::${requestedModel}`],
+      ] as const) {
+        const bucket = map.get(key) || { requests: 0, totalTokens: 0 };
+        bucket.requests += requests;
+        bucket.totalTokens += totalTokens;
+        map.set(key, bucket);
+      }
+    }
+
     const modelMap = new Map<string, Record<string, unknown>>();
     for (const row of modelRows) {
       const realModel = row.model as string;
@@ -860,26 +890,39 @@ export async function GET(request: Request) {
     }
 
     const byModel = Array.from(modelMap.values())
-      .map((row) => ({
-        model: row.model,
-        provider: row.provider,
-        rawModel: row.rawModel,
-        requests: Number(row.requests),
-        promptTokens: Number(row.promptTokens),
-        completionTokens: Number(row.completionTokens),
-        totalTokens: Number(row.totalTokens),
-        avgLatencyMs:
-          Number(row.requests) > 0
-            ? Math.round(Number(row.latencyWeightedTotal || 0) / Number(row.requests))
-            : 0,
-        successRatePct:
-          Number(row.requests) > 0
-            ? Number((Number(row.successfulRequests || 0) / Number(row.requests)) * 100).toFixed(2)
-            : 0,
-        lastUsed: row.lastUsed,
-        cost: roundCost(Number(row.cost || 0)),
-        normalizedCost: roundCost(Number(row.normalizedCost || 0)),
-      }))
+      .map((row) => {
+        const volumeKey = `${toStringValue(row.provider)}::${toStringValue(row.rawModel)}`;
+        const served = servedVolumeByKey.get(volumeKey);
+        const requested = requestedVolumeByKey.get(volumeKey);
+        return {
+          model: row.model,
+          provider: row.provider,
+          rawModel: row.rawModel,
+          requests: Number(row.requests),
+          /** Requests that actually RAN on this model, whatever the client asked for. */
+          servedRequests: served?.requests ?? 0,
+          /** Requests the client ASKED for under this identity, whatever ran. */
+          requestedRequests: requested?.requests ?? 0,
+          servedTotalTokens: served?.totalTokens ?? 0,
+          requestedTotalTokens: requested?.totalTokens ?? 0,
+          promptTokens: Number(row.promptTokens),
+          completionTokens: Number(row.completionTokens),
+          totalTokens: Number(row.totalTokens),
+          avgLatencyMs:
+            Number(row.requests) > 0
+              ? Math.round(Number(row.latencyWeightedTotal || 0) / Number(row.requests))
+              : 0,
+          successRatePct:
+            Number(row.requests) > 0
+              ? Number((Number(row.successfulRequests || 0) / Number(row.requests)) * 100).toFixed(
+                  2
+                )
+              : 0,
+          lastUsed: row.lastUsed,
+          cost: roundCost(Number(row.cost || 0)),
+          normalizedCost: roundCost(Number(row.normalizedCost || 0)),
+        };
+      })
       .sort((left, right) => Number(right.requests) - Number(left.requests))
       .slice(0, 50);
 

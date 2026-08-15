@@ -15,6 +15,10 @@ export type CostExplorerSortKey =
   | "normalizedCostUsd"
   | "requests"
   | "totalTokens"
+  | "servedRequests"
+  | "requestedRequests"
+  | "servedTotalTokens"
+  | "requestedTotalTokens"
   | "sharePct"
   | "avgCostPerRequest";
 export type CostExplorerSortDirection = "asc" | "desc";
@@ -47,6 +51,20 @@ export interface CostExplorerBreakdownRow {
    * `buildCostExplorerRows` falls back to `cost` in that case.
    */
   normalizedCost?: number;
+  /**
+   * Volume counted under BOTH identities, independent of `costBasis`.
+   *
+   * `requests`/`totalTokens` follow the active basis, so a redirected row is only
+   * visible by flipping the toggle and diffing two screens by hand. These carry the
+   * other side on the same row: `served*` is what actually RAN on this model,
+   * `requested*` is what the client ASKED for under this identity. Optional because
+   * an older cached payload won't have them — the builder falls back to the
+   * basis-tied figure, which collapses the split rather than inventing one.
+   */
+  servedRequests?: number;
+  requestedRequests?: number;
+  servedTotalTokens?: number;
+  requestedTotalTokens?: number;
   savings?: number;
   usageSavingsTokens?: number;
 }
@@ -75,6 +93,19 @@ export interface CostExplorerRow {
    * model budget rule rerouted the request — see `CostExplorerBreakdownRow`.
    */
   normalizedCostUsd: number;
+  /** Requests that actually RAN on this model, whatever the client asked for. */
+  servedRequests: number;
+  /** Requests the client ASKED for under this identity, whatever actually ran. */
+  requestedRequests: number;
+  servedTotalTokens: number;
+  requestedTotalTokens: number;
+  /**
+   * The two sides disagree, i.e. a model budget rule rerouted traffic into or out
+   * of this row. False means served == requested and the split adds no
+   * information — the table prints "—" rather than repeating the number, the same
+   * convention `costsMatchDisplay` uses for the cost pair. Never affects sorting.
+   */
+  volumeSplitDiffers: boolean;
   /**
    * `cost` and `normalizedCostUsd` render as the same number for this row (see
    * `costsMatchAtDisplayPrecision`). The Cost Explorer table uses this to print
@@ -280,6 +311,18 @@ export function buildCostExplorerRows({
       const normalizedCostUsd =
         row.normalizedCost === undefined ? cost : toFiniteNumber(row.normalizedCost);
       const totalTokens = toFiniteNumber(row.totalTokens);
+      // An older cached payload has neither side — fall back to the basis-tied
+      // figure so both read equal and the split simply renders as "—".
+      const servedRequests =
+        row.servedRequests === undefined ? requests : toFiniteNumber(row.servedRequests);
+      const requestedRequests =
+        row.requestedRequests === undefined ? requests : toFiniteNumber(row.requestedRequests);
+      const servedTotalTokens =
+        row.servedTotalTokens === undefined ? totalTokens : toFiniteNumber(row.servedTotalTokens);
+      const requestedTotalTokens =
+        row.requestedTotalTokens === undefined
+          ? totalTokens
+          : toFiniteNumber(row.requestedTotalTokens);
       const primaryCost = costBasis === "billed" ? normalizedCostUsd : cost;
       const useCostForShare = totalCost > 0;
       const shareBase = useCostForShare ? totalCost : totalRequests;
@@ -296,6 +339,12 @@ export function buildCostExplorerRows({
         totalTokens,
         cost,
         normalizedCostUsd,
+        servedRequests,
+        requestedRequests,
+        servedTotalTokens,
+        requestedTotalTokens,
+        volumeSplitDiffers:
+          servedRequests !== requestedRequests || servedTotalTokens !== requestedTotalTokens,
         costsMatchDisplay: costsMatchAtDisplayPrecision(cost, normalizedCostUsd),
         avgCostPerRequest: requests > 0 ? primaryCost / requests : 0,
         sharePct: shareBase > 0 ? (shareValue / shareBase) * 100 : 0,
