@@ -356,6 +356,32 @@ async function reconcileInferredProvidersWithActiveCatalog(providerIds: string[]
   }
 }
 
+/**
+ * Providers that have a connection CONFIGURED, regardless of whether it is
+ * currently usable (expired OAuth, revoked token, manually disabled).
+ *
+ * Distinct from `getActiveProviderSet()` on purpose: "the operator set this
+ * account up" and "the account works right now" are different questions, and
+ * routing decisions must not silently change answer when a token expires.
+ */
+async function getConfiguredProviderSet() {
+  try {
+    const { getCachedProviderConnections } = await import("@/lib/db/readCache");
+    const conns = (await getCachedProviderConnections()) as unknown[];
+    const providers = conns
+      .map((connection) => {
+        if (!connection || typeof connection !== "object") return null;
+        const record = connection as ProviderConnectionLike;
+        if (typeof record.provider !== "string" || !record.provider) return null;
+        return resolveProviderAlias(record.provider);
+      })
+      .filter((provider): provider is string => Boolean(provider));
+    return new Set(providers);
+  } catch {
+    return null;
+  }
+}
+
 function isTruthyEnv(value: string | undefined) {
   return typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim());
 }
@@ -377,7 +403,8 @@ async function getPreferClaudeCodeForUnprefixedClaudeModels() {
 function shouldPreferClaudeCodeForUnprefixedClaudeModel(
   modelId: string,
   activeProviders: Set<string> | null,
-  preferClaudeCode: boolean
+  preferClaudeCode: boolean,
+  configuredProviders: Set<string> | null = null
 ) {
   if (!preferClaudeCode || !/^claude-/i.test(modelId)) {
     return false;
@@ -387,7 +414,18 @@ function shouldPreferClaudeCodeForUnprefixedClaudeModel(
   // explicit operator flag and let the normal credential path report any missing
   // Claude Code account. When state is available, avoid stealing traffic from
   // other Claude-family providers unless Claude Code is actually active.
-  return activeProviders === null || activeProviders.size === 0 || activeProviders.has("claude");
+  if (activeProviders === null || activeProviders.size === 0 || activeProviders.has("claude")) {
+    return true;
+  }
+
+  // A CONFIGURED-but-unusable Claude Code account (expired OAuth, revoked
+  // refresh token) must still win the unprefixed route. Dropping to generic
+  // inference here makes an auth outage surface as "Ambiguous model
+  // 'claude-sonnet-5'", which sends operators hunting a routing bug that does
+  // not exist. Route to Claude Code and let the credential path report the real
+  // "authentication expired" error. Only a provider with NO Claude Code
+  // connection at all falls through to other Claude-family providers.
+  return configuredProviders !== null && configuredProviders.has("claude");
 }
 
 function shouldTreatAsExactModelId(modelStr: string | null) {
@@ -596,12 +634,17 @@ function parseAliasTarget(target: string): ResolvedModelTarget | null {
 }
 
 async function resolveModelByProviderInference(modelId: string, extendedContext: boolean) {
-  const [activeProviders, activeSyncedProviders, preferClaudeCodeForUnprefixedClaudeModels] =
-    await Promise.all([
-      getActiveProviderSet(),
-      getActiveSyncedProvidersForModel(modelId),
-      getPreferClaudeCodeForUnprefixedClaudeModels(),
-    ]);
+  const [
+    activeProviders,
+    configuredProviders,
+    activeSyncedProviders,
+    preferClaudeCodeForUnprefixedClaudeModels,
+  ] = await Promise.all([
+    getActiveProviderSet(),
+    getConfiguredProviderSet(),
+    getActiveSyncedProvidersForModel(modelId),
+    getPreferClaudeCodeForUnprefixedClaudeModels(),
+  ]);
 
   // Codex-native bare ids prefer the ChatGPT subscription, but the preference is only
   // allowed to PREEMPT another provider when a codex connection is actually active.
@@ -708,7 +751,8 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     shouldPreferClaudeCodeForUnprefixedClaudeModel(
       modelId,
       activeProviders,
-      preferClaudeCodeForUnprefixedClaudeModels
+      preferClaudeCodeForUnprefixedClaudeModels,
+      configuredProviders
     )
   ) {
     return {
@@ -786,7 +830,8 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
       shouldPreferClaudeCodeForUnprefixedClaudeModel(
         modelId,
         activeProviders,
-        preferClaudeCodeForUnprefixedClaudeModels
+        preferClaudeCodeForUnprefixedClaudeModels,
+        configuredProviders
       )
     ) {
       return { provider: "claude", model: modelId, extendedContext };
