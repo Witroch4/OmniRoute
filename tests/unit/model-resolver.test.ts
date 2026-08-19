@@ -185,8 +185,7 @@ test(
 );
 
 test("getModelInfoCore routes unprefixed Claude models to Claude Code from settings toggle", async () => {
-  const previousEnvFlag =
-    process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+  const previousEnvFlag = process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
   delete process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
 
   try {
@@ -216,8 +215,7 @@ test("getModelInfoCore routes unprefixed Claude models to Claude Code from setti
 });
 
 test("getModelInfoCore lets settings toggle disable Claude Code preference", async () => {
-  const previousEnvFlag =
-    process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
+  const previousEnvFlag = process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS;
   process.env.OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS = "true";
 
   try {
@@ -240,3 +238,102 @@ test("getModelInfoCore lets settings toggle disable Claude Code preference", asy
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Regression: an EXPIRED Claude Code account must not degrade unprefixed Claude
+// routing into "Ambiguous model".
+//
+// Real incident (2026-08-18): the single `claude` connection lost its refresh
+// token (`unrecoverable_refresh_error`). `getActiveProviderSet()` drops inactive
+// connections, so the provider set became non-empty WITHOUT "claude", the
+// Claude-Code preference stopped applying, and every unprefixed `claude-*`
+// request came back as `Ambiguous model 'claude-sonnet-5'. Use provider/model
+// prefix (...)`. That message sends operators debugging the resolver while the
+// actual failure is an auth outage. Routing must stay on Claude Code so the
+// credential path reports the real error.
+//
+// The pre-existing tests above cannot catch this: they run against an empty
+// connections table, where `activeProviders.size === 0` satisfies the
+// preference through a different branch.
+// ---------------------------------------------------------------------------
+
+async function withProviderConnections(
+  connections: Array<{ provider: string; isActive: boolean }>,
+  fn: () => Promise<void>
+) {
+  const { createProviderConnection, deleteProviderConnection } =
+    await import("../../src/lib/db/providers.ts");
+  const { updateSettings } = await import("../../src/lib/db/settings.ts");
+  const { invalidateDbCache } = await import("../../src/lib/db/readCache.ts");
+
+  // The persisted setting wins over the env flag, and an earlier test in this
+  // file writes it `false` without restoring it. Set it explicitly so these
+  // cases test connection state, not leaked settings order.
+  await updateSettings({ preferClaudeCodeForUnprefixedClaudeModels: true });
+  invalidateDbCache("settings");
+
+  const created: string[] = [];
+  try {
+    for (const [index, conn] of connections.entries()) {
+      const row = (await createProviderConnection({
+        provider: conn.provider,
+        authType: "oauth",
+        name: `${conn.provider}-fixture-${index}`,
+        email: `${conn.provider}-fixture-${index}@example.test`,
+        isActive: conn.isActive,
+      })) as { id: string };
+      created.push(row.id);
+    }
+    invalidateDbCache("connections");
+    await fn();
+  } finally {
+    for (const id of created) {
+      await deleteProviderConnection(id);
+    }
+    invalidateDbCache("connections");
+  }
+}
+
+test(
+  "getModelInfoCore keeps unprefixed Claude models on Claude Code when the account is configured but EXPIRED",
+  withEnv("OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS", "true", async () => {
+    await withProviderConnections(
+      [
+        // The Claude Code account exists but its OAuth died.
+        { provider: "claude", isActive: false },
+        // Another provider is healthy, so the active set is non-empty.
+        { provider: "github", isActive: true },
+      ],
+      async () => {
+        const result = await model.getModelInfoCore("claude-sonnet-5", {});
+        assert.equal(
+          result.provider,
+          "claude",
+          "an expired Claude Code account must still win the unprefixed route"
+        );
+        const errorType = "errorType" in result ? result.errorType : undefined;
+        assert.notEqual(
+          errorType,
+          "ambiguous_model",
+          "an auth outage must not be reported as model ambiguity"
+        );
+      }
+    );
+  })
+);
+
+test(
+  "getModelInfoCore does NOT hijack unprefixed Claude models when no Claude Code account exists",
+  withEnv("OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS", "true", async () => {
+    await withProviderConnections([{ provider: "github", isActive: true }], async () => {
+      // Guard on the fix above: preferring a provider the operator never set up
+      // would steal traffic from other Claude-family providers.
+      const result = await model.getModelInfoCore("claude-sonnet-5", {});
+      assert.notEqual(
+        result.provider,
+        "claude",
+        "with no Claude Code connection at all, normal inference must run"
+      );
+    });
+  })
+);
