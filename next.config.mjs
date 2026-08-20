@@ -161,6 +161,9 @@ const nextConfig = {
     //
     // Unset (the default) leaves Next's own heuristic untouched, so nothing
     // changes for anyone who does not opt in.
+    ...(Number.parseInt(process.env.OMNIROUTE_BUILD_CPUS ?? "", 10) > 0
+      ? { cpus: Number.parseInt(process.env.OMNIROUTE_BUILD_CPUS, 10) }
+      : {}),
     serverActions: {
       bodySizeLimit: process.env.OMNIROUTE_SERVER_ACTIONS_BODY_LIMIT || "50mb",
     },
