@@ -39,6 +39,10 @@ import {
   resolveAntigravityModelId,
   getAntigravityModelFallbacks,
 } from "../config/antigravityModelAliases.ts";
+import {
+  DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS,
+  resolveAntigravityMaxOutputTokens,
+} from "../config/antigravityOutputLimits.ts";
 import { cloakAntigravityToolPayload } from "../config/toolCloaking.ts";
 import {
   shouldStripCloudCodeThinking,
@@ -382,18 +386,10 @@ function getRequestTargetModel(body: Record<string, unknown>): string {
   return typeof target === "string" && target.length > 0 ? target : "unknown";
 }
 
-/**
- * Hard ceiling on `generationConfig.maxOutputTokens` for Antigravity Cloud Code.
- *
- * Ports decolua/9router#779 (lukmanfauzie): VS Code GitHub Copilot Chat in
- * Agent mode regularly requests 32K–65K output tokens, which the Antigravity
- * backend rejects with HTTP 400 "Invalid Argument". 16384 matches the
- * upstream-accepted ceiling confirmed via successful 200 OK runs with
- * claude-sonnet-4-6 and gemini-3.1-pro-high across both Ask and Agent modes.
- */
-export const MAX_ANTIGRAVITY_OUTPUT_TOKENS = 16384;
-
-function applyAntigravityGenerationDefaults(request: Record<string, unknown>): void {
+function applyAntigravityGenerationDefaults(
+  request: Record<string, unknown>,
+  maxOutputTokensCeiling: number = DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS
+): void {
   const generationConfig =
     request.generationConfig && typeof request.generationConfig === "object"
       ? (request.generationConfig as Record<string, unknown>)
@@ -421,13 +417,19 @@ function applyAntigravityGenerationDefaults(request: Record<string, unknown>): v
   }
 
   // Final cap (after the thinkingBudget bump may have raised the value):
-  // GitHub Copilot Agent envelopes commonly carry oversized maxOutputTokens
-  // (32K–65K) that trigger upstream 400 "Invalid Argument". Clamp silently
-  // — the cap is provider-driven, not client-driven, and only matters when
-  // the request would otherwise be rejected outright.
+  // oversized envelopes (GitHub Copilot Agent commonly sends 32K–65K) trigger
+  // upstream 400 "Invalid Argument" on models that cannot serve them. Clamp
+  // silently to the CALLED MODEL's own ceiling — the limit is provider-driven,
+  // not client-driven, and only matters when the request would otherwise be
+  // rejected outright. See antigravityOutputLimits.ts for why this is per-model
+  // instead of the blanket 16384 it used to be.
   const finalMax = Number(generationConfig.maxOutputTokens);
-  if (Number.isFinite(finalMax) && finalMax > MAX_ANTIGRAVITY_OUTPUT_TOKENS) {
-    generationConfig.maxOutputTokens = MAX_ANTIGRAVITY_OUTPUT_TOKENS;
+  const ceiling =
+    Number.isFinite(maxOutputTokensCeiling) && maxOutputTokensCeiling > 0
+      ? maxOutputTokensCeiling
+      : DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS;
+  if (Number.isFinite(finalMax) && finalMax > ceiling) {
+    generationConfig.maxOutputTokens = ceiling;
   }
 
   request.generationConfig = generationConfig;
@@ -728,7 +730,10 @@ export class AntigravityExecutor extends BaseExecutor {
       }
     }
 
-    applyAntigravityGenerationDefaults(transformedRequest);
+    applyAntigravityGenerationDefaults(
+      transformedRequest,
+      resolveAntigravityMaxOutputTokens(upstreamModel)
+    );
 
     const {
       project: _project,
