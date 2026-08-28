@@ -9,6 +9,7 @@ import {
 } from "./base.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
 import { buildAntigravityUpstreamError } from "./antigravityUpstreamError.ts";
+import { maybeTriggerReactiveModelSync } from "@/lib/providerModels/reactiveModelSync.ts";
 import {
   PROVIDERS,
   OAUTH_ENDPOINTS,
@@ -1307,6 +1308,13 @@ export class AntigravityExecutor extends BaseExecutor {
             "TELEMETRY",
             `[Antigravity] Error Response - URL: ${url}, Status: ${response.status}, Model: ${model}`
           );
+          if (response.status === HTTP_STATUS.NOT_FOUND && credentials.connectionId) {
+            // The backend may have shipped/renamed models the synced catalog does not
+            // know yet (pinned-catalog staleness). Kick a discovery sync for this
+            // connection so the fresh list lands in the synced catalog and the next
+            // request can resolve. Cooldown + in-flight dedup live in the trigger.
+            maybeTriggerReactiveModelSync(this.provider, credentials.connectionId);
+          }
         }
 
         // Parse retry time for 429/503 responses
