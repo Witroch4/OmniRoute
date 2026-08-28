@@ -215,6 +215,10 @@ export async function createConnectionFromAgyToken(
           "Antigravity CLI (imported)",
         testStatus: "active",
         providerSpecificData: {
+          // Auto-sync default for newly discovered backends — see
+          // mapAntigravityTokens. Placed BEFORE the existing-data spread so a
+          // previously persisted operator choice (true or false) wins.
+          autoSync: true,
           ...toRecord(existing.providerSpecificData),
           tokenType: enriched.tokenType,
           authMethod: enriched.authMethod,
@@ -247,6 +251,9 @@ export async function createConnectionFromAgyToken(
     isActive: true,
     testStatus: "active",
     providerSpecificData: {
+      // Default new imports into model auto-sync — see mapAntigravityTokens.
+      autoSync: true,
+      clientProfile: "cli",
       tokenType: enriched.tokenType,
       authMethod: enriched.authMethod,
       projectId: enriched.projectId,
