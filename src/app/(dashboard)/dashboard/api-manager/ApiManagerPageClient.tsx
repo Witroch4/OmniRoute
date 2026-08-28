@@ -27,6 +27,13 @@ import { hasProviderQuotaBypassScope } from "@/shared/constants/apiKeyPolicyScop
 import { UsageLimitSettings } from "./components/UsageLimitSettings";
 import { MinSpendGuaranteeSettings } from "./components/MinSpendGuaranteeSettings";
 import {
+  RenewalCycleSettings,
+  buildInitialRenewalCycleDraft,
+  type RenewalCycleDraft,
+} from "./components/RenewalCycleSettings";
+import { cycleOwnsExpiry, daysUntilCutoff } from "@/shared/utils/apiKeyRenewalCycle";
+import { useMinuteClock } from "@/shared/hooks/useMinuteClock";
+import {
   ModelBudgetRoutingSettings,
   type ModelBudgetRuleDraft,
   type ModelBudgetRulesLoadStatus,
@@ -146,6 +153,9 @@ interface ApiKey {
   weeklyUsageLimitUsd?: number | null;
   minSpendGuaranteeEnabled?: boolean;
   minSpendGuaranteeUsd?: number | null;
+  renewalCycleEnabled?: boolean;
+  renewalCycleAnchorAt?: string | null;
+  renewalCycleMonths?: number | null;
   allowedQuotas?: string[] | null;
   createdAt: string;
 }
@@ -217,6 +227,8 @@ export default function ApiManagerPageClient() {
   const t = useTranslations("apiManager");
   const tc = useTranslations("common");
   const locale = useLocale();
+  // Drives the per-key validity countdown below without a manual refresh.
+  const listNowMs = useMinuteClock();
   const newKeyNameInputId = useId();
   const createKeyFormRef = useRef<HTMLDivElement | null>(null);
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -814,6 +826,7 @@ export default function ApiManagerPageClient() {
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
+    renewalCycle: RenewalCycleDraft,
     budgetRules: ModelBudgetRuleDraft[],
     budgetRulesLoadStatus: ModelBudgetRulesLoadStatus,
     familyMultipliers: FamilyMultiplierDraft[],
@@ -891,6 +904,10 @@ export default function ApiManagerPageClient() {
           chaosModeEnabled,
           minSpendGuaranteeEnabled,
           minSpendGuaranteeUsd,
+          renewalCycleEnabled: renewalCycle.enabled,
+          renewalCycleAnchorAt: renewalCycle.anchorAt,
+          renewalCycleMonths: renewalCycle.months,
+          renewRenewalCycle: renewalCycle.renewNow,
         }),
       });
 
@@ -1341,12 +1358,37 @@ export default function ApiManagerPageClient() {
                           BANNED
                         </span>
                       )}
-                      {key.expiresAt && new Date(key.expiresAt).getTime() < Date.now() && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-500/10 text-gray-600 dark:text-gray-400 text-[11px] font-medium">
-                          <span className="material-symbols-outlined text-[12px]">event_busy</span>
-                          EXPIRED
-                        </span>
-                      )}
+                      {/* Validity countdown. Replaces the old binary EXPIRED chip: the
+                          operator's question is "how long does this key still have",
+                          which a chip that only appears after the fact cannot answer. */}
+                      {(() => {
+                        const validityDays = daysUntilCutoff(key.expiresAt, listNowMs);
+                        if (validityDays === null) return null;
+                        const lapsed = validityDays < 0;
+                        const expiringSoon = !lapsed && validityDays <= 7;
+                        const tone = lapsed
+                          ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                          : expiringSoon
+                            ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                            : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${tone}`}
+                            title={new Date(key.expiresAt as string).toLocaleString(locale)}
+                          >
+                            <span className="material-symbols-outlined text-[12px]">
+                              {lapsed
+                                ? "event_busy"
+                                : key.renewalCycleEnabled
+                                  ? "event_repeat"
+                                  : "event_available"}
+                            </span>
+                            {lapsed
+                              ? t("validityLapsed", { days: Math.abs(validityDays) })
+                              : t("validityDaysLeft", { days: validityDays })}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="col-span-2 flex flex-col justify-center">
@@ -1740,6 +1782,7 @@ const PermissionsModal = memo(function PermissionsModal({
     chaosModeEnabled: boolean,
     minSpendGuaranteeEnabled: boolean,
     minSpendGuaranteeUsd: number | null,
+    renewalCycle: RenewalCycleDraft,
     budgetRules: ModelBudgetRuleDraft[],
     budgetRulesLoadStatus: ModelBudgetRulesLoadStatus,
     familyMultipliers: FamilyMultiplierDraft[],
@@ -1748,6 +1791,7 @@ const PermissionsModal = memo(function PermissionsModal({
 }) {
   const t = useTranslations("apiManager");
   const tc = useTranslations("common");
+  const locale = useLocale();
 
   // Initialize state from props - component remounts when key prop changes
   const initialModels = Array.isArray(apiKey?.allowedModels) ? apiKey.allowedModels : [];
@@ -1778,6 +1822,13 @@ const PermissionsModal = memo(function PermissionsModal({
   );
   const [keyIsBanned, setKeyIsBanned] = useState(apiKey?.isBanned === true);
   const [expiresAt, setExpiresAt] = useState(apiKey?.expiresAt ?? "");
+  const [renewalCycle, setRenewalCycle] = useState<RenewalCycleDraft>(() =>
+    buildInitialRenewalCycleDraft(apiKey)
+  );
+  const expiryManagedByCycle = cycleOwnsExpiry({
+    renewalCycleEnabled: renewalCycle.enabled,
+    renewalCycleAnchorAt: renewalCycle.anchorAt,
+  });
   const [manageEnabled, setManageEnabled] = useState(
     Array.isArray(apiKey?.scopes) && apiKey.scopes.includes("manage")
   );
@@ -2165,6 +2216,7 @@ const PermissionsModal = memo(function PermissionsModal({
       chaosModeEnabled,
       minSpendGuaranteeEnabled,
       parseUsdLimitInput(minSpendGuaranteeUsd),
+      renewalCycle,
       budgetRules,
       budgetRulesLoadStatus,
       familyMultipliers,
@@ -2210,6 +2262,7 @@ const PermissionsModal = memo(function PermissionsModal({
     chaosModeEnabled,
     minSpendGuaranteeEnabled,
     minSpendGuaranteeUsd,
+    renewalCycle,
     budgetRules,
     budgetRulesLoadStatus,
     familyMultipliers,
@@ -2361,6 +2414,35 @@ const PermissionsModal = memo(function PermissionsModal({
             {keyIsActive ? tc("enabled") : tc("disabled")}
           </button>
         </div>
+
+        {/* Renewal Cycle — recurring auto-expiry anchored on a base date */}
+        <RenewalCycleSettings
+          draft={renewalCycle}
+          onDraftChange={setRenewalCycle}
+          currentExpiresAt={apiKey?.expiresAt ?? null}
+          savedCycle={{
+            enabled: apiKey?.renewalCycleEnabled === true,
+            anchorAt: apiKey?.renewalCycleAnchorAt ?? null,
+            months: apiKey?.renewalCycleMonths ?? 1,
+          }}
+          locale={locale}
+          labels={{
+            title: t("renewalCycle"),
+            description: t("renewalCycleDesc"),
+            on: tc("enabled"),
+            off: tc("disabled"),
+            baseDate: t("renewalCycleBaseDate"),
+            baseDateHint: t("renewalCycleBaseDateHint"),
+            everyMonths: t("renewalCycleEveryMonths"),
+            disablesOn: t("renewalCycleDisablesOn"),
+            daysLeft: (days) => t("renewalCycleDaysLeft", { days }),
+            lapsed: (days) => t("renewalCycleLapsed", { days }),
+            noBaseDate: t("renewalCycleNoBaseDate"),
+            renewNow: t("renewalCycleRenewNow"),
+            renewQueued: (date) => t("renewalCycleRenewQueued", { date }),
+            ownsExpiry: t("renewalCycleOwnsExpiry"),
+          }}
+        />
 
         {/* Max Sessions Limit (T08) */}
         <div className="flex items-start justify-between gap-3 p-3 rounded-lg border border-border bg-surface/40">
@@ -2690,12 +2772,15 @@ const PermissionsModal = memo(function PermissionsModal({
           <div className="flex flex-col gap-1">
             <p className="text-sm font-medium text-text-main">{t("expirationDate")}</p>
             <p className="text-xs text-text-muted">
-              Key will automatically stop working after this date.
+              {expiryManagedByCycle
+                ? t("expirationManagedByCycle")
+                : "Key will automatically stop working after this date."}
             </p>
           </div>
           <div className="flex gap-2">
             <input
               type="datetime-local"
+              disabled={expiryManagedByCycle}
               value={toLocalDateTimeInputValue(expiresAt)}
               onChange={(e) => {
                 const val = e.target.value;
@@ -2708,12 +2793,12 @@ const PermissionsModal = memo(function PermissionsModal({
                   setExpiresAt(date.toISOString());
                 }
               }}
-              className="min-w-0 flex-1 px-2 py-1.5 text-sm border border-border rounded-md bg-background text-text-main"
+              className="min-w-0 flex-1 px-2 py-1.5 text-sm border border-border rounded-md bg-background text-text-main disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button
               type="button"
               onClick={() => setExpiresAt("")}
-              disabled={!expiresAt}
+              disabled={!expiresAt || expiryManagedByCycle}
               className="shrink-0 px-3 py-1.5 text-sm font-medium border border-border rounded-md text-text-muted hover:text-text-main hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
             >
               {tc("clear")}

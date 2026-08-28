@@ -19,6 +19,13 @@ import {
   hasMinSpendGuaranteeUpdate,
   parseApiKeyMinSpendFields,
 } from "./apiKeyMinSpendFields";
+import {
+  appendRenewalCycleUpdates,
+  hasRenewalCycleUpdate,
+  parseApiKeyRenewalCycleFields,
+  resolveRenewalCycleExpiry,
+} from "./apiKeyRenewalCycleFields";
+import { DEFAULT_RENEWAL_CYCLE_MONTHS } from "@/shared/utils/apiKeyRenewalCycle";
 import { setNoLog } from "../compliance/noLog";
 import { resolveModelAlias } from "@omniroute/open-sse/services/modelDeprecation.ts";
 import { getSyncedAvailableModelsByConnection, getCustomModels, getModelIsHidden } from "./models";
@@ -106,6 +113,11 @@ interface ApiKeyMetadata {
   // rolling weekly window, routing past the provider quota cutoff if needed.
   minSpendGuaranteeEnabled: boolean;
   minSpendGuaranteeUsd: number | null;
+  // Recurring renewal cycle: a schedule that materializes its current cutoff into
+  // expiresAt above (migration 129), so nothing here is a second enforcement gate.
+  renewalCycleEnabled: boolean;
+  renewalCycleAnchorAt: string | null;
+  renewalCycleMonths: number;
 }
 
 interface ApiKeyRow extends JsonRecord {
@@ -200,6 +212,9 @@ interface ApiKeyView extends JsonRecord {
   chaosModeEnabled?: boolean;
   minSpendGuaranteeEnabled?: boolean;
   minSpendGuaranteeUsd?: number | null;
+  renewalCycleEnabled?: boolean;
+  renewalCycleAnchorAt?: string | null;
+  renewalCycleMonths?: number;
 }
 
 // LRU cache for API key validation (valid keys only)
@@ -469,6 +484,9 @@ export async function getApiKeys() {
     camelRow.chaosModeEnabled = parseChaosModeEnabled((camelRow as JsonRecord).chaosModeEnabled);
     Object.assign(camelRow, parseApiKeyUsageLimitFields(camelRow));
     Object.assign(camelRow, parseApiKeyMinSpendFields(camelRow));
+    // SQLite hands back 0/1 for the INTEGER flag; the dashboard tests it with === true,
+    // so it has to be coerced here like every other boolean column above.
+    Object.assign(camelRow, parseApiKeyRenewalCycleFields(camelRow));
     if (typeof camelRow.id === "string" && camelRow.id.length > 0) {
       setNoLog(camelRow.id, camelRow.noLog === true);
     }
@@ -702,10 +720,18 @@ export async function updateApiKeyPermissions(
         chaosModeEnabled?: boolean;
         minSpendGuaranteeEnabled?: boolean;
         minSpendGuaranteeUsd?: number | null;
+        renewalCycleEnabled?: boolean;
+        renewalCycleAnchorAt?: string | null;
+        renewalCycleMonths?: number | null;
+        /**
+         * Operator intent to advance the cycle to its next occurrence. Not a column —
+         * it is consumed here and never persisted.
+         */
+        renewRenewalCycle?: boolean;
       }
 ) {
   const db = getDbInstance() as ApiKeysDbLike;
-  getPreparedStatements(db);
+  const stmt = getPreparedStatements(db);
 
   const normalized =
     Array.isArray(update) || update === undefined
@@ -745,6 +771,11 @@ export async function updateApiKeyPermissions(
             .minSpendGuaranteeEnabled,
           minSpendGuaranteeUsd: (update as { minSpendGuaranteeUsd?: number | null })
             .minSpendGuaranteeUsd,
+          renewalCycleEnabled: (update as { renewalCycleEnabled?: boolean }).renewalCycleEnabled,
+          renewalCycleAnchorAt: (update as { renewalCycleAnchorAt?: string | null })
+            .renewalCycleAnchorAt,
+          renewalCycleMonths: (update as { renewalCycleMonths?: number | null }).renewalCycleMonths,
+          renewRenewalCycle: (update as { renewRenewalCycle?: boolean }).renewRenewalCycle,
         };
 
   if (
@@ -773,7 +804,8 @@ export async function updateApiKeyPermissions(
     normalized.allowUsageCommand === undefined &&
     normalized.chaosModeEnabled === undefined &&
     !hasUsageLimitUpdate(normalized as Record<string, unknown>) &&
-    !hasMinSpendGuaranteeUpdate(normalized as Record<string, unknown>)
+    !hasMinSpendGuaranteeUpdate(normalized as Record<string, unknown>) &&
+    !hasRenewalCycleUpdate(normalized as Record<string, unknown>)
   ) {
     return false;
   }
@@ -809,7 +841,36 @@ export async function updateApiKeyPermissions(
     chaosModeEnabled?: number;
     minSpendGuaranteeEnabled?: number;
     minSpendGuaranteeUsd?: number | null;
+    renewalCycleEnabled?: number;
+    renewalCycleAnchorAt?: string | null;
+    renewalCycleMonths?: number;
   } = { id };
+
+  // ─── Renewal cycle: resolve who owns expires_at for THIS save ─────────────
+  // Done up front so exactly one rule writes the column below. The cycle is a
+  // schedule materialized into expires_at (migration 129) rather than a second
+  // enforcement gate, which is why the decision has to be made here — the column is
+  // what every existing expiry check reads.
+  const renewalUpdate = normalized as {
+    renewalCycleEnabled?: boolean;
+    renewalCycleAnchorAt?: string | null;
+    renewalCycleMonths?: number | null;
+    renewRenewalCycle?: boolean;
+  };
+  const currentRow = stmt.getKeyById.get(id) as ApiKeyRow | undefined;
+  const renewalDecision = resolveRenewalCycleExpiry(
+    {
+      ...parseApiKeyRenewalCycleFields((currentRow ?? {}) as Record<string, unknown>),
+      expiresAt: parseNullableTimestamp(currentRow?.expires_at),
+    },
+    {
+      renewalCycleEnabled: renewalUpdate.renewalCycleEnabled,
+      renewalCycleAnchorAt: renewalUpdate.renewalCycleAnchorAt,
+      renewalCycleMonths: renewalUpdate.renewalCycleMonths,
+      renewRenewalCycle: renewalUpdate.renewRenewalCycle === true,
+    },
+    Date.now()
+  );
 
   if (normalized.name !== undefined) {
     updates.push("name = @name");
@@ -897,10 +958,22 @@ export async function updateApiKeyPermissions(
     params.isBanned = normalized.isBanned ? 1 : 0;
   }
 
-  if (normalized.expiresAt !== undefined) {
+  if (renewalDecision.action === "set") {
+    updates.push("expires_at = @expiresAt");
+    params.expiresAt = renewalDecision.expiresAt;
+  } else if (renewalDecision.action === "clear") {
+    updates.push("expires_at = @expiresAt");
+    params.expiresAt = null;
+  } else if (renewalDecision.action === "passthrough" && normalized.expiresAt !== undefined) {
     updates.push("expires_at = @expiresAt");
     params.expiresAt = normalized.expiresAt;
   }
+  // action === "freeze": the cycle governs the cutoff and nothing moved, so a
+  // client-sent expiresAt is dropped on purpose — the permissions form round-trips the
+  // current value on every save, and honoring it would let an unrelated edit rewrite
+  // the cutoff.
+
+  appendRenewalCycleUpdates(normalized as Record<string, unknown>, updates, params);
 
   if (normalized.disableNonPublicModels !== undefined) {
     updates.push("disable_non_public_models = @disableNonPublicModels");
@@ -1309,6 +1382,11 @@ export async function getApiKeyMetadata(
       chaosModeEnabled: false,
       minSpendGuaranteeEnabled: false,
       minSpendGuaranteeUsd: null,
+      // The env key has no row to carry a cycle, and it is the headless bootstrap
+      // credential — it must never acquire an expiry.
+      renewalCycleEnabled: false,
+      renewalCycleAnchorAt: null,
+      renewalCycleMonths: DEFAULT_RENEWAL_CYCLE_MONTHS,
     };
   }
 
@@ -1387,6 +1465,7 @@ export async function getApiKeyMetadata(
     ),
     ...parseApiKeyUsageLimitFields(record as JsonRecord),
     ...parseApiKeyMinSpendFields(record as JsonRecord),
+    ...parseApiKeyRenewalCycleFields(record as JsonRecord),
   };
 
   if (!metadata.id) {

@@ -89,6 +89,10 @@ export async function PATCH(request, { params }) {
       chaosModeEnabled,
       minSpendGuaranteeEnabled,
       minSpendGuaranteeUsd,
+      renewalCycleEnabled,
+      renewalCycleAnchorAt,
+      renewalCycleMonths,
+      renewRenewalCycle,
     } = validation.data;
 
     const payload: Parameters<typeof updateApiKeyPermissions>[1] = {};
@@ -119,6 +123,16 @@ export async function PATCH(request, { params }) {
     if (minSpendGuaranteeEnabled !== undefined)
       payload.minSpendGuaranteeEnabled = minSpendGuaranteeEnabled;
     if (minSpendGuaranteeUsd !== undefined) payload.minSpendGuaranteeUsd = minSpendGuaranteeUsd;
+    if (renewalCycleEnabled !== undefined) payload.renewalCycleEnabled = renewalCycleEnabled;
+    if (renewalCycleAnchorAt !== undefined) payload.renewalCycleAnchorAt = renewalCycleAnchorAt;
+    if (renewalCycleMonths !== undefined) payload.renewalCycleMonths = renewalCycleMonths;
+    if (renewRenewalCycle !== undefined) payload.renewRenewalCycle = renewRenewalCycle;
+
+    const touchedRenewalCycle =
+      renewalCycleEnabled !== undefined ||
+      renewalCycleAnchorAt !== undefined ||
+      renewalCycleMonths !== undefined ||
+      renewRenewalCycle !== undefined;
 
     const updated = await updateApiKeyPermissions(id, payload);
     if (!updated) {
@@ -140,7 +154,10 @@ export async function PATCH(request, { params }) {
       ...(isActive !== undefined && { isActive }),
       ...(throttleDelayMs !== undefined && { throttleDelayMs }),
       ...(isBanned !== undefined && { isBanned }),
-      ...(expiresAt !== undefined && { expiresAt }),
+      // Echoing the request's expiresAt would be a lie whenever a renewal cycle governs
+      // the column, since the server recomputes it from the cycle. The dashboard
+      // refetches after every save, so it reads the real cutoff from the DB instead.
+      ...(expiresAt !== undefined && !touchedRenewalCycle && { expiresAt }),
       ...(maxSessions !== undefined && { maxSessions }),
       ...(accessSchedule !== undefined && { accessSchedule }),
       ...(rateLimits !== undefined && { rateLimits }),
@@ -155,6 +172,9 @@ export async function PATCH(request, { params }) {
       ...(chaosModeEnabled !== undefined && { chaosModeEnabled }),
       ...(minSpendGuaranteeEnabled !== undefined && { minSpendGuaranteeEnabled }),
       ...(minSpendGuaranteeUsd !== undefined && { minSpendGuaranteeUsd }),
+      ...(renewalCycleEnabled !== undefined && { renewalCycleEnabled }),
+      ...(renewalCycleAnchorAt !== undefined && { renewalCycleAnchorAt }),
+      ...(renewalCycleMonths !== undefined && { renewalCycleMonths }),
     });
   } catch (error) {
     log.error("keys", "Error updating key permissions", error);

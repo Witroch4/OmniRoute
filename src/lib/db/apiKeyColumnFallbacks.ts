@@ -56,4 +56,16 @@ export const API_KEY_COLUMN_FALLBACKS = [
     name: "min_spend_guarantee_usd",
     definition: "min_spend_guarantee_usd REAL",
   },
+  {
+    name: "renewal_cycle_enabled",
+    definition: "renewal_cycle_enabled INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    name: "renewal_cycle_anchor_at",
+    definition: "renewal_cycle_anchor_at TEXT",
+  },
+  {
+    name: "renewal_cycle_months",
+    definition: "renewal_cycle_months INTEGER NOT NULL DEFAULT 1",
+  },
 ] as const;

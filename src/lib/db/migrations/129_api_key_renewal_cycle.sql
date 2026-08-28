@@ -1,0 +1,31 @@
+-- Migration: per-API-key recurring renewal cycle (billing-anchor auto-expiry).
+--
+-- expires_at has always been a ONE-SHOT cutoff: the key dies on that timestamp and the
+-- operator has to hand-pick a new date to bring it back. A key sold on a monthly plan
+-- needs the opposite shape -- "valid until the 27th, every month" -- so the operator
+-- only ever performs ONE action (renew) instead of computing a date each cycle.
+--
+-- This does NOT introduce a second enforcement path. The cycle is a SCHEDULE that
+-- materializes its current cutoff into the existing expires_at column, so every gate
+-- that already blocks an expired key keeps working untouched: the SQLite branch of
+-- validateApiKey, the Redis auth-cache payload (which re-checks expiresAt against now
+-- on every read, so a stale 1h entry still expires on time), getApiKeyMetadata, and
+-- the dashboard's isKeyActive/isExpired classifiers. Adding a parallel
+-- renewal_cycle_next_at gate would have meant teaching all four about a new column;
+-- one of them being missed is a silent auth bypass.
+--
+-- Consequence, and the reason the UI locks the manual expiry field while the cycle is
+-- on: when renewal_cycle_enabled = 1 the cycle OWNS expires_at. Disabling the cycle
+-- releases it (clearing the cutoff the cycle had written) rather than leaving behind a
+-- date the operator never chose.
+--
+-- renewal_cycle_anchor_at is the base date: its day-of-month (and time-of-day) is what
+-- recurs. Anchoring on a day past the end of a shorter month clamps to that month's
+-- last day WITHOUT losing the anchor -- 31 Jan -> 28 Feb -> 31 Mar, never drifting to
+-- the 28th permanently. renewal_cycle_months is the period (1 = monthly, 3 =
+-- quarterly, 12 = yearly). Renewal always advances to the first occurrence strictly
+-- AFTER the moment of renewal, so paying late costs the client the late days but never
+-- moves which day of the month they renew on.
+ALTER TABLE api_keys ADD COLUMN renewal_cycle_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN renewal_cycle_anchor_at TEXT;
+ALTER TABLE api_keys ADD COLUMN renewal_cycle_months INTEGER NOT NULL DEFAULT 1;

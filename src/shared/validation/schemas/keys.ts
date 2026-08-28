@@ -9,6 +9,10 @@ import { COMBO_CONFIG_MODES } from "@/shared/constants/comboConfigMode";
 import { providerAllowsOptionalApiKey } from "@/shared/constants/providers";
 import { HIDEABLE_SIDEBAR_ITEM_IDS } from "@/shared/constants/sidebarVisibility";
 import {
+  MAX_RENEWAL_CYCLE_MONTHS,
+  MIN_RENEWAL_CYCLE_MONTHS,
+} from "@/shared/utils/apiKeyRenewalCycle";
+import {
   isForbiddenUpstreamHeaderName,
   isForbiddenCustomHeaderName,
 } from "@/shared/constants/upstreamHeaders";
@@ -116,6 +120,17 @@ export const updateKeyPermissionsSchema = z
     chaosModeEnabled: z.boolean().optional(),
     minSpendGuaranteeEnabled: z.boolean().optional(),
     minSpendGuaranteeUsd: z.coerce.number().min(0).optional().nullable(),
+    renewalCycleEnabled: z.boolean().optional(),
+    renewalCycleAnchorAt: z.string().datetime().nullable().optional(),
+    renewalCycleMonths: z.coerce
+      .number()
+      .int()
+      .min(MIN_RENEWAL_CYCLE_MONTHS)
+      .max(MAX_RENEWAL_CYCLE_MONTHS)
+      .optional()
+      .nullable(),
+    // Operator intent to advance the cycle, not a stored field.
+    renewRenewalCycle: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -142,7 +157,11 @@ export const updateKeyPermissionsSchema = z
       value.weeklyUsageLimitUsd === undefined &&
       value.chaosModeEnabled === undefined &&
       value.minSpendGuaranteeEnabled === undefined &&
-      value.minSpendGuaranteeUsd === undefined
+      value.minSpendGuaranteeUsd === undefined &&
+      value.renewalCycleEnabled === undefined &&
+      value.renewalCycleAnchorAt === undefined &&
+      value.renewalCycleMonths === undefined &&
+      value.renewRenewalCycle === undefined
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
