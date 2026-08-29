@@ -130,6 +130,17 @@ const nextConfig = {
   // accept for image-bearing requests; tune via env if a deployment needs
   // more.
   experimental: {
+    // Next's static-generation/page-data-collection worker pool defaults to
+    // `os.cpus().length`, which under a QEMU cross-build reads the HOST's
+    // core count, not the buildx container's cgroup cpuset — a 24-core dev
+    // box spawns 23 workers regardless of how tightly the builder's memory
+    // is capped, and each worker's heap ceiling comes from NODE_OPTIONS, so
+    // 23 workers can collectively blow well past a WSL-safe 10 GiB builder
+    // cap ("Collecting page data using 23 workers ... cannot allocate
+    // memory" / ResourceExhausted). Cap it explicitly via env when set.
+    ...(Number.parseInt(process.env.OMNIROUTE_BUILD_CPUS ?? "", 10) > 0
+      ? { cpus: Number.parseInt(process.env.OMNIROUTE_BUILD_CPUS, 10) }
+      : {}),
     serverActions: {
       bodySizeLimit: process.env.OMNIROUTE_SERVER_ACTIONS_BODY_LIMIT || "50mb",
     },

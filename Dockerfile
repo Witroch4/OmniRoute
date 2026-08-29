@@ -97,6 +97,12 @@ ENV OMNIROUTE_MITM_STUB=1
 ARG OMNIROUTE_BUILD_MEMORY_MB=4096
 ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 
+# Caps Next's page-data-collection worker pool (see next.config.mjs experimental.cpus
+# comment) — otherwise it spawns one worker per HOST core under QEMU regardless of
+# the buildx container's own memory/cpuset limits. Override: `--build-arg OMNIROUTE_BUILD_CPUS=4`.
+ARG OMNIROUTE_BUILD_CPUS
+ENV OMNIROUTE_BUILD_CPUS=${OMNIROUTE_BUILD_CPUS}
+
 COPY . ./
 RUN --mount=type=cache,id=next-cache,target=/app/.build/next/cache \
   mkdir -p /app/data && npm run build
