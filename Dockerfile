@@ -1,5 +1,15 @@
 # ── Common base with runtime deps ──────────────────────────────────────────
-FROM node:24-trixie-slim AS base
+# Pinned to a known-good digest (Node v24.18.0) — the floating `node:24-trixie-slim`
+# tag drifts forward silently and has twice broken the better-sqlite3 native
+# rebuild in this Dockerfile: once via a Node abort in the build worker (fixed
+# previously by pinning to 24.18.1-trixie-slim, but that fix was applied only to
+# a local/production build tree and never committed here, so the tag drifted
+# again), and again via a newer bundled npm's install-scripts allowlist gate
+# silently no-op'ing `npm rebuild better-sqlite3` (2026-08-29: drifted to
+# v24.20.0, "Could not locate the bindings file" at runtime). Pinning here,
+# for real this time, closes the recurring class of bug instead of re-fixing it
+# ephemerally on every build host.
+FROM node@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS base
 WORKDIR /app
 
 # `apt-get upgrade` pulls the security-patched versions of the Debian (trixie)
