@@ -207,6 +207,7 @@ export const DEFAULT_PRICING_FRONTIER = {
     // to cover hyphen-notation IDs (claude-opus-4-6) used by some clients
     "claude-fable-5": CLAUDE_FABLE_5_PRICING,
     "claude-sonnet-5": CLAUDE_SONNET_5_PRICING,
+    "claude-opus-5": CLAUDE_OPUS_4_PRICING,
     "claude-opus-4.8": CLAUDE_OPUS_4_PRICING,
     "claude-opus-4-8": CLAUDE_OPUS_4_PRICING,
     "claude-opus-4-7": CLAUDE_OPUS_4_PRICING,
