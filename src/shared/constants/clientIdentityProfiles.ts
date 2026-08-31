@@ -39,7 +39,7 @@ const CODEX_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "codex-cli",
   label: "Codex CLI",
   headers: Object.freeze({
-    "User-Agent": "codex_cli_rs/0.144.1",
+    "User-Agent": "codex_cli_rs/0.151.0",
     originator: "codex_cli_rs",
   }),
 });
