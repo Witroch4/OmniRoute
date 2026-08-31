@@ -249,19 +249,43 @@ function makeApiKeyKey(apiKeyId: string | null, apiKeyName: string | null): stri
   return "unattributed";
 }
 
-async function getCurrentApiKeyNames(): Promise<Map<string, string>> {
+interface ApiKeyDirectory {
+  names: Map<string, string>;
+  /**
+   * Per-key weekly USD cap (`api_keys.weekly_usage_limit_usd`), i.e. the ceiling
+   * `enforceApiKeyPolicy` actually rejects on with a 400 "reached its weekly
+   * usage quota". Domain budgets (`getCostSummary`) are a SEPARATE limit, and a
+   * key can have this cap with no domain budget at all — which is the normal
+   * setup here. Reporting only the domain budget made every capped key render
+   * "No USD limit" while its cap was being enforced on every request.
+   *
+   * Only the WEEKLY cap is exposed: this breakdown reports a weekly provider
+   * window, so pairing a daily cap with a weekly cost would print a percentage
+   * that means nothing. A key with only a daily cap keeps showing no limit here.
+   */
+  weeklyLimitUsd: Map<string, number>;
+}
+
+async function getApiKeyDirectory(): Promise<ApiKeyDirectory> {
   const names = new Map<string, string>();
+  const weeklyLimitUsd = new Map<string, number>();
   try {
     const apiKeys = await getApiKeys();
     for (const apiKey of apiKeys) {
-      if (typeof apiKey.id === "string" && typeof apiKey.name === "string") {
+      if (typeof apiKey.id !== "string") continue;
+      if (typeof apiKey.name === "string") {
         names.set(apiKey.id, apiKey.name);
+      }
+      if (apiKey.usageLimitEnabled !== true) continue;
+      const weekly = apiKey.weeklyUsageLimitUsd;
+      if (typeof weekly === "number" && Number.isFinite(weekly) && weekly > 0) {
+        weeklyLimitUsd.set(apiKey.id, weekly);
       }
     }
   } catch {
     // Usage rows carry historical names, so current API key names are an enhancement only.
   }
-  return names;
+  return { names, weeklyLimitUsd };
 }
 
 function uniqueApiKeyIds(rows: UsageCostRow[]): string[] {
@@ -447,7 +471,8 @@ export async function getProviderWindowCostBreakdown({
     )
     .all(params);
 
-  const currentApiKeyNames = await getCurrentApiKeyNames();
+  const apiKeyDirectory = await getApiKeyDirectory();
+  const currentApiKeyNames = apiKeyDirectory.names;
   const recordedCostsByApiKey = getRecordedCostsByApiKey(
     uniqueApiKeyIds(usageRows),
     window.startMs,
@@ -483,6 +508,22 @@ export async function getProviderWindowCostBreakdown({
             typeof summary.nextResetAt === "number" && Number.isFinite(summary.nextResetAt)
               ? new Date(summary.nextResetAt).toISOString()
               : null;
+        } else {
+          // No domain budget on this key: fall back to its own weekly USD cap so
+          // the breakdown stops claiming "No USD limit" for a key whose requests
+          // are being rejected by that very cap. The domain budget still wins
+          // when both exist, so this only fills the gap.
+          const ownWeeklyLimitUsd = apiKeyDirectory.weeklyLimitUsd.get(apiKeyId);
+          if (ownWeeklyLimitUsd !== undefined) {
+            limitUsd = ownWeeklyLimitUsd;
+            limitPeriod = "weekly";
+            // The cap is enforced over the same provider weekly window this
+            // breakdown reports, so its reset is the window's own reset.
+            budgetResetAt =
+              typeof window.resetMs === "number" && Number.isFinite(window.resetMs)
+                ? new Date(window.resetMs).toISOString()
+                : null;
+          }
         }
       }
       aggregate = {

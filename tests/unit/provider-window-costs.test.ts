@@ -450,3 +450,117 @@ test("provider window costs prefer recorded USD history over repricing usage tok
   assert.equal(result.rows[0].apiKeyName, "Recorded USD Key");
   assert.equal(result.rows[0].costUsd, 17);
 });
+
+// Regression: every capped key rendered "No USD limit" in the USD Cost modal.
+// The breakdown only ever read the DOMAIN budget (getCostSummary), while the
+// ceiling that actually rejects requests with a 400 "reached its weekly usage
+// quota" lives on the key itself (api_keys.weekly_usage_limit_usd). Keys here
+// normally carry the per-key cap and no domain budget at all, so the modal
+// reported "no limit" for keys whose every request was being metered against
+// one.
+test("a key with no domain budget still reports its own weekly USD cap", async () => {
+  await localDb.updatePricing({
+    codex: {
+      "gpt-5.5": { input: 10, output: 20, cached: 1, cache_creation: 5, reasoning: 30 },
+    },
+  });
+
+  const key = await apiKeys.createApiKey("Own Cap Key", "machine-own-cap");
+  // Deliberately NO costRules.setBudget(...) — this is the shape that regressed.
+  await apiKeys.updateApiKeyPermissions(key.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 40,
+  });
+  apiKeys.clearApiKeyCaches();
+
+  providerLimits.setProviderLimitsCache("codex-own-cap", {
+    quotas: {
+      "weekly (7d)": {
+        used: 13,
+        total: 100,
+        remainingPercentage: 87,
+        resetAt: "2026-07-02T23:00:00.000Z",
+      },
+    },
+    plan: "Prolite",
+    message: null,
+    fetchedAt: "2026-06-28T12:00:00.000Z",
+  });
+
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-own-cap",
+    apiKeyId: key.id,
+    apiKeyName: "Own Cap Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-26T00:00:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "codex",
+    connectionId: "codex-own-cap",
+    now: Date.parse("2026-06-28T12:00:00.000Z"),
+  });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].costUsd, 10);
+  assert.equal(result.rows[0].limitUsd, 40, "the key's own weekly cap must be reported");
+  assert.equal(result.rows[0].limitPeriod, "weekly");
+  assert.equal(result.rows[0].limitUsedPercent, 25);
+  assert.equal(result.rows[0].budgetResetAt, "2026-07-02T23:00:00.000Z");
+});
+
+test("a domain budget still wins over the key's own weekly cap", async () => {
+  await localDb.updatePricing({
+    codex: {
+      "gpt-5.5": { input: 10, output: 20, cached: 1, cache_creation: 5, reasoning: 30 },
+    },
+  });
+
+  const key = await apiKeys.createApiKey("Both Limits Key", "machine-both-limits");
+  costRules.setBudget(key.id, {
+    dailyLimitUsd: 0,
+    weeklyLimitUsd: 40,
+    resetInterval: "weekly",
+    resetTime: "00:00",
+  });
+  await apiKeys.updateApiKeyPermissions(key.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 999,
+  });
+  apiKeys.clearApiKeyCaches();
+
+  providerLimits.setProviderLimitsCache("codex-both", {
+    quotas: {
+      "weekly (7d)": {
+        used: 13,
+        total: 100,
+        remainingPercentage: 87,
+        resetAt: "2026-07-02T23:00:00.000Z",
+      },
+    },
+    plan: "Prolite",
+    message: null,
+    fetchedAt: "2026-06-28T12:00:00.000Z",
+  });
+
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-both",
+    apiKeyId: key.id,
+    apiKeyName: "Both Limits Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-26T00:00:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "codex",
+    connectionId: "codex-both",
+    now: Date.parse("2026-06-28T12:00:00.000Z"),
+  });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].limitUsd, 40, "domain budget must keep precedence");
+});
