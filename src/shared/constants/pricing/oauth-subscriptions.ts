@@ -19,6 +19,13 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 50.0,
       cache_creation: 12.5,
     },
+    "claude-opus-5": {
+      input: 5.0,
+      output: 25.0,
+      cached: 0.5,
+      reasoning: 25.0,
+      cache_creation: 6.25,
+    },
     "claude-opus-4-8": {
       input: 5.0,
       output: 25.0,
