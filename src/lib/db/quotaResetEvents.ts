@@ -270,12 +270,31 @@ function getObservedQuotaWindowStartIso(
     let firstObservedIso: string | null = null;
     let resetDropIso: string | null = null;
     let previousUsedPercentage: number | null = null;
+    // True once we have seen a snapshot belonging to a DIFFERENT window before
+    // the target one — i.e. proof that we were already watching this connection
+    // when the target window opened. Without it, the earliest target-window
+    // snapshot only tells us when this connection started being observed.
+    let watchedPreviousWindow = false;
+    let sawTargetWindowRow = false;
 
     for (const row of rows) {
       const createdIso = parseResetIso(row.createdAt);
-      if (!createdIso || resetDay(row.nextResetAt) !== targetDay) continue;
+      if (!createdIso) continue;
+      if (resetDay(row.nextResetAt) !== targetDay) {
+        if (!sawTargetWindowRow) watchedPreviousWindow = true;
+        continue;
+      }
+      sawTargetWindowRow = true;
 
-      if (!firstObservedIso) firstObservedIso = createdIso;
+      // Seeding this with the first target-window snapshot is only sound when we
+      // watched the previous window too. Otherwise it makes "the oldest snapshot
+      // we hold" masquerade as the window boundary, truncating the window to the
+      // connection's age — the normal case here, because deleting a provider
+      // connection and logging in again mints a new connection id, so a days-old
+      // window routinely has an hours-old connection. Left unset, callers anchor
+      // on the provider's own `resetAt` minus the window length, which is correct
+      // by definition for a 7d window and immune to connection-id churn.
+      if (!firstObservedIso && watchedPreviousWindow) firstObservedIso = createdIso;
 
       const currentUsedPercentage = usedPercent(clampPercent(row.remainingPercentage));
       if (currentUsedPercentage !== null) {

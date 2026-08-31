@@ -333,20 +333,33 @@ function getObservedWeeklyWindowStartIso(
 
     let observedStartIso: string | null = null;
     let previousUsedPercent: number | null = null;
+    // See the same guard in `getObservedQuotaWindowStartIso`: the first snapshot
+    // carrying the target reset is the reset itself ONLY when we were already
+    // watching this connection through the previous window. A connection born
+    // mid-window (re-login mints a new id) would otherwise report its own birth
+    // as the window start, truncating the window and under-enforcing the cap
+    // over the missing days.
+    let watchedPreviousWindow = false;
+    let sawTargetWindowRow = false;
 
     for (const row of rows) {
-      if (!row.createdAt || !isWeeklyQuotaResetSnapshot(row, targetResetAtIso)) continue;
+      if (!row.createdAt) continue;
+      if (!isWeeklyQuotaResetSnapshot(row, targetResetAtIso)) {
+        if (!sawTargetWindowRow) watchedPreviousWindow = true;
+        continue;
+      }
+      sawTargetWindowRow = true;
       const remaining = toNumber(row.remainingPercentage);
       const usedPercent = clampPercent(100 - remaining);
 
-      if (!observedStartIso) {
-        observedStartIso = row.createdAt;
-      } else if (previousUsedPercent !== null) {
+      if (previousUsedPercent !== null) {
         const droppedToResetFloor = usedPercent <= 1 && previousUsedPercent > usedPercent;
         const significantDrop = previousUsedPercent - usedPercent >= 5;
         if (droppedToResetFloor || significantDrop) {
           observedStartIso = row.createdAt;
         }
+      } else if (watchedPreviousWindow) {
+        observedStartIso = row.createdAt;
       }
 
       previousUsedPercent = usedPercent;

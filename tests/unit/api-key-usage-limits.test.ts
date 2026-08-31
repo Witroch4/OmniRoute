@@ -696,3 +696,101 @@ test("resolveApiKeyWeeklyWindow reports isObserved=false and a rolling-7d start 
   assert.equal(resolution.resetAtIso, null);
   assert.equal(resolution.windowStartIso, usageLimits.getRollingWeekStartIso(NOW));
 });
+
+// Regression: a connection younger than the window truncated the window to the
+// connection's own age. Deleting a provider connection and logging in again
+// mints a NEW connection id with zero recorded reset events and no snapshots
+// from the previous window, so the earliest snapshot we hold is merely when the
+// connection was born — not when the provider's window opened. Treating it as
+// the window start hid every day of spend before it, which both under-reported
+// cost and left the weekly cap unenforced over those days.
+test("a connection born mid-window still measures the cap from the provider reset", async () => {
+  await localDb.updatePricing({
+    claude: {
+      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+    },
+  });
+
+  const created = await apiKeysDb.createApiKey("Fresh Conn Key", "machine-limit-fresh-conn");
+  await apiKeysDb.updateApiKeyPermissions(created.id, {
+    usageLimitEnabled: true,
+    weeklyUsageLimitUsd: 20,
+  });
+
+  // Spent INSIDE the real window (opened 2026-06-20T13:00 = reset - 7d) but
+  // BEFORE this connection existed. Must still count.
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    apiKeyId: created.id,
+    apiKeyName: "Fresh Conn Key",
+    tokens: { input: 30_000_000, output: 0 },
+    success: true,
+    timestamp: "2026-06-22T12:00:00.000Z",
+  });
+
+  const db = core.getDbInstance();
+  const insertSnapshot = db.prepare(`
+    INSERT INTO quota_snapshots (
+      provider, connection_id, window_key, remaining_percentage, is_exhausted,
+      next_reset_at, window_duration_ms, raw_data, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  // The ONLY snapshots this connection has: it was created on 06-24, days after
+  // the window opened. No snapshot of the previous window exists for it.
+  insertSnapshot.run(
+    "claude",
+    "conn-fresh",
+    "weekly (7d)",
+    40,
+    0,
+    "2026-06-27T13:00:00.000Z",
+    null,
+    null,
+    "2026-06-24T10:00:00.000Z"
+  );
+  insertSnapshot.run(
+    "claude",
+    "conn-fresh",
+    "weekly (7d)",
+    39,
+    0,
+    "2026-06-27T13:00:00.000Z",
+    null,
+    null,
+    "2026-06-24T11:00:00.000Z"
+  );
+
+  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+  assert.ok(metadata);
+
+  const status = await usageLimits.getApiKeyUsageLimitStatus(
+    { ...metadata, allowedConnections: ["conn-fresh"] },
+    {
+      now: () => Date.parse("2026-06-24T14:00:00.000Z"),
+      getProviderConnectionById: async () => ({
+        id: "conn-fresh",
+        provider: "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "weekly (7d)": { used: 60, total: 100, resetAt: "2026-06-27T13:00:00.000Z" },
+        },
+        message: null,
+        fetchedAt: "2026-06-24T11:00:00.000Z",
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    }
+  );
+
+  assert.equal(
+    status.weeklyWindowStartIso,
+    "2026-06-20T13:00:00.000Z",
+    "window must anchor on reset - 7d, not on when this connection first appeared"
+  );
+  assert.equal(status.weeklySpentUsd, 30, "spend from before the connection existed still counts");
+  assert.equal(status.weeklyExceeded, true, "the cap must be enforced over the full window");
+});
