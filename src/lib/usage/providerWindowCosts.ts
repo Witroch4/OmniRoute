@@ -243,6 +243,36 @@ function selectWeeklyWindow(
   };
 }
 
+/**
+ * True when `connectionId` is the only surviving connection for `provider`, which
+ * is what makes usage from retired connection ids safely attributable to it.
+ * Fails closed (false) if the table is missing or the query throws, so an error
+ * can only narrow the breakdown to today's behaviour, never widen it wrongly.
+ */
+function isSoleSurvivingConnection(provider: string, connectionId: string): boolean {
+  try {
+    const row = getDbInstance()
+      .prepare(
+        `SELECT COUNT(*) as total
+           FROM provider_connections
+          WHERE LOWER(provider) = @provider`
+      )
+      .get({ provider }) as { total?: number } | undefined;
+    if (toNumber(row?.total, 0) !== 1) return false;
+
+    const mine = getDbInstance()
+      .prepare(
+        `SELECT COUNT(*) as total
+           FROM provider_connections
+          WHERE id = @connectionId AND LOWER(provider) = @provider`
+      )
+      .get({ connectionId, provider }) as { total?: number } | undefined;
+    return toNumber(mine?.total, 0) === 1;
+  } catch {
+    return false;
+  }
+}
+
 function makeApiKeyKey(apiKeyId: string | null, apiKeyName: string | null): string {
   if (apiKeyId) return `id:${apiKeyId}`;
   if (apiKeyName) return `name:${apiKeyName}`;
@@ -443,7 +473,23 @@ export async function getProviderWindowCostBreakdown({
     params.resetAt = windowResetAt;
   }
   if (connectionId) {
-    where.push("connection_id = @connectionId");
+    // Deleting a provider connection and logging in again mints a NEW id, so the
+    // window's earlier requests stay bound to the retired one and would drop out
+    // of this breakdown entirely — measured in production: 1674 of the window's
+    // 4827 Claude requests sat on an id that no longer exists, which erased three
+    // days of spend and four API keys from the list.
+    //
+    // Rows whose connection no longer exists are only safely attributable when
+    // the requested connection is the provider's ONLY surviving one. With two or
+    // more we cannot tell which account the orphans belonged to, so they stay out
+    // rather than being credited to the wrong one.
+    if (isSoleSurvivingConnection(providerKey, connectionId)) {
+      where.push(
+        "(connection_id = @connectionId OR (connection_id IS NOT NULL AND connection_id NOT IN (SELECT id FROM provider_connections)))"
+      );
+    } else {
+      where.push("connection_id = @connectionId");
+    }
     params.connectionId = connectionId;
   }
 

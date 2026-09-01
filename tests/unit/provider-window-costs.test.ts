@@ -564,3 +564,145 @@ test("a domain budget still wins over the key's own weekly cap", async () => {
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].limitUsd, 40, "domain budget must keep precedence");
 });
+
+// Regression: usage bound to a RETIRED connection id vanished from the window.
+// Deleting a provider connection and logging in again mints a new id, so the
+// window's earlier requests keep pointing at an id that no longer exists. The
+// breakdown filtered strictly on the current id and dropped them — in production
+// that erased 1674 of 4827 Claude requests and four API keys from the list.
+test("usage from a retired connection counts when one connection survives", async () => {
+  await localDb.updatePricing({
+    codex: { "gpt-5.5": { input: 10, output: 20, cached: 1, cache_creation: 5, reasoning: 30 } },
+  });
+
+  const db = core.getDbInstance();
+  db.prepare(
+    `INSERT INTO provider_connections (id, provider, name, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    "codex-live",
+    "codex",
+    "acct@example.com",
+    1,
+    "2026-06-27T00:00:00.000Z",
+    "2026-06-27T00:00:00.000Z"
+  );
+
+  const key = await apiKeys.createApiKey("Churn Key", "machine-churn");
+
+  providerLimits.setProviderLimitsCache("codex-live", {
+    quotas: {
+      "weekly (7d)": {
+        used: 10,
+        total: 100,
+        remainingPercentage: 90,
+        resetAt: "2026-07-02T23:00:00.000Z",
+      },
+    },
+    plan: "Prolite",
+    message: null,
+    fetchedAt: "2026-06-28T12:00:00.000Z",
+  });
+
+  // Spent on the RETIRED connection, inside the window.
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-retired",
+    apiKeyId: key.id,
+    apiKeyName: "Churn Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-26T10:00:00.000Z",
+  });
+  // Spent on the live connection.
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-live",
+    apiKeyId: key.id,
+    apiKeyName: "Churn Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-27T10:00:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "codex",
+    connectionId: "codex-live",
+    now: Date.parse("2026-06-28T12:00:00.000Z"),
+  });
+
+  assert.equal(result.totalCostUsd, 20, "both the retired and the live connection must count");
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].requests, 2);
+});
+
+test("a retired connection is NOT attributed when two connections survive", async () => {
+  await localDb.updatePricing({
+    codex: { "gpt-5.5": { input: 10, output: 20, cached: 1, cache_creation: 5, reasoning: 30 } },
+  });
+
+  const db = core.getDbInstance();
+  const ins = db.prepare(
+    `INSERT INTO provider_connections (id, provider, name, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  ins.run(
+    "codex-a",
+    "codex",
+    "a@example.com",
+    1,
+    "2026-06-27T00:00:00.000Z",
+    "2026-06-27T00:00:00.000Z"
+  );
+  ins.run(
+    "codex-b",
+    "codex",
+    "b@example.com",
+    1,
+    "2026-06-27T00:00:00.000Z",
+    "2026-06-27T00:00:00.000Z"
+  );
+
+  const key = await apiKeys.createApiKey("Two Conn Key", "machine-two-conn");
+
+  providerLimits.setProviderLimitsCache("codex-a", {
+    quotas: {
+      "weekly (7d)": {
+        used: 10,
+        total: 100,
+        remainingPercentage: 90,
+        resetAt: "2026-07-02T23:00:00.000Z",
+      },
+    },
+    plan: "Prolite",
+    message: null,
+    fetchedAt: "2026-06-28T12:00:00.000Z",
+  });
+
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-retired",
+    apiKeyId: key.id,
+    apiKeyName: "Two Conn Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-26T10:00:00.000Z",
+  });
+  await usageHistory.saveRequestUsage({
+    provider: "codex",
+    model: "gpt-5.5",
+    connectionId: "codex-a",
+    apiKeyId: key.id,
+    apiKeyName: "Two Conn Key",
+    tokens: { input: 1_000_000, output: 0 },
+    timestamp: "2026-06-27T10:00:00.000Z",
+  });
+
+  const result = await getProviderWindowCostBreakdown({
+    provider: "codex",
+    connectionId: "codex-a",
+    now: Date.parse("2026-06-28T12:00:00.000Z"),
+  });
+
+  assert.equal(result.totalCostUsd, 10, "orphans must not be credited to one of two accounts");
+});
