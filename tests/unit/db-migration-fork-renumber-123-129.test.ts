@@ -276,6 +276,73 @@ test(
   }
 );
 
+test(
+  "staged rollout: a ledger carrying BOTH the old and the new numbers still frees 123-129",
+  serial,
+  async () => {
+    // This is the shape production is left in when the renumber ships BEFORE the upstream
+    // merge. With no file at version 123 yet, reconcileRenumberedMigrations() cannot fire
+    // (it requires a DIFFERENT migration to be sitting on the old number), so 164–170 are
+    // simply marked applied on top of the surviving 123–129 rows.
+    //
+    // The merge deploy then meets a ledger holding both. reconcile takes its
+    // `targetRow already exists` branch and DELETES the stale 123–129 rows rather than
+    // rewriting them, which is what frees the slots for upstream. Without this case the
+    // staged path would be untested — and it is the path this deployment actually takes.
+    const runner = await importFresh("src/lib/db/migrationRunner.ts");
+    const db = new Database(":memory:");
+
+    try {
+      createBaseSchema(db);
+      for (const migration of FORK_MIGRATIONS) db.exec(migration.sql);
+      db.exec(`
+        CREATE TABLE _omniroute_migrations (
+          version TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      const insert = db.prepare("INSERT INTO _omniroute_migrations (version, name) VALUES (?, ?)");
+      for (const row of OLD_LEDGER_ROWS) insert.run(row.version, row.name);
+      for (const migration of FORK_MIGRATIONS) {
+        insert.run(migration.version, migration.file.replace(/^\d+_/, "").replace(/\.sql$/, ""));
+      }
+
+      const applied = withMockedMigrationFs(migrationFileMap({ includeUpstream: true }), () =>
+        runner.runMigrations(db)
+      );
+
+      assert.equal(applied, UPSTREAM_MIGRATIONS.length);
+      for (const migration of UPSTREAM_MIGRATIONS) {
+        assert.ok(
+          tableExists(db, migration.table),
+          `upstream ${migration.version} was skipped — the stale row was not cleared`
+        );
+      }
+
+      // The duplicated fork rows are gone; only upstream occupies 123–129 now.
+      const rows = ledgerRows(db);
+      assert.deepEqual(
+        rows.filter((row) => Number(row.version) <= 129).map((row) => row.name),
+        UPSTREAM_MIGRATIONS.map((migration) =>
+          migration.file.replace(/^\d+_/, "").replace(/\.sql$/, "")
+        )
+      );
+      assert.equal(rows.filter((row) => Number(row.version) >= 164).length, FORK_MIGRATIONS.length);
+
+      // And the fork schema was never touched along the way.
+      const apiKeyColumns = columnNames(db, "api_keys");
+      assert.equal(
+        apiKeyColumns.filter((name) => name === "min_spend_guarantee_enabled").length,
+        1
+      );
+      assert.equal(apiKeyColumns.filter((name) => name === "renewal_cycle_enabled").length, 1);
+    } finally {
+      db.close();
+    }
+  }
+);
+
 test("a fresh database still gets the fork-only schema", serial, async () => {
   const runner = await importFresh("src/lib/db/migrationRunner.ts");
   const db = new Database(":memory:");
