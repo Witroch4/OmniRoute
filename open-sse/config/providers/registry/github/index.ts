@@ -95,6 +95,59 @@ export const githubProvider: RegistryEntry = {
       maxOutputTokens: 64000,
     },
     { id: "gpt-5.5", name: "GPT-5.5", ...GPT_5_5_CODEX_CAPABILITIES, maxOutputTokens: 128000 },
+    // Ported from upstream: models this GitHub Copilot account serves but the
+    // fork's registry never listed. Kept to the account's own picker — models
+    // it does not offer (claude-opus-5/4.6, gpt-5.4-nano, mai-code-1-flash-picker)
+    // and gpt-5.6-sol (shown as Upgrade, i.e. no entitlement) stay out.
+    {
+      id: "gemini-3.7-flash",
+      name: "Gemini 3.7 Flash",
+      contextLength: 1000000,
+      maxOutputTokens: 64000,
+    },
+    {
+      id: "gemini-3.6-flash",
+      name: "Gemini 3.6 Flash",
+      contextLength: 1000000,
+      maxOutputTokens: 64000,
+    },
+    {
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      targetFormat: "openai-responses",
+      maxOutputTokens: 128000,
+    },
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      targetFormat: "openai-responses",
+      maxOutputTokens: 128000,
+    },
+    // xAI Grok on Copilot — /responses-only (supported_endpoints: ["/responses"];
+    // 400 on /chat/completions). Distinct from xAI-direct (chat-capable) — see
+    // the separate `xai` provider. Live-verified context 500k / output 128k.
+    {
+      id: "grok-4.6",
+      name: "Grok 4.6",
+      targetFormat: "openai-responses",
+      contextLength: 500000,
+      maxOutputTokens: 128000,
+    },
+    {
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      targetFormat: "openai-responses",
+      contextLength: 500000,
+      maxOutputTokens: 128000,
+    },
+    // MAI (Microsoft AI) — /responses-only on Copilot (400 on /chat/completions).
+    {
+      id: "mai-code-1.1-flash",
+      name: "MAI-Code-1.1-Flash",
+      targetFormat: "openai-responses",
+      contextLength: 256000,
+      maxOutputTokens: 128000,
+    },
     {
       id: "gpt-5.4",
       name: "GPT-5.4",

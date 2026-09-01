@@ -112,6 +112,21 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
     supportsVision: true,
     toolCalling: true,
   },
+  // Gemini 3.7 Flash. Upstream exposes high/medium/low/tiered, but ALL FOUR dispatch
+  // as `gemini-3.7-flash-tiered` — the tiers are not distinct upstream models. Publishing
+  // them would break the #3696 invariant (no two public models may resolve to the same
+  // upstream id), which exists so a tier choice actually means something. So only the
+  // single real model is public; the tier ids stay as HIDDEN aliases below, exactly like
+  // `gemini-3.5-flash-preview`, so existing configs keep routing.
+  {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   {
     id: "gemini-3.6-flash-high",
     name: "Gemini 3.6 Flash (High)",

@@ -1,7 +1,13 @@
 // tests/unit/github-copilot-custom-model-target-format.test.ts
 // GitHub Copilot custom models (custom-model dropdown, #2905) can carry a
 // per-model targetFormat override resolving to "openai-responses" — e.g. a
-// Codex-family custom model (gpt-5.6-terra/gpt-5.6-luna) that the operator
+// Codex-family custom model that the operator adds via the dashboard and that is
+// therefore ABSENT from the static registry — `gpt-5.6-atlas` here. It used to be
+// `gpt-5.6-terra`, but terra was added to the registry (with its own
+// targetFormat: openai-responses), which made the no-override case resolve to
+// /responses from the registry and silently voided this test's premise. Keep this
+// id unregistered, or the pair stops exercising the override path at all.
+// Original context: the operator
 // wants routed through Copilot's native /responses endpoint instead of
 // /chat/completions. GithubExecutor.buildUrl() only reads the static
 // PROVIDER_MODELS registry via getModelTargetFormat("gh", model) and has no
@@ -18,7 +24,7 @@ import { resolveExecutionCredentials } from "../../open-sse/handlers/chatCore/ex
 test("BUG: GithubExecutor.buildUrl ignores a per-model targetFormat:'openai-responses' override and still returns the chat/completions URL", () => {
   const executor = new GithubExecutor();
   const credentialsWithoutOverride = { apiKey: "test-token" };
-  const url = executor.buildUrl("gpt-5.6-terra", false, 0, credentialsWithoutOverride);
+  const url = executor.buildUrl("gpt-5.6-atlas", false, 0, credentialsWithoutOverride);
   assert.ok(
     !url.endsWith("/responses"),
     "sanity check: with no override and a non-codex custom model id, buildUrl falls back to chat/completions"
@@ -31,7 +37,7 @@ test("FIX: GithubExecutor.buildUrl honors providerSpecificData.targetFormat:'ope
     apiKey: "test-token",
     providerSpecificData: { targetFormat: "openai-responses" },
   };
-  const url = executor.buildUrl("gpt-5.6-terra", false, 0, credentialsWithOverride);
+  const url = executor.buildUrl("gpt-5.6-atlas", false, 0, credentialsWithOverride);
   assert.ok(
     url.endsWith("/responses"),
     `expected the /responses endpoint when the override is set, got: ${url}`

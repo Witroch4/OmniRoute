@@ -3,6 +3,7 @@
  * Pure data; merged by default-pricing.ts via spread (god-file decomposition; semantic split).
  */
 import {
+  GEMINI_3_7_FLASH_PROMO_PRICING,
   GPT_5_3_CODEX_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
@@ -454,6 +455,7 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 18.0,
       cache_creation: 2.0,
     },
+    "gemini-3.7-flash": GEMINI_3_7_FLASH_PROMO_PRICING,
     "gemini-3-flash": {
       input: 0.5,
       output: 3.0,

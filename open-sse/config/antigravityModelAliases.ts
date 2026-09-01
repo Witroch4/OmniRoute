@@ -71,6 +71,21 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
   // for this generation was NOT confirmed in the same probe — several distinct raw ids
   // (gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-thinking) all echoed the
   // same "Gemini 3.1 Flash Lite" displayName, too ambiguous to add an entry from.
+  // Gemini 3.7 Flash. Upstream exposes high/medium/low/tiered, but ALL FOUR dispatch
+  // as `gemini-3.7-flash-tiered` — the tiers are not distinct upstream models. Publishing
+  // them would break the #3696 invariant (no two public models may resolve to the same
+  // upstream id), which exists so a tier choice actually means something. So only the
+  // single real model is public; the tier ids stay as HIDDEN aliases below, exactly like
+  // `gemini-3.5-flash-preview`, so existing configs keep routing.
+  {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   {
     id: "gemini-3.6-flash-low",
     name: "Gemini 3.6 Flash (Low)",
@@ -191,6 +206,12 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
 ]);
 
 export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
+  // Gemini 3.7 Flash tiers all dispatch as the upstream tiered endpoint model.
+  // Without these, the tier ids reach the provider verbatim and 400.
+  "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-medium": "gemini-3.7-flash-tiered",
+  "gemini-3.7-flash-low": "gemini-3.7-flash-tiered",
   "gemini-3.5-flash-low": "gemini-3.5-flash-extra-low",
   "gemini-3.5-flash-medium": "gemini-3.5-flash-low",
   "gemini-3.5-flash-high": "gemini-3-flash-agent",
