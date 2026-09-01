@@ -455,6 +455,43 @@ function isSchemaAlreadyApplied(
       // exists the rebuild ran — skip re-executing the rename/copy/drop, which
       // would fail on the missing proxy_assignments_pre117 table.
       return hasColumn(db, "proxy_assignments", "position");
+
+    // ── Fork-only migrations renumbered 123–129 → 164–170 on the 2026-09-01 upstream
+    // sync (upstream had reused 123–129 for different migrations). Renumbering alone
+    // would have taken these OUT of every idempotency guard, because this switch is
+    // keyed by version NUMBER: on a database that already carries their schema, the
+    // four ALTER-based ones would re-run and die on "duplicate column name".
+    //
+    // RENAMED_MIGRATION_COMPATIBILITY normally moves the ledger row so these are never
+    // even pending. These cases are the second line of defence, for a database where
+    // that reconcile did not fire (a restored backup, a hand-edited ledger, a row whose
+    // name was rewritten). On a FRESH database every probe below is false, so the
+    // migrations still run and still create their schema — which is what makes it safe
+    // to keep them permanently.
+    case "164":
+      return (
+        hasColumn(db, "api_keys", "min_spend_guarantee_enabled") &&
+        hasColumn(db, "api_keys", "min_spend_guarantee_usd")
+      );
+    // 165_quota_snapshots_window_index is a bare CREATE INDEX IF NOT EXISTS — inherently
+    // re-runnable, so it needs no probe here (an index has no hasTable/hasColumn shape).
+    case "166":
+      return hasTable(db, "api_key_model_budget_rules");
+    case "167":
+      return (
+        hasColumn(db, "usage_history", "billed_provider") &&
+        hasColumn(db, "usage_history", "billed_model")
+      );
+    case "168":
+      return hasColumn(db, "domain_cost_history", "billed_cost");
+    case "169":
+      return hasTable(db, "api_key_model_family_multipliers");
+    case "170":
+      return (
+        hasColumn(db, "api_keys", "renewal_cycle_enabled") &&
+        hasColumn(db, "api_keys", "renewal_cycle_anchor_at") &&
+        hasColumn(db, "api_keys", "renewal_cycle_months")
+      );
     default:
       return false;
   }

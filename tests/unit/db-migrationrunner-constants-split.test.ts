@@ -70,14 +70,35 @@ describe("migrationRunner/constants — exact small-table snapshots", () => {
 // ── large tables — count + shape + spot-checks (corruption guard) ─────────────
 
 describe("migrationRunner/constants — large-table integrity", () => {
-  it("RENAMED_MIGRATION_COMPATIBILITY has 10 well-formed entries", () => {
-    assert.equal(RENAMED_MIGRATION_COMPATIBILITY.length, 10);
+  it("RENAMED_MIGRATION_COMPATIBILITY has 17 well-formed entries", () => {
+    // 10 upstream renames + the 7 fork migrations renumbered 123–129 → 164–170 on the
+    // 2026-09-01 upstream sync.
+    assert.equal(RENAMED_MIGRATION_COMPATIBILITY.length, 17);
     for (const e of RENAMED_MIGRATION_COMPATIBILITY) {
       assert.equal(typeof e.fromVersion, "string");
       assert.equal(typeof e.fromName, "string");
       assert.equal(typeof e.toVersion, "string");
       assert.equal(typeof e.toName, "string");
     }
+  });
+
+  it("RENAMED_MIGRATION_COMPATIBILITY still carries the fork 123-129 → 164-170 block", () => {
+    // Tripwire: a future upstream merge that resolves constants.ts by taking "theirs"
+    // would drop these seven and make the runner skip upstream's 123–129 on every
+    // production database that recorded ours there. Fail loudly instead.
+    const forkRenames = RENAMED_MIGRATION_COMPATIBILITY.filter(
+      (e) => Number(e.toVersion) >= 164 && Number(e.toVersion) <= 170
+    ).map((e) => `${e.fromVersion}_${e.fromName} -> ${e.toVersion}_${e.toName}`);
+
+    assert.deepEqual(forkRenames, [
+      "123_api_key_min_spend_guarantee -> 164_api_key_min_spend_guarantee",
+      "124_quota_snapshots_window_index -> 165_quota_snapshots_window_index",
+      "125_api_key_model_budget_rules -> 166_api_key_model_budget_rules",
+      "126_usage_history_billed_model -> 167_usage_history_billed_model",
+      "127_domain_cost_history_billed_cost -> 168_domain_cost_history_billed_cost",
+      "128_api_key_model_family_multipliers -> 169_api_key_model_family_multipliers",
+      "129_api_key_renewal_cycle -> 170_api_key_renewal_cycle",
+    ]);
   });
 
   it("RENAMED_MIGRATION_COMPATIBILITY spot-checks the boundary renames", () => {

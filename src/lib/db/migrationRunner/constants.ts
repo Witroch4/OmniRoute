@@ -69,6 +69,66 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toVersion: "059",
     toName: "manifest_routing",
   },
+  // ── Fork-only migrations renumbered 123–129 → 164–170 on the 2026-09-01 upstream
+  // sync. Upstream had independently used 123–129 for SEVEN DIFFERENT migrations
+  // (quota_auto_ping, generic_session_affinity_ttl, provider_connection_quota_visibility,
+  // reasoning_routing_rules, usage_history_account_identity, auto_candidate_overrides,
+  // usage_history_codex_strong_identity). Since getAppliedVersions() keys on the version
+  // NUMBER alone, a database that recorded ours at 123–129 would have made the runner skip
+  // upstream's seven silently — the container boots healthy and then fails at runtime on
+  // the missing columns/tables.
+  //
+  // These entries let reconcileRenumberedMigrations() rewrite the ledger itself, at boot,
+  // inside a transaction: each row moves 123→164 … 129→170, which frees 123–129 so
+  // upstream's migrations are seen as pending and apply normally. That replaces the
+  // hand-written UPDATE against the production database that was originally planned —
+  // this path is in-tree, reviewable, reverts with the image, and needs no manual step on
+  // any other deployment.
+  //
+  // Matching by NAME is what makes it safe: a database that never had our fork migrations
+  // has no row to move, so the reconcile is a no-op there.
+  {
+    fromVersion: "123",
+    fromName: "api_key_min_spend_guarantee",
+    toVersion: "164",
+    toName: "api_key_min_spend_guarantee",
+  },
+  {
+    fromVersion: "124",
+    fromName: "quota_snapshots_window_index",
+    toVersion: "165",
+    toName: "quota_snapshots_window_index",
+  },
+  {
+    fromVersion: "125",
+    fromName: "api_key_model_budget_rules",
+    toVersion: "166",
+    toName: "api_key_model_budget_rules",
+  },
+  {
+    fromVersion: "126",
+    fromName: "usage_history_billed_model",
+    toVersion: "167",
+    toName: "usage_history_billed_model",
+  },
+  {
+    fromVersion: "127",
+    fromName: "domain_cost_history_billed_cost",
+    toVersion: "168",
+    toName: "domain_cost_history_billed_cost",
+  },
+  {
+    fromVersion: "128",
+    fromName: "api_key_model_family_multipliers",
+    toVersion: "169",
+    toName: "api_key_model_family_multipliers",
+  },
+  {
+    fromVersion: "129",
+    fromName: "api_key_renewal_cycle",
+    toVersion: "170",
+    toName: "api_key_renewal_cycle",
+  },
 ] as const;
 
 export const LEGACY_VERSION_SLOT_MIGRATIONS = [
