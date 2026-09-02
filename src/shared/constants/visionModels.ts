@@ -50,6 +50,18 @@ export const VISION_MODEL_ID_FRAGMENTS = [
   "claude-opus-4",
   "claude-sonnet-4",
   "claude-haiku-4",
+  // Claude 5 generation. Substring matching means "claude-opus-4" does NOT cover
+  // "claude-opus-5", so every Claude 5 id must be listed explicitly. `claude-opus-5`
+  // shipped in the registry with no `modelSpecs` entry and no models.dev record, so
+  // it fell through every layer of resolveVisionCapability and this last-resort
+  // heuristic answered `false` for a natively multimodal model — which sent image
+  // requests into the Vision Bridge and out to a credential-less provider (401).
+  // The whole Claude 5 line is multimodal, exactly the "stable, well-known vision
+  // family" this list exists for.
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-haiku-5",
+  "claude-fable-5",
   "mistral-medium-3",
   "minimax-m3",
   "-vision",

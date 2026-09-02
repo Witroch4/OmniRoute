@@ -5,6 +5,8 @@
 
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels";
+import { NOAUTH_PROVIDERS } from "@/shared/constants/providers/noauth";
+import { APIKEY_PROVIDERS_GATEWAYS } from "@/shared/constants/providers/apikey/gateways";
 
 export interface VisionModelCandidate {
   modelId: string;
@@ -95,6 +97,46 @@ function calculateSuccessRate(modelId: string): number {
 }
 
 /**
+ * Providers that carry NO credential of their own: the `noAuth: true` catalog and
+ * the API-key gateways that fall back to an anonymous upstream. Keyed by BOTH the
+ * provider id and its public alias, because `PROVIDER_MODELS` is keyed by alias.
+ *
+ * These must never be a Vision Bridge reroute target. They have no connection row,
+ * so a reroute lands on a shared anonymous endpoint that is rate-limited per egress
+ * IP and can be blocked outright; and their synced catalogs overstate capability —
+ * `visionBridgeDefaults.ts` already documents opencode-zen/opencode-go advertising
+ * `image` input for backends with no native vision. Sending a user's image to an
+ * anonymous third-party endpoint is also not a silent default worth having.
+ */
+const CREDENTIALLESS_PROVIDER_KEYS: ReadonlySet<string> = (() => {
+  const keys = new Set<string>();
+  const add = (id: string, alias?: unknown) => {
+    keys.add(id);
+    if (typeof alias === "string" && alias) keys.add(alias);
+  };
+  for (const [id, def] of Object.entries(
+    NOAUTH_PROVIDERS as Record<string, { alias?: unknown } | undefined>
+  )) {
+    add(id, def?.alias);
+  }
+  for (const [id, def] of Object.entries(
+    APIKEY_PROVIDERS_GATEWAYS as Record<
+      string,
+      { alias?: unknown; anonymousFallback?: unknown } | undefined
+    >
+  )) {
+    if (def?.anonymousFallback === true) add(id, def?.alias);
+  }
+  return keys;
+})();
+
+/** Exported so the regression test asserts against the same source as the router. */
+export function isCredentiallessProviderKey(providerKey: string | null | undefined): boolean {
+  if (!providerKey) return false;
+  return CREDENTIALLESS_PROVIDER_KEYS.has(providerKey);
+}
+
+/**
  * Get all vision-capable models from the registry.
  */
 function getVisionCapableModels(): VisionModelCandidate[] {
@@ -102,6 +144,13 @@ function getVisionCapableModels(): VisionModelCandidate[] {
 
   for (const [providerAlias, models] of Object.entries(PROVIDER_MODELS)) {
     if (!Array.isArray(models)) continue;
+    // A provider with no credential can never serve a reroute — skip the whole
+    // namespace rather than ranking it. This is what made a missing vision flag
+    // fatal instead of graceful: `opencode-*` used to be scored priority 0
+    // ("local/free models first"), which is wrong twice over — those providers are
+    // remote, not local, and being cheapest is worthless when the call cannot
+    // authenticate. They outranked every real provider and won every selection.
+    if (isCredentiallessProviderKey(providerAlias)) continue;
 
     for (const model of models) {
       if (!model?.id) continue;
@@ -111,14 +160,10 @@ function getVisionCapableModels(): VisionModelCandidate[] {
 
       if (caps.supportsVision === true) {
         // Determine priority based on provider type
-        let priority = 100;
-        if (providerAlias.startsWith("opencode-")) {
-          priority = 0; // Local/free models first
-        } else if (providerAlias === "openai" || providerAlias === "anthropic") {
-          priority = 50; // Major providers
-        } else {
-          priority = 75; // Other providers
-        }
+        const priority =
+          providerAlias === "openai" || providerAlias === "anthropic"
+            ? 50 // Major providers
+            : 75; // Other providers
 
         candidates.push({
           modelId: model.id,
