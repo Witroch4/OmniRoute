@@ -353,6 +353,14 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 4.5,
       cache_creation: 0.5,
     },
+    // Gemini 3.8 Flash. Google has not published 3.8 rates yet, so these bill at
+    // the 3.7 Flash promo tier — deliberately provisional, and revisit when the
+    // real card lands. Without a row the family resolves to `missing`, which
+    // reports the model at $0: 3.6 is in exactly that state today and every
+    // request on it has been counted as free. Off by a little beats off by 100%.
+    "gemini-3.8-flash-high": GEMINI_3_7_FLASH_PROMO_PRICING,
+    "gemini-3.8-flash-medium": GEMINI_3_7_FLASH_PROMO_PRICING,
+    "gemini-3.8-flash-low": GEMINI_3_7_FLASH_PROMO_PRICING,
     "gemini-3.5-flash-low": {
       input: 0.5,
       output: 3.0,

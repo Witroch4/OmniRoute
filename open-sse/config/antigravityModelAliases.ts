@@ -71,6 +71,40 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
   // for this generation was NOT confirmed in the same probe — several distinct raw ids
   // (gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-thinking) all echoed the
   // same "Gemini 3.1 Flash Lite" displayName, too ambiguous to add an entry from.
+  // Gemini 3.8 Flash tiers (Low/Medium/High). Live-verified against production
+  // BEFORE being written here: `agy/gemini-3.8-flash-{high,medium,low}` each
+  // returned 200 through `agy` passthrough, while the bare `gemini-3.8-flash`
+  // returned 404 "Requested entity was not found" — so the tiers are the real
+  // upstream ids and there is no bare id to alias. Same shape as 3.7/3.6.
+  // Not advertised by :fetchAvailableModels for this account (it stops at 3.6),
+  // which is why they must be pinned here.
+  {
+    id: "gemini-3.8-flash-high",
+    name: "Gemini 3.8 Flash (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.8-flash-medium",
+    name: "Gemini 3.8 Flash (Medium)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "gemini-3.8-flash-low",
+    name: "Gemini 3.8 Flash (Low)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   // Gemini 3.7 Flash tiers (Low/Medium/High), mirroring the 3.6 shape exactly — the
   // Antigravity model selector offers the same three tiers for both, and it now warns
   // that 3.5 Flash is being retired in favour of 3.7. NOT advertised by
