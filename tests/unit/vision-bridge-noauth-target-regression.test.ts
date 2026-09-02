@@ -76,6 +76,47 @@ describe("vision bridge — credential-less providers are never a reroute target
   });
 });
 
+describe("vision bridge — an unknown capability is not a blind verdict", () => {
+  // `supportsVision` is tri-state. Only `false` asserts the model cannot see; `null`
+  // means the catalog has no opinion. The guardrail used to gate on `=== true`, so
+  // "no opinion" was treated as "cannot see" and the caller's model was rewritten on
+  // absence of information.
+  //
+  // Verified against the live gateway on 2026-09-02 with a 64x64 red PNG and
+  // `disabledGuardrails: ["vision-bridge"]`: every one of these answered "red".
+  const READ_A_TEST_IMAGE_IN_PRODUCTION = [
+    "gh/grok-4.6",
+    "gh/grok-4.5",
+    "gh/gpt-5-mini",
+    "gh/mai-code-1.1-flash",
+    "gh/gpt-5.3-codex",
+  ];
+
+  for (const id of READ_A_TEST_IMAGE_IN_PRODUCTION) {
+    it(`${id} is unknown, never asserted blind`, () => {
+      const v = getResolvedModelCapabilities(id).supportsVision;
+      assert.notEqual(
+        v,
+        false,
+        `${id} is asserted blind, but it read a test image in production`
+      );
+    });
+  }
+
+  it("the gate distinguishes unknown from denied", () => {
+    // Guards the tri-state itself: if resolveVisionCapability ever collapses null to
+    // false, every model the catalog has no opinion about starts being rewritten
+    // again — which is the whole bug, not a detail of it.
+    const unknown = READ_A_TEST_IMAGE_IN_PRODUCTION.map(
+      (id) => getResolvedModelCapabilities(id).supportsVision
+    );
+    assert.ok(
+      unknown.every((v) => v === null || v === true),
+      `expected null/true for models with no catalog opinion, got ${JSON.stringify(unknown)}`
+    );
+  });
+});
+
 describe("vision bridge — a reroute stays inside the caller's provider", () => {
   // Latency is tracked in-process and is empty on a cold worker, so every candidate
   // in a priority tier scores identically and the stable sort used to hand the win

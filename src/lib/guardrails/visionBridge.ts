@@ -144,7 +144,16 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       return { block: false };
     }
 
-    if (capabilities.supportsVision === true && !forceVisionBridge) {
+    // `supportsVision` is a tri-state and only `false` is an assertion that the model
+    // cannot see. `null` means the catalog has no opinion — and acting on that is what
+    // made this guardrail dangerous: it rewrote the caller's model on absence of
+    // information. Measured against the live gateway, five Copilot models the catalog
+    // said nothing about (grok-4.5/4.6, gpt-5-mini, mai-code-1.1-flash, gpt-5.3-codex)
+    // all read a test image and named its colour correctly, and `cc/claude-opus-5` —
+    // whose images were being rerouted into a 401 — is natively multimodal.
+    // The provider is the authority: an unknown model is sent as-is, and one that
+    // genuinely cannot see returns a real error instead of a silent substitution.
+    if (capabilities.supportsVision !== false && !forceVisionBridge) {
       // The request model supports vision natively, but check if a
       // model-combo mapping routes this model through a combo where
       // some targets may NOT support vision. In that case, the vision
@@ -198,12 +207,25 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
           : undefined;
       // `requestedModel` keeps the reroute inside the caller's own provider when it
       // has a model that can see, instead of leaving for whichever namespace the
-      // registry lists first (see visionBridgeRouter).
+      // registry lists first. An operator-configured target still wins outright —
+      // that is #6640's contract and it stays intact.
       const bestModel = getBestVisionModel({
         fixedModel: configuredModel,
         requestedModel: model,
       });
       if (bestModel && bestModel !== model) {
+        // Say it out loud. This swaps the model the caller asked for, and until now
+        // it did so with no trace at all: the `rerouted` meta below is returned but
+        // nothing reads it, and the request reaches the router already carrying the
+        // new name, so even the ROUTING line shows the substitute as if it had been
+        // requested. That silence is why a reroute to a dead provider went unnoticed
+        // for two days — every call log said the client had asked for it.
+        context.log?.warn?.(
+          "VISION-BRIDGE",
+          `Rerouted ${model} → ${bestModel} (${imageParts.length} image(s); ` +
+            `${model} is known not to support vision` +
+            `${configuredModel ? "; operator-configured target" : "; auto-selected"})`
+        );
         const modifiedBody = {
           ...(body as Record<string, unknown>),
           model: bestModel,

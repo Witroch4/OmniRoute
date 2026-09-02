@@ -126,6 +126,22 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     aliases: ["openai/gpt-4o"],
   },
 
+  // ── GPT-3.5 (text-only) ─────────────────────────────────────────
+  // Asserted, not inferred. The Vision Bridge now reroutes only models the catalog
+  // states cannot see — `supportsVision === false` — because treating "no opinion"
+  // (`null`) as "blind" is what let it rewrite 1017 models on a guess, several of
+  // which read images perfectly well. gpt-3.5-turbo genuinely accepts no image
+  // input (OpenAI's own model docs), so the fact is recorded here rather than
+  // guessed from the absence of a flag.
+  "gpt-3.5-turbo": {
+    contextWindow: 16385,
+    maxOutputTokens: 4096,
+    supportsThinking: false,
+    supportsTools: true,
+    supportsVision: false,
+    aliases: ["openai/gpt-3.5-turbo"],
+  },
+
   // ── Gemini 2.5 and 3.5 Flash series ──────────────────────────────
   "gemini-2.5-flash": {
     maxOutputTokens: 65536,
@@ -474,6 +490,18 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsThinking: true,
     supportsTools: true,
     aliases: ["MiniMax-M3", "MiniMaxAI/MiniMax-M3"],
+  },
+
+  // ── MiniMax 01 (text-only; the VL variant is a separate model) ───
+  // Asserted for the same reason as gpt-3.5-turbo above: the Vision Bridge now acts
+  // only on a stated `false`, so a model that really cannot see has to say so. The
+  // 01 line ships as MiniMax-Text-01 (text) and MiniMax-VL-01 (vision) — the bare
+  // `minimax-01` id is the text one.
+  "minimax-01": {
+    supportsThinking: false,
+    supportsTools: true,
+    supportsVision: false,
+    aliases: ["minimax/minimax-01"],
   },
 
   // ── MiniMax M2.x (200K context family) ───────────────────────────

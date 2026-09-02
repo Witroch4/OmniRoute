@@ -277,6 +277,7 @@ export function getBestVisionModel(
   // Select best model
   const best = selectBestModel(candidates, fullConfig);
 
+
   if (!best) {
     // Fallback to default
     return "openai/gpt-4o-mini";
