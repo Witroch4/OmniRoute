@@ -187,3 +187,34 @@ describe("pricing resolution", () => {
     });
   });
 });
+
+// A newly released Claude id lands in the catalog before anyone writes a pricing
+// row for it. `claude-fable-5-1` is that case: it must bill at the FABLE tier via
+// the family anchor, never at $0 and never at the Opus tier (Fable is priced
+// above Opus, so falling into the looser claude rule would undercharge by half).
+describe("claude-fable-5-1 (no explicit row yet)", () => {
+  it("bills at the fable tier through the family anchor", () => {
+    const resolved = resolveModelPricing(CATALOG, "claude", "claude-fable-5-1");
+    const fable5 = resolveModelPricing(CATALOG, "claude", "claude-fable-5").pricing;
+
+    assert.equal(resolved.source, "family_anchor");
+    assert.ok(resolved.pricing, "must not resolve to missing/zero pricing");
+    assert.deepEqual(
+      resolved.pricing,
+      fable5,
+      "fable 5.1 must bill exactly like fable 5 until it gets its own row"
+    );
+  });
+
+  it("does not fall through to the opus tier", () => {
+    const fable51 = resolveModelPricing(CATALOG, "claude", "claude-fable-5-1").pricing as Record<
+      string,
+      number
+    >;
+    const opus = resolveModelPricing(CATALOG, "claude", "claude-opus-4-8").pricing as Record<
+      string,
+      number
+    >;
+    assert.notDeepEqual(fable51, opus, "fable is priced above opus — anchoring there undercharges");
+  });
+});

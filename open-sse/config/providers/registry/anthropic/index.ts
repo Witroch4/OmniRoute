@@ -31,6 +31,12 @@ export const anthropicProvider: RegistryEntry = {
       unsupportedParams: ["temperature", "top_p", "top_k"],
     },
     {
+      id: "claude-fable-5-1",
+      name: "Claude Fable 5.1",
+      contextLength: 1048576,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
+    {
       id: "claude-fable-5",
       name: "Claude Fable 5",
       contextLength: 1048576,

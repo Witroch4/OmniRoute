@@ -29,6 +29,16 @@ export const claudeProvider: RegistryEntry = {
   },
   models: [
     {
+      id: "claude-fable-5-1",
+      name: "Claude Fable 5.1",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      supportsXHighEffort: true,
+      // Same sampling constraint as Fable 5 / Opus 4.7+: non-default
+      // temperature/top_p/top_k draw a 400; effort steers reasoning instead.
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
+    {
       id: "claude-fable-5",
       name: "Claude Fable 5",
       contextLength: 1000000,
