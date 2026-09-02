@@ -76,6 +76,48 @@ describe("vision bridge — credential-less providers are never a reroute target
   });
 });
 
+describe("vision bridge — a reroute stays inside the caller's provider", () => {
+  // Latency is tracked in-process and is empty on a cold worker, so every candidate
+  // in a priority tier scores identically and the stable sort used to hand the win
+  // to whatever the registry listed first. That let an image for a blind `gh/` model
+  // be answered by a metered `anthropic/` model while the same account already had a
+  // vision-capable sibling — the caller's credential, quota and cost profile silently
+  // swapped out.
+  it("prefers a vision-capable sibling from the requested provider", () => {
+    for (const alias of ["gh", "agy", "cc"]) {
+      const picked = getBestVisionModel({ requestedModel: `${alias}/some-blind-model` });
+      assert.ok(picked, `${alias}: expected a vision target`);
+      assert.ok(
+        picked.startsWith(`${alias}/`),
+        `${alias}: reroute left the provider — picked ${picked}`
+      );
+    }
+  });
+
+  it("does not let one provider's cached pick leak to another", () => {
+    // The selection cache is keyed per requested provider; without that, the first
+    // caller's answer would be served to everyone for the cache TTL.
+    const gh = getBestVisionModel({ requestedModel: "gh/some-blind-model" });
+    const agy = getBestVisionModel({ requestedModel: "agy/some-blind-model" });
+    assert.ok(gh?.startsWith("gh/"), `gh got ${gh}`);
+    assert.ok(agy?.startsWith("agy/"), `agy got ${agy}`);
+  });
+
+  it("still answers when the requested provider has nothing that can see", () => {
+    // Leaving the provider is correct here — the alternative is failing the request.
+    const picked = getBestVisionModel({ requestedModel: "codex/gpt-5.5" });
+    assert.ok(picked, "expected a fallback target outside the provider");
+    assert.equal(isCredentiallessProviderKey(picked.split("/")[0]), false);
+  });
+
+  it("an explicit operator override still wins over the preference", () => {
+    assert.equal(
+      getBestVisionModel({ fixedModel: "cc/claude-opus-5", requestedModel: "gh/x" }),
+      "cc/claude-opus-5"
+    );
+  });
+});
+
 describe("vision bridge — the Claude 5 generation is vision-capable", () => {
   // claude-opus-5 is the one that regressed; the rest pin the family so the next
   // Claude 5 id added without a spec cannot silently resolve as blind.

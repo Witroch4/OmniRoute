@@ -35,6 +35,12 @@ export interface VisionBridgeRouterConfig {
   minLatencySamples: number;
   /** Models to exclude from auto-routing */
   excludedModels: string[];
+  /**
+   * The model the client actually asked for (`provider/model`). A reroute stays
+   * inside that provider whenever it can see — same credential, same quota, same
+   * cost profile — instead of jumping to whichever namespace happens to sort first.
+   */
+  requestedModel?: string;
 }
 
 const DEFAULT_ROUTER_CONFIG: VisionBridgeRouterConfig = {
@@ -130,6 +136,12 @@ const CREDENTIALLESS_PROVIDER_KEYS: ReadonlySet<string> = (() => {
   return keys;
 })();
 
+function providerPrefixOf(modelId: string | null | undefined): string | null {
+  if (!modelId || typeof modelId !== "string") return null;
+  const i = modelId.indexOf("/");
+  return i > 0 ? modelId.slice(0, i) : null;
+}
+
 /** Exported so the regression test asserts against the same source as the router. */
 export function isCredentiallessProviderKey(providerKey: string | null | undefined): boolean {
   if (!providerKey) return false;
@@ -208,7 +220,22 @@ function selectBestModel(
     score: c.priority * 1000 + (c.averageLatencyMs === Infinity ? 10000 : c.averageLatencyMs),
   }));
 
-  scored.sort((a, b) => a.score - b.score);
+  // Keep the reroute inside the requested provider when that provider has a model
+  // that can see. Latency is tracked in-process and is empty on a cold worker, so
+  // every candidate in a tier scores identically and `sort` — being stable — used to
+  // hand the win to whatever the registry happened to list first. That is how an
+  // image for `gh/<blind model>` could be answered by a metered `anthropic/` model
+  // while the same account already had a vision-capable sibling. Staying put keeps
+  // the credential, the quota and the cost profile the caller chose.
+  const requestedPrefix = providerPrefixOf(config.requestedModel);
+  scored.sort((a, b) => {
+    if (requestedPrefix) {
+      const aSame = providerPrefixOf(a.fullName) === requestedPrefix ? 0 : 1;
+      const bSame = providerPrefixOf(b.fullName) === requestedPrefix ? 0 : 1;
+      if (aSame !== bSame) return aSame - bSame;
+    }
+    return a.score - b.score;
+  });
 
   return scored[0];
 }
@@ -229,9 +256,16 @@ export function getBestVisionModel(
 
   // Check selection cache — key includes excluded models to prevent cache pollution
   // across different configurations
-  const cacheKey = fullConfig.excludedModels.length > 0
-    ? `excl:${[...fullConfig.excludedModels].sort().join(",")}`
-    : "default";
+  // The requested provider is part of the key: without it a cached pick made for
+  // one provider would be served to every other one, silently undoing the
+  // same-provider preference.
+  const requestedPrefix = providerPrefixOf(fullConfig.requestedModel);
+  const cacheKey = [
+    fullConfig.excludedModels.length > 0
+      ? `excl:${[...fullConfig.excludedModels].sort().join(",")}`
+      : "default",
+    requestedPrefix ? `req:${requestedPrefix}` : "req:-",
+  ].join("|");
   const cached = selectionCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.modelId;

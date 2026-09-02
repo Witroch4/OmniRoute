@@ -196,7 +196,13 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         typeof settings.visionBridgeModel === "string" && settings.visionBridgeModel.trim()
           ? settings.visionBridgeModel.trim()
           : undefined;
-      const bestModel = getBestVisionModel({ fixedModel: configuredModel });
+      // `requestedModel` keeps the reroute inside the caller's own provider when it
+      // has a model that can see, instead of leaving for whichever namespace the
+      // registry lists first (see visionBridgeRouter).
+      const bestModel = getBestVisionModel({
+        fixedModel: configuredModel,
+        requestedModel: model,
+      });
       if (bestModel && bestModel !== model) {
         const modifiedBody = {
           ...(body as Record<string, unknown>),
