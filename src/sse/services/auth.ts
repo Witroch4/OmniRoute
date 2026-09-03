@@ -142,6 +142,14 @@ const NON_RETRYABLE_MODEL_LOCKOUT_REASONS = new Set(["not_found", "not_found_loc
 // `exactCooldownMs` (usedUpstreamRetryHint), not this base. (#5222)
 const ANTIGRAVITY_FAMILY_INFERRED_BASE_COOLDOWN_MS = 30_000;
 
+// Ceiling for the model breaker armed by a 529 (upstream capacity overload).
+// Overload is transient and NOT ours, so escalation must stay short: a longer
+// lockout converts someone else's blip into an outage we inflict on ourselves.
+// 30s bounds worst-case recovery detection while still cutting a storm from a
+// call every ~6s to a probe every 30s. Never exceeds the operator's configured
+// model-lockout ceiling — it is applied with Math.min against mlSettings.
+const CAPACITY_OVERLOAD_MAX_COOLDOWN_MS = 30_000;
+
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
@@ -2015,8 +2023,18 @@ export async function markAccountUnavailable(
 
     const isPerModelQuotaProvider = hasPerModelQuota(provider, model, connectionPassthroughModels);
     const modelLockoutOptions = { maxCooldownMs: effectiveProviderProfile?.maxCooldownMs };
+    // 529 = upstream capacity overload ("Overloaded"). The model-lockout path below
+    // is otherwise gated on hasPerModelQuota, which is FALSE for account-wide-quota
+    // providers such as the Claude subscription — correct for quota (locking one
+    // model when the quota is shared would be wrong) but wrong for capacity, which
+    // IS model-specific. Measured 2026-09-03: a 529 storm on claude-opus-5 was
+    // forwarded 1:1 for three minutes (26 calls, 0 successes) because nothing armed
+    // the breaker, while sonnet/haiku and other providers answered normally the
+    // whole time. Scoped to 529 alone: 502/503/504 keep their existing behaviour,
+    // since on this provider they can mean network/gateway rather than the model.
+    const isCapacityOverload = status === 529;
     if (
-      isPerModelQuotaProvider &&
+      (isPerModelQuotaProvider || isCapacityOverload) &&
       provider &&
       provider !== "codex" &&
       model &&
@@ -2029,7 +2047,9 @@ export async function markAccountUnavailable(
             ? "quota_exhausted"
             : status === 429
               ? "rate_limited"
-              : "server_error";
+              : isCapacityOverload
+                ? "model_overloaded"
+                : "server_error";
 
       // #5976: a bare 500 is intermittent and NOT model-specific — skip
       // lockout/cooldown ONLY for the exact 500 (the contract its own tests pin:
@@ -2074,7 +2094,14 @@ export async function markAccountUnavailable(
             fallbackResult.usedUpstreamRetryHint === true
               ? fallbackResult.cooldownMs
               : (fallbackResult.quotaResetHintMs ?? null),
-          maxCooldownMs: mlSettings.maxCooldownMs,
+          // Overload is transient, so its backoff is capped far tighter than the
+          // generic lockout ceiling: escalation still happens (5s -> 10s -> 20s ->
+          // 30s) but stops there, and the FIRST request after each window is the
+          // half-open probe — recovery is noticed within 30s at worst. A longer
+          // cap would turn someone else's brief overload into our own outage.
+          maxCooldownMs: isCapacityOverload
+            ? Math.min(CAPACITY_OVERLOAD_MAX_COOLDOWN_MS, mlSettings.maxCooldownMs)
+            : mlSettings.maxCooldownMs,
         }
       );
       // Update last error for observability (without changing terminal status)
