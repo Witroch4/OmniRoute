@@ -206,6 +206,39 @@
       "stream": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     }
   },
+  "amazon-q": {
+    "format": "kiro",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json",
+        "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
+        "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+        "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0"
+      },
+      "nonStream": {
+        "Accept": "application/vnd.amazon.eventstream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json",
+        "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
+        "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+        "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json",
+        "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
+        "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+        "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0"
+      }
+    },
+    "url": {
+      "nonStream": "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
+      "stream": "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
+    }
+  },
   "anthropic": {
     "format": "claude",
     "headers": {
