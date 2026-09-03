@@ -7,8 +7,37 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { KiroService } from "../../src/lib/oauth/services/kiro.ts";
+// validateImportToken tries a Builder ID refresh FIRST, using credentials read
+// from `os.homedir()/.aws/sso/cache`. On a developer machine that has ever
+// signed into Kiro/AWS that cache exists, so the service returned
+// authMethod "builder-id" with the real cached clientId and never reached the
+// mocked /client/register — these tests passed only on a machine with no AWS
+// SSO cache. Worse, the suite was reading real credential material out of the
+// operator's home directory. Point HOME at an empty directory so the Builder ID
+// branch finds nothing and the social-auth path under test is the one exercised.
+const ISOLATED_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-kiro-home-"));
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+process.env.HOME = ISOLATED_HOME;
+process.env.USERPROFILE = ISOLATED_HOME;
+
+test.after(() => {
+  if (ORIGINAL_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = ORIGINAL_HOME;
+  if (ORIGINAL_USERPROFILE === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = ORIGINAL_USERPROFILE;
+  fs.rmSync(ISOLATED_HOME, { recursive: true, force: true });
+});
+
+// Dynamic import, deliberately: a static `import` is hoisted ABOVE the env
+// assignments above, so the isolation would only work by accident (the service
+// happens to call homedir() per-request rather than at module scope). Loading
+// the module after HOME is set makes the guarantee explicit instead of luck.
+const { KiroService } = await import("../../src/lib/oauth/services/kiro.ts");
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
