@@ -28,6 +28,17 @@ interface ImageProviderConfig {
   format: string;
   models: ImageModelEntry[];
   supportedSizes: string[];
+  /**
+   * The provider's generation path can carry reference images, so
+   * `/v1/images/edits` may serve it instead of rejecting it as a built-in.
+   *
+   * Deliberately NOT `inputModalities`: that field on a model entry means the
+   * input is REQUIRED (the generations route errors with "Image input is
+   * required" when it lists "image"), which is the opposite of this — an
+   * optional reference. Conflating them would break text-only generation for
+   * every provider marked here.
+   */
+  supportsImageEdit?: boolean;
 }
 
 interface ImageModelAliasEntry {
@@ -278,6 +289,13 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     authType: "oauth",
     authHeader: "bearer",
     format: "gemini-image", // Special format: uses Gemini generateContent API
+    // Gemini's generateContent takes `contents[].parts[].inlineData`, and the
+    // response parser here already reads image parts back out of exactly that
+    // shape — so reference images cost nothing but passing them through. Before
+    // 2026-09-03 `/v1/images/edits` rejected every built-in provider outright,
+    // which made image-to-image impossible on this account's cheapest image
+    // route and pushed callers onto a paid one ~32x the price.
+    supportsImageEdit: true,
     models: [{ id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image" }],
     supportedSizes: ["1024x1024"],
   },

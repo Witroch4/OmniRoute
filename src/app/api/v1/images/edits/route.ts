@@ -1,6 +1,8 @@
 import {
+  handleBuiltInImageEdit,
   handleImageEdit,
   handleOpenAIImageEdit,
+  isBuiltInImageEditFailure,
 } from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import {
@@ -16,6 +18,7 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import {
   resolveImageRouteModel,
   extractImageEditInputFromJson,
+  type ParsedImageEditImage,
 } from "@/lib/images/imageRouteModel";
 import { z } from "zod";
 
@@ -79,8 +82,11 @@ interface EditInput {
   model: string | null;
   size: string | null;
   responseFormat: string | null;
+  /** First image — all chatgpt-web and the OpenAI-compatible forward can carry. */
   imageBytes: Buffer | null;
   imageMime: string | null;
+  /** Every image sent; providers that accept several references use this. */
+  images: ParsedImageEditImage[];
 }
 
 async function readMultipartImage(formData: FormData): Promise<EditInput> {
@@ -93,17 +99,30 @@ async function readMultipartImage(formData: FormData): Promise<EditInput> {
   const respRaw = formData.get("response_format");
   const responseFormat = typeof respRaw === "string" ? respRaw.trim() : null;
 
-  // OpenAI's API and Open WebUI both accept either a single `image` field or
-  // an `image[]` array. We use the first image when multiple are sent — the
-  // chatgpt-web edit tool can only edit one image per conversation node.
-  const imageEntry = formData.get("image") ?? formData.get("image[]");
-  if (!imageEntry || typeof imageEntry === "string") {
-    return { prompt, model, size, responseFormat, imageBytes: null, imageMime: null };
+  // OpenAI's API and Open WebUI both accept either a single `image` field or an
+  // `image[]` array. ALL of them are collected: chatgpt-web still uses only the
+  // first (one image per conversation node), but a provider like Gemini accepts
+  // several references in a single call, and silently discarding them would
+  // produce an image that ignored most of what the caller supplied.
+  const entries = [...formData.getAll("image"), ...formData.getAll("image[]")];
+  const images: ParsedImageEditImage[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry === "string") continue;
+    const file = entry as File;
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (bytes.length === 0) continue;
+    images.push({ bytes, mime: file.type || "image/png" });
   }
-  const file = imageEntry as File;
-  const imageBytes = Buffer.from(await file.arrayBuffer());
-  const imageMime = file.type || "image/png";
-  return { prompt, model, size, responseFormat, imageBytes, imageMime };
+  const first = images[0] ?? null;
+  return {
+    prompt,
+    model,
+    size,
+    responseFormat,
+    imageBytes: first ? first.bytes : null,
+    imageMime: first ? first.mime : null,
+    images,
+  };
 }
 
 /** Read the edit input from either multipart/form-data or a JSON/data-URL body. */
@@ -149,7 +168,7 @@ async function postHandler(request: Request, context) {
     );
   }
 
-  const { prompt, model, size, responseFormat, imageBytes, imageMime } = input;
+  const { prompt, model, size, responseFormat, imageBytes, imageMime, images } = input;
   if (!prompt) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: prompt");
   }
@@ -223,7 +242,73 @@ async function postHandler(request: Request, context) {
     );
   }
 
-  // Built-in non-chatgpt-web providers do not expose an OpenAI-compatible edit endpoint.
+  // Built-in providers whose generation path accepts reference images serve the
+  // edit directly (registry flag `supportsImageEdit`). Until 2026-09-03 every
+  // built-in was rejected here, which made image-to-image impossible on the
+  // cheapest image route and forced callers onto a paid one.
+  if (providerConfig?.supportsImageEdit) {
+    const credentials = await getProviderCredentialsWithQuotaPreflight(
+      parsed.provider,
+      null,
+      allowedConnections,
+      resolvedModel
+    );
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for image provider: ${parsed.provider}`
+      );
+    }
+    if (credentials.allRateLimited) {
+      return unavailableResponse(
+        HTTP_STATUS.RATE_LIMITED,
+        `[${parsed.provider}] All accounts rate limited`,
+        credentials.retryAfter,
+        credentials.retryAfterHuman
+      );
+    }
+
+    // `images` is populated by both readers; fall back to the single-image
+    // fields so a caller that only ever set those still sends its reference.
+    const referenceImages = (
+      images.length > 0
+        ? images
+        : imageBytes
+          ? [{ bytes: imageBytes, mime: imageMime || "image/png" }]
+          : []
+    ).map((image) => ({
+      data: image.bytes.toString("base64"),
+      mimeType: image.mime,
+    }));
+
+    const result = await handleBuiltInImageEdit({
+      provider: parsed.provider,
+      model: parsed.model,
+      providerConfig,
+      body: {
+        model: resolvedModel,
+        prompt,
+        ...(size ? { size } : {}),
+        ...(responseFormat ? { response_format: responseFormat } : {}),
+      },
+      referenceImages,
+      credentials,
+      log,
+    });
+
+    if (isBuiltInImageEditFailure(result)) {
+      return jsonResponse(
+        toJsonErrorPayload(result.error, "Image edit provider error"),
+        result.status || HTTP_STATUS.BAD_REQUEST
+      );
+    }
+    // Same shape as the chatgpt-web branch above: the recovered-state reset takes
+    // the credentials it was resolved from, not the provider id.
+    await clearRecoveredProviderState(credentials);
+    return jsonResponse(result.data);
+  }
+
+  // Remaining built-ins expose no edit path at all.
   if (providerConfig) {
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,

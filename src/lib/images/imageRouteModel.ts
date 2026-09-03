@@ -97,13 +97,26 @@ export async function resolveImageRouteModel(modelStr: string): Promise<string> 
   return resolveImageModelPrefix(modelStr);
 }
 
+export interface ParsedImageEditImage {
+  bytes: Buffer;
+  mime: string;
+}
+
 interface ParsedImageEditInput {
   prompt: string;
   model: string | null;
   size: string | null;
   responseFormat: string | null;
+  /** First image — the only one chatgpt-web and the OpenAI-compatible forward can use. */
   imageBytes: Buffer | null;
   imageMime: string | null;
+  /**
+   * EVERY image the client sent. Kept alongside the single-image fields because
+   * dropping the extras is correct for chatgpt-web (one image per conversation
+   * node) but wrong for Gemini, which accepts several reference images in one
+   * generateContent call — verified live with two.
+   */
+  images: ParsedImageEditImage[];
 }
 
 /** Parse a `data:<mime>;base64,<data>` URL into raw bytes + mime, or null when invalid. */
@@ -142,9 +155,9 @@ export function extractImageEditInputFromJson(body: unknown): ParsedImageEditInp
 
   const candidates: unknown[] = [];
   if (obj.image !== undefined) candidates.push(obj.image);
-  const images = obj.images;
-  if (Array.isArray(images)) {
-    for (const entry of images) {
+  const rawImages = obj.images;
+  if (Array.isArray(rawImages)) {
+    for (const entry of rawImages) {
       if (typeof entry === "string") candidates.push(entry);
       else if (entry && typeof entry === "object") {
         const e = entry as Record<string, unknown>;
@@ -153,16 +166,20 @@ export function extractImageEditInputFromJson(body: unknown): ParsedImageEditInp
     }
   }
 
-  let imageBytes: Buffer | null = null;
-  let imageMime: string | null = null;
+  const images: ParsedImageEditImage[] = [];
   for (const candidate of candidates) {
     const parsed = parseDataUrl(candidate);
-    if (parsed) {
-      imageBytes = parsed.bytes;
-      imageMime = parsed.mime;
-      break;
-    }
+    if (parsed) images.push({ bytes: parsed.bytes, mime: parsed.mime });
   }
 
-  return { prompt, model, size, responseFormat, imageBytes, imageMime };
+  const first = images[0] ?? null;
+  return {
+    prompt,
+    model,
+    size,
+    responseFormat,
+    imageBytes: first ? first.bytes : null,
+    imageMime: first ? first.mime : null,
+    images,
+  };
 }

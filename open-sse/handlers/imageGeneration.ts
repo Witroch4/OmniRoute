@@ -41,7 +41,11 @@ import {
   extractComfyOutputFiles,
 } from "../utils/comfyuiClient.ts";
 import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
-import { FetchTimeoutError, fetchWithTimeout, getConfiguredTimeout } from "@/shared/utils/fetchTimeout";
+import {
+  FetchTimeoutError,
+  fetchWithTimeout,
+  getConfiguredTimeout,
+} from "@/shared/utils/fetchTimeout";
 import { sanitizeErrorMessage, sanitizeUpstreamDetails } from "../utils/error.ts";
 
 // --- Per-provider handlers (extracted to co-located files in PR-#4582-batch) ---
@@ -62,7 +66,6 @@ import {
   CHATGPT_WEB_IMAGE_ID_RE,
 } from "./imageGeneration/providers/chatgptWeb.ts";
 import { handleNvidiaNimImageGeneration } from "./imageGeneration/providers/nvidiaNim.ts";
-
 
 interface KieImageOptions {
   model: string;
@@ -128,9 +131,7 @@ const IMAGE_ASPECT_RATIO_PATTERN = /^\d+:\d+$/;
  */
 export function resolveImageBaseUrl(
   credentials:
-    | { baseUrl?: unknown; providerSpecificData?: { baseUrl?: unknown } | null }
-    | null
-    | undefined,
+    { baseUrl?: unknown; providerSpecificData?: { baseUrl?: unknown } | null } | null | undefined,
   fallback: string,
   endpoint: "generations" | "edits" = "generations"
 ): string {
@@ -738,7 +739,15 @@ async function handleKieImageGeneration({
  * Handle Gemini-format image generation (Antigravity / Nano Banana)
  * Uses Gemini's generateContent API with responseModalities: ["TEXT", "IMAGE"]
  */
-async function handleGeminiImageGeneration({ model, providerConfig, body, credentials, log }) {
+async function handleGeminiImageGeneration({
+  model,
+  providerConfig,
+  body,
+  credentials,
+  log,
+  referenceImages = [],
+  logPath = "/v1/images/generations",
+}) {
   const startTime = Date.now();
   const url = providerConfig.baseUrl;
   const provider = "antigravity";
@@ -764,6 +773,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
     prompt: promptText.slice(0, 200),
     size: body.size || "default",
     n: candidateCount,
+    ...(referenceImages.length > 0 ? { reference_images: referenceImages.length } : {}),
   };
 
   if (!projectId || typeof projectId !== "string") {
@@ -778,6 +788,13 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
     });
   }
 
+  // Reference images first, instruction last: Gemini treats the trailing text as
+  // the directive acting on the preceding context. Reversed, the model tends to
+  // describe the images instead of generating from them.
+  const referenceParts = referenceImages.map((image) => ({
+    inlineData: { mimeType: image.mimeType || "image/png", data: image.data },
+  }));
+
   const antigravityBody = {
     project: projectId,
     requestId: `image_gen/${Date.now()}/${randomUUID()}/0`,
@@ -785,7 +802,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
       contents: [
         {
           role: "user",
-          parts: [{ text: promptText }],
+          parts: [...referenceParts, { text: promptText }],
         },
       ],
       generationConfig: {
@@ -833,7 +850,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
 
       saveCallLog({
         method: "POST",
-        path: "/v1/images/generations",
+        path: logPath,
         status: response.status,
         model: `antigravity/${model}`,
         provider,
@@ -865,7 +882,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
 
     saveCallLog({
       method: "POST",
-      path: "/v1/images/generations",
+      path: logPath,
       status: 200,
       model: `antigravity/${model}`,
       provider,
@@ -889,7 +906,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
 
     saveCallLog({
       method: "POST",
-      path: "/v1/images/generations",
+      path: logPath,
       status: 502,
       model: `antigravity/${model}`,
       provider,
@@ -1107,7 +1124,10 @@ export async function handleOpenAIImageEdit({
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   if (log) {
-    log.info("IMAGE", `${provider}/${model} (edit) | prompt: "${prompt.slice(0, 60)}..." -> ${url}`);
+    log.info(
+      "IMAGE",
+      `${provider}/${model} (edit) | prompt: "${prompt.slice(0, 60)}..." -> ${url}`
+    );
   }
 
   const result = await fetchImageEndpoint(
@@ -1136,6 +1156,99 @@ export async function handleOpenAIImageEdit({
   }).catch(() => {});
 
   return result;
+}
+
+/**
+ * Image edit served by a BUILT-IN provider whose generation path accepts
+ * reference images (`supportsImageEdit` in the image registry).
+ *
+ * Before this existed, `/v1/images/edits` rejected every built-in provider with
+ * "Image edit is not supported for built-in provider", so image-to-image was
+ * reachable only through chatgpt-web (and only for images OmniRoute itself had
+ * generated) or a custom OpenAI-compatible node. That is a real gap rather than
+ * a real limitation: Gemini's generateContent has always taken image parts, and
+ * the antigravity handler's own response parser already reads image parts back.
+ *
+ * The caller keeps the OpenAI edit contract; the difference from a generation is
+ * only that reference images ride along, so this delegates to the very same
+ * handler instead of forking a second code path that could drift.
+ */
+export type BuiltInImageEditFailure = { success: false; status: number; error: unknown };
+export type BuiltInImageEditSuccess = {
+  success: true;
+  data: { created: number; data: unknown[] };
+};
+export type BuiltInImageEditResult = BuiltInImageEditFailure | BuiltInImageEditSuccess;
+
+/**
+ * Explicit type guard rather than relying on discriminant narrowing at the call
+ * site: this module is largely untyped JavaScript, and `if (!result.success)`
+ * did NOT narrow the union for consumers (measured — `tsc` reported
+ * "Property 'error' does not exist on type 'BuiltInImageEditResult'"). A guard
+ * narrows unconditionally and keeps the route free of casts.
+ */
+export function isBuiltInImageEditFailure(
+  result: BuiltInImageEditResult
+): result is BuiltInImageEditFailure {
+  return result.success === false;
+}
+
+export async function handleBuiltInImageEdit({
+  provider,
+  model,
+  providerConfig,
+  body,
+  referenceImages,
+  credentials,
+  log,
+}): Promise<BuiltInImageEditResult> {
+  // `saveImageErrorResult` and `handleGeminiImageGeneration` predate typing in
+  // this module and infer `success: boolean`, which TypeScript cannot narrow.
+  // Asserting the discriminated shape ONCE here is what lets every consumer —
+  // the route and the tests — read `.status`/`.error`/`.data` without a cast of
+  // its own; the alternative is `as any` at five separate call sites.
+  const asResult = (value: unknown) => value as BuiltInImageEditResult;
+
+  if (!providerConfig?.supportsImageEdit) {
+    return asResult(
+      saveImageErrorResult({
+        provider,
+        model,
+        status: 400,
+        startTime: Date.now(),
+        error:
+          `Image edit is not supported for built-in provider "${provider}". ` +
+          `Use chatgpt-web or a custom OpenAI-compatible image provider.`,
+      })
+    );
+  }
+
+  if (providerConfig.format === "gemini-image") {
+    return asResult(
+      await handleGeminiImageGeneration({
+        model,
+        providerConfig,
+        body,
+        credentials,
+        log,
+        referenceImages,
+        logPath: "/v1/images/edits",
+      })
+    );
+  }
+
+  // A provider flagged supportsImageEdit whose format has no edit path here is a
+  // registry mistake, not a client error — fail loudly rather than silently
+  // dropping the references and returning an unrelated image.
+  return asResult(
+    saveImageErrorResult({
+      provider,
+      model,
+      status: 500,
+      startTime: Date.now(),
+      error: `Image edit is declared for "${provider}" but format "${providerConfig.format}" has no edit path.`,
+    })
+  );
 }
 
 export async function handleImageEdit({
@@ -2425,7 +2538,14 @@ export function saveImageSuccessResult({
   };
 }
 
-export function saveImageErrorResult({ provider, model, status, startTime, error, requestBody = null }) {
+export function saveImageErrorResult({
+  provider,
+  model,
+  status,
+  startTime,
+  error,
+  requestBody = null,
+}) {
   saveCallLog({
     method: "POST",
     path: "/v1/images/generations",
