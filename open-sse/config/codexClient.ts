@@ -10,7 +10,15 @@
 // root-caused the gpt-5.6-luna/terra/sol 400s). Production had been running
 // the fixed value via the CODEX_CLIENT_VERSION env override since then; this
 // makes the image itself carry it, so the override is no longer load-bearing.
-const DEFAULT_CODEX_CLIENT_VERSION = "0.151.0";
+// 2026-09-03: 0.151.0 -> 0.153.0 (current npm release), bumped alongside the
+// claude-cli pin so the two impersonated CLIs do not drift apart again.
+// ⚠️ UNVERIFIED against the live upstream: every Codex model was returning 429
+// from the quota preflight (reset ~89h) when this shipped, so no call reaches
+// OpenAI to confirm the new version is accepted. Nothing was BLOCKED by the old
+// value either — this is hygiene, not a fix. If Codex starts 400ing after quota
+// returns, set CODEX_CLIENT_VERSION=0.151.0 and restart; that is what the
+// override is for.
+const DEFAULT_CODEX_CLIENT_VERSION = "0.153.0";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";

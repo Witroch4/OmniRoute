@@ -49,7 +49,7 @@ test("getClientIdentityProfileHeaders: known CLI profiles expose their preset he
   assert.equal(claudeCli["X-App"], "cli");
 
   const codexCli = getClientIdentityProfileHeaders("codex-cli");
-  assert.equal(codexCli["User-Agent"], "codex_cli_rs/0.151.0");
+  assert.equal(codexCli["User-Agent"], "codex_cli_rs/0.153.0");
   assert.equal(codexCli.originator, "codex_cli_rs");
 
   const geminiCli = getClientIdentityProfileHeaders("gemini-cli");
@@ -86,7 +86,7 @@ test("a selected profile's headers land in providerSpecificData.customHeaders", 
     customHeaders: { ...profileHeaders, "X-Operator-Set": "keep-me" },
   };
 
-  assert.equal(providerSpecificData.customHeaders["User-Agent"], "codex_cli_rs/0.151.0");
+  assert.equal(providerSpecificData.customHeaders["User-Agent"], "codex_cli_rs/0.153.0");
   assert.equal(providerSpecificData.customHeaders.originator, "codex_cli_rs");
   assert.equal(providerSpecificData.customHeaders["X-Operator-Set"], "keep-me");
 });
