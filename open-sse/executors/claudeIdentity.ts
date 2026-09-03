@@ -8,11 +8,12 @@
  * release is captured.
  */
 
+import { getClaudeCodeClientVersion } from "../config/claudeClientVersion.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 // ---------- Versions ------------------------------------------------------
 
-export const CLAUDE_CODE_VERSION = "2.1.207";
+export const CLAUDE_CODE_VERSION = getClaudeCodeClientVersion();
 /** Bundled @anthropic-ai/sdk version for the pinned CLI release. */
 export const CLAUDE_CODE_STAINLESS_VERSION = "0.94.0";
 

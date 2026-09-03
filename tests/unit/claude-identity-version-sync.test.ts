@@ -10,6 +10,7 @@ const ccBridge = await import("../../open-sse/services/ccBridgeTransforms.ts");
 const claudeCompat = await import("../../open-sse/services/claudeCodeCompatible.ts");
 const anthropicHeaders = await import("../../open-sse/config/anthropicHeaders.ts");
 const glmProvider = await import("../../open-sse/config/glmProvider.ts");
+const identityProfiles = await import("../../src/shared/constants/clientIdentityProfiles.ts");
 
 const CANONICAL = claudeIdentity.CLAUDE_CODE_VERSION;
 
@@ -52,5 +53,16 @@ test("all claude-cli User-Agent strings embed the canonical version", () => {
     versionFromUserAgent(glmProvider.GLM_CLAUDE_CODE_USER_AGENT),
     CANONICAL,
     "glmProvider.GLM_CLAUDE_CODE_USER_AGENT embeds a stale version"
+  );
+  // The dashboard's "Claude CLI" identity preset advertises the same fingerprint
+  // to compatible-provider nodes. It was NOT covered here before 2026-09-03 and
+  // consequently sat on 2.1.207 — a version Anthropic rejects for Fable 5.1 —
+  // while every other surface could be bumped past it.
+  assert.equal(
+    versionFromUserAgent(
+      identityProfiles.CLIENT_IDENTITY_PROFILES["claude-cli"].headers["User-Agent"]
+    ),
+    CANONICAL,
+    "clientIdentityProfiles claude-cli preset embeds a stale version"
   );
 });

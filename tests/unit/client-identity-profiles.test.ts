@@ -1,8 +1,14 @@
 import test from "node:test";
+// The version itself is pinned by tests/unit/claude-codex-identity-version-sync.test.ts;
+// here we only assert the preset carries the SAME value the Claude path advertises,
+// so a bump can never leave this mimicry preset behind on a version upstream rejects.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getClaudeCodeClientVersion } from "../../open-sse/config/claudeClientVersion.ts";
+
+const CANONICAL_CLAUDE_VERSION = getClaudeCodeClientVersion();
 
 // DefaultExecutor transitively touches the DB layer (provider/key rotation
 // lookups) at import/call time. Point DATA_DIR at an isolated temp dir
@@ -39,7 +45,7 @@ test("getClientIdentityProfileHeaders: unknown profile id falls back to no heade
 
 test("getClientIdentityProfileHeaders: known CLI profiles expose their preset headers", () => {
   const claudeCli = getClientIdentityProfileHeaders("claude-cli");
-  assert.equal(claudeCli["User-Agent"], "claude-cli/2.1.207 (external, cli)");
+  assert.equal(claudeCli["User-Agent"], `claude-cli/${CANONICAL_CLAUDE_VERSION} (external, cli)`);
   assert.equal(claudeCli["X-App"], "cli");
 
   const codexCli = getClientIdentityProfileHeaders("codex-cli");
@@ -55,7 +61,7 @@ test("getClientIdentityProfileHeaders: returns a fresh mutable copy (catalog sta
   headers["User-Agent"] = "tampered";
   assert.equal(
     CLIENT_IDENTITY_PROFILES["claude-cli"].headers["User-Agent"],
-    "claude-cli/2.1.207 (external, cli)"
+    `claude-cli/${CANONICAL_CLAUDE_VERSION} (external, cli)`
   );
 });
 
@@ -100,7 +106,7 @@ test("profile headers merged into customHeaders survive applyCustomHeaders sanit
     true
   ) as Record<string, string>;
 
-  assert.equal(headers["User-Agent"], "claude-cli/2.1.207 (external, cli)");
+  assert.equal(headers["User-Agent"], `claude-cli/${CANONICAL_CLAUDE_VERSION} (external, cli)`);
   assert.equal(headers["X-App"], "cli");
   assert.equal(headers["Authorization"], "Bearer test-key");
 });

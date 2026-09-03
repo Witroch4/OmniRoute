@@ -42,8 +42,9 @@ export {
   CLAUDE_CODE_COMPATIBLE_REDACT_THINKING_BETA,
   resolveClaudeCodeCompatibleAnthropicBeta,
 } from "./claudeCodeCompatibleBeta.ts";
-export const CLAUDE_CODE_COMPATIBLE_VERSION = "2.1.207";
-export const CLAUDE_CODE_COMPATIBLE_USER_AGENT = "claude-cli/2.1.207 (external, sdk-cli)";
+import { getClaudeCodeClientVersion } from "../config/claudeClientVersion.ts";
+export const CLAUDE_CODE_COMPATIBLE_VERSION = getClaudeCodeClientVersion();
+export const CLAUDE_CODE_COMPATIBLE_USER_AGENT = `claude-cli/${CLAUDE_CODE_COMPATIBLE_VERSION} (external, sdk-cli)`;
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_PACKAGE_VERSION = "0.94.0";
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION = "v24.3.0";
 export const CONTEXT_1M_BETA_HEADER = "context-1m-2025-08-07";

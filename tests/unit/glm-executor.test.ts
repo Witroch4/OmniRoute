@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { getExecutor } from "../../open-sse/executors/index.ts";
 import { GlmExecutor } from "../../open-sse/executors/glm.ts";
+import { getClaudeCodeClientVersion } from "../../open-sse/config/claudeClientVersion.ts";
 
 function makeSseResponse(lines: string[]): Response {
   return new Response(lines.join("\n\n") + "\n\n", {
@@ -181,7 +182,12 @@ test("GlmExecutor separates OpenAI-compatible coding headers from Anthropic head
   assert.equal(anthropicHeaders["anthropic-version"], "2023-06-01");
   assert.match(anthropicHeaders["anthropic-beta"], /claude-code-20250219/);
   assert.equal(anthropicHeaders["anthropic-dangerous-direct-browser-access"], "true");
-  assert.match(anthropicHeaders["User-Agent"], /^claude-cli\/2\.1\.207 \(external, sdk-cli\)$/);
+  // Derived, not literal: this assertion escaped its dots, so a repo-wide grep for
+  // "2.1.207" during the 2026-09-03 bump did not surface it and the suite went red.
+  assert.equal(
+    anthropicHeaders["User-Agent"],
+    `claude-cli/${getClaudeCodeClientVersion()} (external, sdk-cli)`
+  );
   assert.equal(anthropicHeaders["X-Stainless-Lang"], "js");
   assert.equal(anthropicHeaders["X-Stainless-Runtime"], "node");
 });

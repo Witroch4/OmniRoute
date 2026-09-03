@@ -14,6 +14,7 @@
  * header) tries to set — no new precedence logic is needed here.
  */
 
+import { getClaudeCodeClientVersion } from "@omniroute/open-sse/config/claudeClientVersion.ts";
 export interface ClientIdentityProfile {
   readonly id: string;
   readonly label: string;
@@ -30,7 +31,7 @@ const CLAUDE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "claude-cli",
   label: "Claude CLI",
   headers: Object.freeze({
-    "User-Agent": "claude-cli/2.1.207 (external, cli)",
+    "User-Agent": `claude-cli/${getClaudeCodeClientVersion()} (external, cli)`,
     "X-App": "cli",
   }),
 });
