@@ -33,6 +33,19 @@ export const GITHUB_COPILOT_MODEL_ALLOWLIST = [
   "gemini-3.1-pro-preview",
   "gemini-3.5-flash",
   "gpt-5.5",
+  // Ported into the gh registry on 2026-09-01 from the operator's Copilot
+  // picker. This account's /models response does not advertise them (they are
+  // reachable as custom models), but the allowlist gates BOTH live discovery
+  // and the static-catalog fallback, so leaving them out made the fallback
+  // drop models the gh registry publishes. The invariant is: this list and the
+  // gh registry are the same set (tests/unit/provider-models-config.test.ts).
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "grok-4.6",
+  "grok-4.5",
+  "mai-code-1.1-flash",
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.3-codex",
