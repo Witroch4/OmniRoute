@@ -24,6 +24,11 @@
 // which matters because this string is on the hot path of ALL Claude OAuth
 // traffic — if a bump is rejected upstream, `CLAUDE_CODE_VERSION=<old>` plus a
 // restart is the rollback, instead of an hour-long ARM image build.
+// NOT a duplicate of the generic `<PROVIDER>_USER_AGENT` override in
+// `executors/base.ts`: that one swaps the User-Agent HEADER for a provider and
+// therefore cannot touch the `cc_version=` billing header, so using it alone to
+// move the version produces exactly the split fingerprint the identity lockstep
+// guard exists to prevent. This knob is version-level and feeds every surface.
 const DEFAULT_CLAUDE_CODE_VERSION = "2.1.259";
 const CLAUDE_CODE_VERSION_OVERRIDE_ENV = "CLAUDE_CODE_VERSION";
 
