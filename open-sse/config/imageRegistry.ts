@@ -6,6 +6,7 @@
  */
 
 import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
+import { getRegistryEntry } from "./providerRegistry.ts";
 
 interface ImageModelEntry {
   id: string;
@@ -258,6 +259,21 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
 
   antigravity: {
     id: "antigravity",
+    // `agy` and `antigravity` are two catalog identities for the SAME upstream:
+    // they share the executor, the translator and the credential; `agy` merely
+    // ships its own chat catalog (pinned from :fetchAvailableModels) so it can
+    // expose models the static `antigravity` list omits. This endpoint has its
+    // own registry, which only ever knew the `antigravity` name — so a request
+    // for `agy/gemini-3.1-flash-image` was rejected with `Invalid image model`
+    // even though the very same model answers on `antigravity/`.
+    //
+    // That is a contract break, not a missing capability: `/v1/models` (the chat
+    // catalog) advertises the model as `agy/...`, and anything mirroring that
+    // list — the platform's LiteLLM seed included — asks for exactly the id we
+    // published and gets a 400. Aliasing here fixes every such consumer at once;
+    // duplicating the model under an `agy` provider entry would fix it for one
+    // and leave the two lists free to drift apart on the next model.
+    alias: "agy",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
     authType: "oauth",
     authHeader: "bearer",
@@ -659,6 +675,18 @@ export function getImageProvider(providerId) {
 }
 
 /**
+ * Every prefix a given image provider answers to: its own id is handled by the
+ * caller; this returns the aliases, from this registry and from the chat one.
+ */
+function providerAliases(providerId: string, config: ImageProviderConfig): string[] {
+  const names = new Set<string>();
+  if (config.alias) names.add(config.alias);
+  const chatAlias = getRegistryEntry(providerId)?.alias;
+  if (chatAlias && chatAlias !== providerId) names.add(chatAlias);
+  return Array.from(names);
+}
+
+/**
  * Parse image model string (format: "provider/model")
  * Returns { provider, model }
  */
@@ -678,9 +706,25 @@ export function parseImageModel(modelStr) {
         resolveImageModelAlias(`${providerId}/${model}`) || resolveImageModelAlias(model);
       return aliased || { provider: providerId, model };
     }
-    // Check alias if available
-    if (config.alias && modelStr.startsWith(config.alias + "/")) {
-      const model = modelStr.slice(config.alias.length + 1);
+    // Accept every name this provider is published under — its own alias AND the
+    // one declared in the CHAT registry.
+    //
+    // The two registries are separate on purpose (image providers like
+    // black-forest-labs have no chat side), but when a provider lives in both,
+    // its aliases must agree. They kept drifting: `/v1/models` advertises the
+    // Antigravity image model as `agy/gemini-3.1-flash-image` while this registry
+    // only knew `antigravity`, so anything mirroring our own catalog — the
+    // platform's LiteLLM seed included — asked for the id we published and got
+    // `400 Invalid image model`, even though the model answers fine under the
+    // other name. A sweep found the same drift on hyp/hp/leo/ideo/hf.
+    //
+    // Reading the chat alias here instead of copying it fixes those at once and
+    // keeps the next provider from drifting: the alias is declared ONCE, in the
+    // chat registry, and both endpoints honour it. `tests/unit/
+    // image-endpoint-accepts-chat-catalog-ids` fails if that ever stops holding.
+    for (const alias of providerAliases(providerId, config)) {
+      if (!modelStr.startsWith(alias + "/")) continue;
+      const model = modelStr.slice(alias.length + 1);
       const aliased =
         resolveImageModelAlias(`${providerId}/${model}`) || resolveImageModelAlias(model);
       return aliased || { provider: providerId, model };
