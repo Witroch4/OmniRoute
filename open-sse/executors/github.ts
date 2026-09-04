@@ -75,6 +75,31 @@ export class GithubExecutor extends BaseExecutor {
     return this.config.baseUrl;
   }
 
+  // GitHub Copilot serves several model families, and only SOME of them honor the
+  // OpenAI-shape `response_format`. Measured against this account's own
+  // `GET https://api.githubcopilot.com/models` on 2026-09-03 (56 models), the
+  // provider itself reports `capabilities.supports.structured_outputs`:
+  //   true  -> every claude-*, gpt-*, grok-*, kimi-* and mai-code-* entry
+  //   ABSENT -> gemini-3.5-flash, gemini-3.6-flash, gemini-3.7-flash, gemini-3.8-flash
+  // The Gemini entries do NOT reject the field — they answer HTTP 200 and silently
+  // ignore it, returning prose. That silent success is the whole problem: a caller
+  // asking for json_schema gets markdown with no error to key off, and every layer
+  // downstream (our own catalog included) keeps advertising the model as capable.
+  // Verified live through the proxy: `gh/gemini-3.7-flash` + json_schema returned
+  // "Aqui esta uma opcao perfeita para redes...", while the SAME model with the
+  // schema stated in a system message returned a conforming
+  // {"headline":...,"cta":...} object. So the model can do it; only the native
+  // parameter is missing. Claude is kept on the prompt-injection path it has used
+  // since the executor was written, even though Copilot now advertises native
+  // support for it — flipping that is a separate, testable change.
+  // Same family split as supportsResponsesEndpoint() above, for the same reason:
+  // on Copilot, gemini/claude are the non-OpenAI guests.
+  supportsNativeResponseFormat(model: string | null | undefined): boolean {
+    const m = (model || "").toLowerCase();
+    if (!m) return true;
+    return !(m.includes("gemini") || m.includes("claude"));
+  }
+
   injectResponseFormat(messages: Array<Record<string, any>>, responseFormat: any) {
     if (!responseFormat) return messages;
 
@@ -126,7 +151,7 @@ export class GithubExecutor extends BaseExecutor {
       });
     }
 
-    if (modifiedBody.response_format && model.toLowerCase().includes("claude")) {
+    if (modifiedBody.response_format && !this.supportsNativeResponseFormat(model)) {
       modifiedBody.messages = this.injectResponseFormat(
         Array.isArray(modifiedBody.messages) ? modifiedBody.messages : [],
         modifiedBody.response_format
