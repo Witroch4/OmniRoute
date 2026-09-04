@@ -896,17 +896,38 @@ export class BaseExecutor {
             // adaptive injection. Passthrough/no-config keeps the native Claude Code
             // behavior (adaptive) so #4633 does not regress (request-side only).
             const tbMode = getThinkingBudgetConfig().mode;
+            // `output_config` carries TWO unrelated things: `effort` (reasoning
+            // control, what the branches below mean to strip — both comments say
+            // "effort") and `format` (Structured Outputs, set by the translator
+            // from the caller's response_format). Deleting the object wholesale
+            // would silently drop the caller's JSON schema and hand back prose,
+            // with nothing in the response to show a schema was ever requested.
+            const dropEffortKeepFormat = () => {
+              const oc = tb.output_config;
+              if (oc && typeof oc === "object" && (oc as JsonRecord).format !== undefined) {
+                tb.output_config = { format: (oc as JsonRecord).format };
+              } else {
+                delete tb.output_config;
+              }
+            };
+            // Likewise, "the client expressed no thinking preference" must be read
+            // off `effort`, not off the object — a request that only carries a
+            // schema still has no opinion about thinking.
+            const effortUnset =
+              !tb.output_config ||
+              typeof tb.output_config !== "object" ||
+              (tb.output_config as JsonRecord).effort === undefined;
             if (isHaiku) {
               // Keep tb.thinking — real Claude Desktop keeps thinking enabled for Haiku
               // (issue #2454). Only strip output_config (effort) which Haiku rejects;
               // context_management is re-paired with the preserved thinking below.
-              delete tb.output_config;
+              dropEffortKeepFormat();
               delete tb.context_management;
             } else if (tbMode === ThinkingMode.AUTO) {
               delete tb.thinking;
               delete tb.context_management;
-              delete tb.output_config;
-            } else if (tb.thinking === undefined && tb.output_config === undefined) {
+              dropEffortKeepFormat();
+            } else if (tb.thinking === undefined && effortUnset) {
               tb.thinking = { type: "adaptive" };
               tb.context_management = {
                 edits: [{ type: "clear_thinking_20251015", keep: "all" }],

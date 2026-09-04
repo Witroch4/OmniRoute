@@ -9,6 +9,7 @@ import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingS
 import { isAdaptiveThinkingOnly } from "../../../src/shared/constants/modelSpecs.ts";
 import { fitThinkingToMaxTokens } from "./openai-to-claude/thinkingBudget.ts";
 import { enforceToolResultAdjacency } from "./openai-to-claude/toolResultAdjacency.ts";
+import { toAnthropicOutputFormatSchema } from "./anthropicOutputFormat.ts";
 
 // Reasoning-effort levels Anthropic accepts on `output_config.effort`. Used to steer
 // adaptive-only Claude models (Opus 4.7+/Fable 5) without ever emitting a manual budget.
@@ -422,17 +423,38 @@ export function openaiToClaudeRequest(model, body, stream) {
     result.tool_choice = convertOpenAIToolChoice(body.tool_choice);
   }
 
-  // response_format: inject JSON structured output instruction into system prompt.
-  // Claude doesn't natively support response_format, so we insert a system-level instruction.
+  // response_format → Anthropic Structured Outputs when the schema allows it,
+  // prompt injection only as the fallback.
+  //
+  // This block used to inject unconditionally, on the premise that "Claude
+  // doesn't natively support response_format". Anthropic does not use OpenAI's
+  // field NAME, but it does have the capability: `output_config.format` drives
+  // constrained decoding, and it was verified live (with/without control, and
+  // under streaming) before this was changed. Native gives a hard guarantee;
+  // the prompt only ever gave a strong suggestion — which is exactly how a
+  // markdown-fenced answer slips through.
+  //
+  // toAnthropicOutputFormatSchema() returns null for the one construct the
+  // upstream refuses and we cannot normalize away (numeric bounds), and those
+  // requests keep the old behaviour rather than starting to 400.
   // NOTE: systemParts are consumed later (after this block) — they're accumulated here.
   if (body.response_format) {
     const fmt = body.response_format;
     if (fmt.type === "json_schema" && fmt.json_schema?.schema) {
-      const schemaJson = JSON.stringify(fmt.json_schema.schema, null, 2);
-      systemParts.push(
-        `You must respond with valid JSON that strictly follows this JSON schema:\n\`\`\`json\n${schemaJson}\n\`\`\`\nRespond ONLY with the JSON object, no other text.`
-      );
+      const nativeSchema = toAnthropicOutputFormatSchema(fmt.json_schema.schema);
+      if (nativeSchema) {
+        result.output_config = {
+          ...(result.output_config || {}),
+          format: { type: "json_schema", schema: nativeSchema },
+        };
+      } else {
+        const schemaJson = JSON.stringify(fmt.json_schema.schema, null, 2);
+        systemParts.push(
+          `You must respond with valid JSON that strictly follows this JSON schema:\n\`\`\`json\n${schemaJson}\n\`\`\`\nRespond ONLY with the JSON object, no other text.`
+        );
+      }
     } else if (fmt.type === "json_object") {
+      // No schema to constrain with — the prompt is the only lever here.
       systemParts.push(
         "You must respond with valid JSON. Respond ONLY with a JSON object, no other text."
       );

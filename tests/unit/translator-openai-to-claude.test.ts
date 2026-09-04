@@ -278,9 +278,7 @@ test("OpenAI -> Claude does not leave tool results separated from their tool use
     (message) =>
       message.role === "user" &&
       message.content.some(
-        (block) =>
-          block.type === "text" &&
-          block.text === "Please wait before using that result."
+        (block) => block.type === "text" && block.text === "Please wait before using that result."
       )
   );
   assert.ok(
@@ -289,7 +287,7 @@ test("OpenAI -> Claude does not leave tool results separated from their tool use
   );
 });
 
-test("OpenAI -> Claude maps tool_choice and injects response_format instructions into system", () => {
+test("OpenAI -> Claude maps tool_choice and routes response_format to native Structured Outputs", () => {
   const schemaResult = openaiToClaudeRequest(
     "claude-4-sonnet",
     {
@@ -310,8 +308,25 @@ test("OpenAI -> Claude maps tool_choice and injects response_format instructions
   );
 
   assert.deepEqual(schemaResult.tool_choice, { type: "any" });
-  assert.match(schemaResult.system[0].text, /strictly follows this JSON schema/i);
-  assert.match(schemaResult.system[0].text, /"answer"/);
+  // Used to assert the schema was injected into the system prompt. Since the
+  // translator learned Anthropic's `output_config.format`, a schema this shape
+  // is enforced by constrained decoding instead — verified live before the
+  // change (same request with/without the field: JSON vs markdown). The
+  // normalizer supplies the `additionalProperties: false` the upstream demands.
+  assert.deepEqual(schemaResult.output_config?.format, {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    },
+  });
+  assert.equal(
+    schemaResult.system,
+    undefined,
+    "nothing left to inject once the schema is enforced natively"
+  );
 
   const jsonObjectResult = openaiToClaudeRequest(
     "claude-4-sonnet",
