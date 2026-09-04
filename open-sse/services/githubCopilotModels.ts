@@ -39,6 +39,7 @@ export const GITHUB_COPILOT_MODEL_ALLOWLIST = [
   // and the static-catalog fallback, so leaving them out made the fallback
   // drop models the gh registry publishes. The invariant is: this list and the
   // gh registry are the same set (tests/unit/provider-models-config.test.ts).
+  "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gpt-5.6-terra",
@@ -53,6 +54,7 @@ export const GITHUB_COPILOT_MODEL_ALLOWLIST = [
   "gpt-4o-2024-11-20",
   "gpt-4o-mini",
   "gpt-4-0125-preview",
+  "kimi-k3",
   "kimi-k2.7-code",
   "mai-code-1-flash",
   "oswe-vscode-prime",

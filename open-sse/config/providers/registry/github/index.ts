@@ -96,9 +96,25 @@ export const githubProvider: RegistryEntry = {
     },
     { id: "gpt-5.5", name: "GPT-5.5", ...GPT_5_5_CODEX_CAPABILITIES, maxOutputTokens: 128000 },
     // Ported from upstream: models this GitHub Copilot account serves but the
-    // fork's registry never listed. Kept to the account's own picker — models
-    // it does not offer (claude-opus-5/4.6, gpt-5.4-nano, mai-code-1-flash-picker)
-    // and gpt-5.6-sol (shown as Upgrade, i.e. no entitlement) stay out.
+    // fork's registry never listed. Kept to the account's own picker.
+    //
+    // 2026-09-03: the account's own GET /models is the machine-readable arbiter
+    // here — each entry carries `policy.state` and `model_picker_enabled`, and
+    // `capabilities.limits` gives the real ceilings (which is where the numbers
+    // below come from; do not copy them from a sibling model). Measured on that
+    // response, claude-opus-5, claude-fable-5.1 and gpt-5.6-sol are
+    // policy.state="disabled" / picker=false and answer
+    // `400 The requested model is not supported.` when called anyway — that 400
+    // is GitHub enforcing account policy, not something a registry entry can
+    // fix, so they stay out until enabled on the GitHub side. gemini-3.8-flash
+    // and kimi-k3 are policy.state="enabled" and both answered a real
+    // completion, so they come in.
+    {
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      contextLength: 265536,
+      maxOutputTokens: 65536,
+    },
     {
       id: "gemini-3.7-flash",
       name: "Gemini 3.7 Flash",
@@ -189,6 +205,12 @@ export const githubProvider: RegistryEntry = {
       name: "GPT 4 Turbo",
       contextLength: 128000,
       maxOutputTokens: 4096,
+    },
+    {
+      id: "kimi-k3",
+      name: "Kimi K3",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
     },
     {
       id: "kimi-k2.7-code",
