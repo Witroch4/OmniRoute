@@ -18,7 +18,17 @@
 // value either — this is hygiene, not a fix. If Codex starts 400ing after quota
 // returns, set CODEX_CLIENT_VERSION=0.151.0 and restart; that is what the
 // override is for.
-const DEFAULT_CODEX_CLIENT_VERSION = "0.153.0";
+// 2026-09-04: 0.153.0 -> 0.153.4 (current npm release; 0.154.0 is alpha-only),
+// bumped because GPT-6 Astra appeared in the picker and is version-gated. A
+// probe with production still declaring 0.151.0 returned the exact message this
+// comment warns about: "The 'gpt-6-astra' model requires a newer version of
+// Codex." That is now the SECOND model launch this string has blocked, so treat
+// "a new model 400s the moment it ships" as this value first, entitlement second.
+// ⚠️ Still unverified end-to-end: codex quota is exhausted until ~2026-09-26
+// (reset 511h), so no call reaches OpenAI. 0.153.4 may or may not be new enough
+// for a GPT-6-generation model — if it still 400s once quota returns, check npm
+// for a newer release rather than assuming the account lacks entitlement.
+const DEFAULT_CODEX_CLIENT_VERSION = "0.153.4";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";

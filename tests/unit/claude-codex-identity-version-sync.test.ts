@@ -51,8 +51,8 @@ test("Claude CLI is pinned to the current published 2.1.259 release", () => {
   assert.equal(id.CLAUDE_CODE_VERSION, pinned.PINNED_CLAUDE_CODE_VERSION);
 });
 
-test("Codex client is pinned to the current published 0.153.0 release", () => {
-  assert.equal(codexCfg.getCodexClientVersion(), "0.153.0");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.153.0 (Windows 10.0.26200; x64)");
-  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.153.0");
+test("Codex client is pinned to the current published 0.153.4 release", () => {
+  assert.equal(codexCfg.getCodexClientVersion(), "0.153.4");
+  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
+  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.153.4");
 });

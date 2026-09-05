@@ -6,6 +6,15 @@ import { getModelsByProviderId } from "../../open-sse/config/providerModels.ts";
 test("Codex catalog exposes the GPT-5.6 lineup in configured priority order", () => {
   const models = getModelsByProviderId("codex");
   const expectedIds = [
+    // GPT-6 Astra leads the list: it is what the Codex picker offers first,
+    // and the catalog order is the routing priority.
+    "gpt-6-astra",
+    "gpt-6-astra-ultra",
+    "gpt-6-astra-max",
+    "gpt-6-astra-xhigh",
+    "gpt-6-astra-high",
+    "gpt-6-astra-medium",
+    "gpt-6-astra-low",
     "gpt-5.6-sol",
     "gpt-5.6-sol-ultra",
     "gpt-5.6-sol-max",
