@@ -1237,6 +1237,21 @@ export async function handleBuiltInImageEdit({
     );
   }
 
+  if (providerConfig.format === "codex-responses") {
+    return asResult(
+      await handleCodexImageGeneration({
+        model,
+        provider,
+        providerConfig,
+        body,
+        credentials,
+        log,
+        referenceImages,
+        logPath: "/v1/images/edits",
+      })
+    );
+  }
+
   // A provider flagged supportsImageEdit whose format has no edit path here is a
   // registry mistake, not a client error — fail loudly rather than silently
   // dropping the references and returning an unrelated image.
@@ -2329,6 +2344,8 @@ async function handleCodexImageGeneration({
   body,
   credentials,
   log,
+  referenceImages = [],
+  logPath = "/v1/images/generations",
 }) {
   const startTime = Date.now();
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
@@ -2339,6 +2356,7 @@ async function handleCodexImageGeneration({
       status: 400,
       startTime,
       error: "Prompt is required for Codex image generation",
+      logPath,
     });
   }
 
@@ -2359,6 +2377,7 @@ async function handleCodexImageGeneration({
       status: 401,
       startTime,
       error: "Codex credentials missing accessToken — reconnect the Codex provider",
+      logPath,
     });
   }
 
@@ -2381,6 +2400,14 @@ async function handleCodexImageGeneration({
     toolConfig.quality = mapLegacyImageQualityToImageTool(body.quality.trim());
   }
 
+  // `input_image` is the shape the Responses translator already emits for this
+  // endpoint (translator/request/openai-responses/toResponses.ts), so references
+  // travel the path the chat route has always used.
+  const referenceParts = referenceImages.map((image) => ({
+    type: "input_image",
+    image_url: `data:${image.mimeType || "image/png"};base64,${image.data}`,
+  }));
+
   const upstreamBody: Record<string, unknown> = {
     model,
     instructions:
@@ -2388,12 +2415,28 @@ async function handleCodexImageGeneration({
     input: [
       {
         role: "user",
-        content: [{ type: "input_text", text: prompt }],
+        // References first, directive last — the same ordering the Gemini image
+        // path uses, and for the same reason: the trailing text is read as the
+        // instruction acting on the preceding context. Reversed, the model tends
+        // to describe the references instead of generating from them.
+        content: [...referenceParts, { type: "input_text", text: prompt }],
       },
     ],
     tools: [toolConfig],
     stream: true,
     store: false,
+  };
+
+  // The call log must never carry the reference base64. Artifacts are capped at
+  // MAX_CALL_LOG_ARTIFACT_BYTES (512 KB) and an oversized one has its WHOLE
+  // requestBody replaced by OMITTED_FOR_SIZE_LIMIT — so a single large reference
+  // would take the model, prompt, size and tool config down with it, blinding
+  // exactly the artifact a future investigation reads. Log the count instead,
+  // as the Gemini image path does.
+  const logRequestBody: Record<string, unknown> = {
+    ...upstreamBody,
+    input: [{ role: "user", content: [{ type: "input_text", text: prompt.slice(0, 200) }] }],
+    ...(referenceParts.length > 0 ? { reference_images: referenceParts.length } : {}),
   };
 
   const headers: Record<string, string> = {
@@ -2434,7 +2477,7 @@ async function handleCodexImageGeneration({
           status: 502,
           startTime,
           error: `Image provider error: ${(err as Error).message}`,
-          requestBody: upstreamBody,
+          requestBody: logRequestBody,
         },
       };
     }
@@ -2451,7 +2494,7 @@ async function handleCodexImageGeneration({
           status: response.status,
           startTime,
           error: errorText,
-          requestBody: upstreamBody,
+          requestBody: logRequestBody,
         },
       };
     }
@@ -2468,7 +2511,7 @@ async function handleCodexImageGeneration({
           startTime,
           error:
             "Codex completed without producing an image_generation_call — the model may have declined the tool",
-          requestBody: upstreamBody,
+          requestBody: logRequestBody,
         },
       };
     }
@@ -2482,7 +2525,7 @@ async function handleCodexImageGeneration({
 
   const collected: Array<{ b64_json: string; revised_prompt?: string }> = [];
   for (const imageResult of imageResults) {
-    if (!imageResult.ok) return saveImageErrorResult(imageResult.error);
+    if (!imageResult.ok) return saveImageErrorResult({ ...imageResult.error, logPath });
     for (const item of imageResult.items) {
       collected.push({
         b64_json: item.b64,
@@ -2503,9 +2546,10 @@ async function handleCodexImageGeneration({
     provider,
     model,
     startTime,
-    requestBody: upstreamBody,
+    requestBody: logRequestBody,
     responseBody: { images_count: data.length },
     images: data,
+    logPath,
   });
 }
 
@@ -2517,10 +2561,14 @@ export function saveImageSuccessResult({
   responseBody = null,
   created = null,
   images,
+  // An edit logged as a generation sends the next investigation to the wrong
+  // route; the antigravity edit path already threads this. Optional with the
+  // historical default, so every existing caller keeps the path it had.
+  logPath = "/v1/images/generations",
 }) {
   saveCallLog({
     method: "POST",
-    path: "/v1/images/generations",
+    path: logPath,
     status: 200,
     model: `${provider}/${model}`,
     provider,
@@ -2545,10 +2593,11 @@ export function saveImageErrorResult({
   startTime,
   error,
   requestBody = null,
+  logPath = "/v1/images/generations",
 }) {
   saveCallLog({
     method: "POST",
-    path: "/v1/images/generations",
+    path: logPath,
     status,
     model: `${provider}/${model}`,
     provider,

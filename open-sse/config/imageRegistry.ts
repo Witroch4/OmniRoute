@@ -161,6 +161,14 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     authType: "oauth",
     authHeader: "bearer",
     format: "codex-responses",
+    // The Responses input already carries `input_image` parts — the chat path
+    // through this same endpoint reads them (verified live: an 8x8 red PNG sent
+    // to cx/gpt-5.6-sol comes back described as red), and the hosted
+    // `image_generation` tool treats them as references, which is how the Codex
+    // CLI's own edit mode works. Passing them through costs nothing; until
+    // 2026-09-10 the handler simply never built them, so `/v1/images/edits`
+    // rejected the only route serving gpt-image-2 on this account.
+    supportsImageEdit: true,
     models: [
       { id: "gpt-5.6-sol", name: "GPT 5.6 Sol (Codex Image)" },
       { id: "gpt-5.6-terra", name: "GPT 5.6 Terra (Codex Image)" },
