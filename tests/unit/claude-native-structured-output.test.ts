@@ -121,10 +121,20 @@ test("normalizer preserves everything the upstream was measured to accept", () =
   assert.equal(out.title, "Post");
 });
 
-// The upstream answers 400 "For 'number' type, property 'minimum' is not
-// supported". Dropping the bound silently would change the caller's contract,
-// so the schema is declared incompatible and the prompt path keeps it intact.
-for (const keyword of ["minimum", "maximum", "exclusiveMinimum", "multipleOf"]) {
+// Measured 400s. Dropping a constraint silently would change the caller's
+// contract, so the schema is declared incompatible and the prompt path keeps
+// it intact. `maxItems` is the one production found first (OAB scout,
+// 2026-09-10: "For 'array' type, property 'maxItems' is not supported") —
+// the original denylist had never been probed with it.
+for (const keyword of [
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "multipleOf",
+  "maxItems",
+  "uniqueItems",
+  "maxProperties",
+]) {
   test(`normalizer rejects '${keyword}' rather than dropping it`, () => {
     const out = toAnthropicOutputFormatSchema({
       type: "object",
@@ -154,6 +164,81 @@ test("normalizer finds an unsupported keyword nested deep inside", () => {
     additionalProperties: false,
   });
   assert.equal(out, null);
+});
+
+test("normalizer rejects the array shape that broke the OAB scout (maxItems inside items)", () => {
+  const out = toAnthropicOutputFormatSchema({
+    type: "object",
+    properties: {
+      blocks: {
+        type: "array",
+        maxItems: 40,
+        items: {
+          type: "object",
+          properties: {
+            manuscriptLines: { type: "array", items: { type: "string" }, maxItems: 80 },
+          },
+          required: ["manuscriptLines"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["blocks"],
+    additionalProperties: false,
+  });
+  assert.equal(out, null);
+});
+
+test("normalizer rejects oneOf (upstream: \"Schema type 'oneOf' is not supported\")", () => {
+  const out = toAnthropicOutputFormatSchema({
+    type: "object",
+    properties: { a: { oneOf: [{ type: "string" }, { type: "integer" }] } },
+    required: ["a"],
+    additionalProperties: false,
+  });
+  assert.equal(out, null);
+});
+
+// The allowlist is the point: a keyword nobody has measured must fail CLOSED
+// (prompt path), never reach the upstream on a guess.
+test("normalizer fails closed on a keyword it has never measured", () => {
+  for (const schema of [
+    {
+      type: "object",
+      properties: { a: { type: "string", contentEncoding: "base64" } },
+      required: ["a"],
+    },
+    { type: "object", properties: { a: { not: { type: "null" } } }, required: ["a"] },
+    { type: "object", properties: { a: { type: "string" } }, required: ["a"], if: {}, then: {} },
+    { type: "object", properties: { a: { type: "integer" } }, required: ["a"], minProperties: 1 },
+  ]) {
+    assert.equal(toAnthropicOutputFormatSchema(schema), null, JSON.stringify(schema));
+  }
+});
+
+// Property NAMES live under `properties` / `$defs` and are the caller's
+// business — a field literally called "maximum" or "pattern" is not a keyword.
+test("normalizer does not mistake property names for keywords", () => {
+  const out = toAnthropicOutputFormatSchema({
+    type: "object",
+    $defs: { oneOf: { type: "object", properties: { x: { type: "string" } }, required: ["x"] } },
+    properties: {
+      maximum: { type: "integer" },
+      pattern: { type: "string" },
+      maxItems: { $ref: "#/$defs/oneOf" },
+    },
+    required: ["maximum", "pattern", "maxItems"],
+  });
+  assert.ok(out, "property names must not trip the allowlist");
+  const props = out.properties as Record<string, Record<string, unknown>>;
+  assert.equal(props.maximum.type, "integer");
+  assert.equal(props.maxItems.$ref, "#/$defs/oneOf");
+  const defs = out.$defs as Record<string, Record<string, unknown>>;
+  assert.equal(
+    defs.oneOf.additionalProperties,
+    false,
+    "nested object under $defs still normalized"
+  );
 });
 
 test("normalizer refuses non-object input", () => {

@@ -32,13 +32,56 @@
  * more ambitious about guarantees.
  */
 
-/** Keywords the upstream rejects outright — see (2) above. */
-const UNSUPPORTED_NUMERIC_KEYWORDS = new Set([
-  "minimum",
-  "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "multipleOf",
+/**
+ * Keywords MEASURED as accepted by `output_config.format` (2026-09-04 and
+ * 2026-09-10, each one sent alone in a minimal schema and answered 200 with
+ * content). This is an ALLOWLIST on purpose: the first version of this file
+ * enumerated what the upstream REJECTS, and production found a keyword the
+ * probe battery had never sent (`maxItems` → 400 "For 'array' type, property
+ * 'maxItems' is not supported") on the very first real caller. A denylist can
+ * only be as complete as the last probe; an allowlist fails closed — an
+ * unknown keyword sends the request down the prompt path, which is exactly
+ * where it went before this translator learned the native field. That keeps
+ * the invariant this file exists for: a request that worked yesterday must
+ * never start returning 400 because we got more ambitious.
+ *
+ * Measured REJECTED (kept here as documentation, never consulted at runtime):
+ *   minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf,
+ *   maxItems, uniqueItems, maxProperties, oneOf
+ *   ("Schema type 'oneOf' is not supported")
+ * Inconclusive (probe timed out twice; treated as unsupported until measured):
+ *   minProperties
+ * Metadata keywords are allowed because the upstream ignores them rather than
+ * rejecting them (title, description, default, examples).
+ */
+const ACCEPTED_KEYWORDS = new Set([
+  // structure
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "items",
+  "$defs",
+  "definitions",
+  "$ref",
+  "anyOf",
+  "allOf",
+  // values
+  "enum",
+  "const",
+  // string
+  "minLength",
+  "maxLength",
+  "pattern",
+  "format",
+  // array
+  "minItems",
+  // metadata (ignored upstream)
+  "title",
+  "description",
+  "default",
+  "examples",
+  "$schema",
 ]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -47,25 +90,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * Returns a schema normalized for `output_config.format`, or `null` when it
- * carries something the upstream refuses — in which case the caller must fall
- * back to describing the schema in the prompt.
+ * carries any keyword outside the measured-accepted set — in which case the
+ * caller must fall back to describing the schema in the prompt.
  */
 export function toAnthropicOutputFormatSchema(schema: unknown): Record<string, unknown> | null {
   if (!isPlainObject(schema)) return null;
 
   let unsupported = false;
 
-  const walk = (node: unknown): unknown => {
-    if (Array.isArray(node)) return node.map(walk);
+  // `properties` / `$defs` / `definitions` map user-chosen names to schemas, so
+  // their KEYS are not keywords and must not be checked against the allowlist.
+  const walkMap = (node: unknown): unknown => {
+    if (!isPlainObject(node)) return node;
+    const out: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(node)) out[name] = walkSchema(value);
+    return out;
+  };
+
+  const walkSchema = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walkSchema);
     if (!isPlainObject(node)) return node;
 
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(node)) {
-      if (UNSUPPORTED_NUMERIC_KEYWORDS.has(key)) {
+      if (!ACCEPTED_KEYWORDS.has(key)) {
         unsupported = true;
         return node;
       }
-      out[key] = walk(value);
+      out[key] =
+        key === "properties" || key === "$defs" || key === "definitions"
+          ? walkMap(value)
+          : walkSchema(value);
     }
 
     // Every object node must say `additionalProperties: false` explicitly.
@@ -75,7 +130,7 @@ export function toAnthropicOutputFormatSchema(schema: unknown): Record<string, u
     return out;
   };
 
-  const normalized = walk(schema);
+  const normalized = walkSchema(schema);
   if (unsupported || !isPlainObject(normalized)) return null;
   return normalized;
 }
