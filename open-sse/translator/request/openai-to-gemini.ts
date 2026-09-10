@@ -249,8 +249,22 @@ function openaiToGeminiBase(
       !modelLower.includes("gemini-1") &&
       (!modelLower.includes("gemini-2.0") || modelLower.includes("thinking"))
     ) {
+      // A tiered id (`gemini-3.8-flash-low` / `-medium` / `-high`) already states
+      // the effort in its name; the blanket 24576 default contradicted it and the
+      // upstream took the budget literally. Measured 2026-09-10 on Antigravity
+      // with max_tokens=30000 and NO knob from the client: `-low` spent 29,996
+      // tokens (~28.9k of them thinking) and cut its JSON at 4,352 chars with
+      // finish_reason=length, while `-high` on the very same config finished at
+      // 17,033. With an explicit effort the same `-low` finished every time
+      // (none: 12,813 / low: 13,018 / medium: 14,723 tokens, ~40k chars each).
+      // So when the client is silent, read the effort off the suffix. The
+      // budgets below are the same ones the explicit reasoning_effort branch
+      // above uses for those levels; explicit knobs still win because this
+      // block only runs when no thinkingConfig was set.
+      const tieredBudget = tierSuffixThinkingBudget(model);
       result.generationConfig.thinkingConfig = {
-        thinkingBudget: getDefaultThinkingBudget(model) || capThinkingBudget(model, 24576),
+        thinkingBudget:
+          tieredBudget ?? (getDefaultThinkingBudget(model) || capThinkingBudget(model, 24576)),
         includeThoughts: true,
       };
     }
@@ -566,6 +580,28 @@ function openaiToGeminiBase(
 }
 
 // OpenAI -> Gemini (standard API)
+/**
+ * Thinking budget implied by a tier suffix on the model id, or null when the
+ * id carries no tier. Anchored at the END of the id so a family name that
+ * merely contains one of these words is not misread.
+ */
+export function tierSuffixThinkingBudget(model: string): number | null {
+  const match = /-(extra-low|low|medium|high|xhigh)$/i.exec(model || "");
+  if (!match) return null;
+  switch (match[1].toLowerCase()) {
+    case "extra-low":
+    case "low":
+      return 1024;
+    case "medium":
+      return getDefaultThinkingBudget(model) || 8192;
+    case "high":
+    case "xhigh":
+      return capThinkingBudget(model, 32768);
+    default:
+      return null;
+  }
+}
+
 export function openaiToGeminiRequest(
   model: string,
   body: Record<string, unknown>,
