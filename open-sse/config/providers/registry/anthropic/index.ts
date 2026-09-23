@@ -43,14 +43,14 @@ export const anthropicProvider: RegistryEntry = {
       unsupportedParams: ["temperature", "top_p", "top_k"],
     },
     {
-      id: "claude-opus-5",
-      name: "Claude Opus 5",
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
       contextLength: 1048576,
       unsupportedParams: ["temperature", "top_p", "top_k"],
     },
     {
-      id: "claude-opus-5-5",
-      name: "Claude Opus 5.5",
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
       contextLength: 1048576,
       unsupportedParams: ["temperature", "top_p", "top_k"],
     },

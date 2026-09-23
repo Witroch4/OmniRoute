@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   matchesFamilyGlob,
   matchesFamilyGlobAgainstFullId,
+  pickNewestFamilyMember,
   resolveFamilyTargetModel,
 } from "../../../src/lib/usage/modelFamilyGlob.ts";
 
@@ -33,6 +34,32 @@ test("a glob with no wildcard matches only that exact model", () => {
 
 test("target resolution picks the registry's newest matching member", () => {
   assert.equal(resolveFamilyTargetModel("claude", "claude-sonnet-*"), "claude-sonnet-5");
+});
+
+test("overflow to a family goes to its NEWEST member (Fable -> Opus lands on Opus 5.5)", () => {
+  assert.equal(resolveFamilyTargetModel("claude", "claude-opus-*"), "claude-opus-5-5");
+});
+
+test("newest wins by version, not by list order", () => {
+  // The 2026-09-23 regression: Opus 5.5 listed AFTER Opus 5 and the overflow
+  // kept landing on the older model because the first match won.
+  const ids = ["claude-fable-5-1", "claude-opus-5", "claude-opus-5-5", "claude-opus-4-8"];
+  assert.equal(pickNewestFamilyMember(ids, "claude-opus-*"), "claude-opus-5-5");
+  assert.equal(pickNewestFamilyMember(["gpt-5.6-sol", "gpt-6-sol"], "gpt-*-sol"), "gpt-6-sol");
+  assert.equal(
+    pickNewestFamilyMember(["claude-opus-4-8", "claude-opus-4-10"], "claude-opus-*"),
+    "claude-opus-4-10"
+  );
+});
+
+test("same-version effort tiers keep the base id (registry order breaks ties)", () => {
+  assert.equal(resolveFamilyTargetModel("codex", "gpt-5.6-terra*"), "gpt-5.6-terra");
+  assert.equal(resolveFamilyTargetModel("codex", "gpt-6-astra*"), "gpt-6-astra");
+});
+
+test("a dated snapshot is not newer than the same version without a date", () => {
+  const target = resolveFamilyTargetModel("claude", "claude-haiku-*");
+  assert.ok(target && target.startsWith("claude-haiku-4-5"), String(target));
 });
 
 test("target resolution returns null when the glob matches nothing", () => {

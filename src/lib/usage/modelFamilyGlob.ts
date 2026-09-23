@@ -51,11 +51,37 @@ export function matchesFamilyGlobAgainstFullId(modelId: string, glob: string): b
 }
 
 /**
- * Resolve a family glob to a concrete model id on `provider`, by taking the
- * first registry member that matches. Registry order is newest-first within a
- * family (verified in open-sse/config/providers/registry/claude/index.ts, where
- * claude-sonnet-5 precedes claude-sonnet-4-6 precedes claude-sonnet-4-5-*), so
- * "first match" means "newest member".
+ * Numeric version of a model id, for "newest member" ordering: every digit run
+ * in the id, in order (`claude-opus-5-5` -> [5, 5], `gpt-5.6-terra` -> [5, 6]).
+ * Date-like runs (6+ digits, e.g. the `20251001` snapshot suffix) are dropped:
+ * a snapshot is the same model as its undated alias, not a newer one.
+ */
+function modelVersion(modelId: string): number[] {
+  return (modelId.match(/\d+/g) ?? []).filter((run) => run.length < 6).map(Number);
+}
+
+/** Positive when `a` is a newer version than `b`; missing components read as 0. */
+function compareVersions(a: number[], b: number[]): number {
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Resolve a family glob to a concrete model id on `provider`: the NEWEST
+ * registry member that matches, by the version numbers in its id — an
+ * overflow always lands on the latest model of the target family, the same
+ * rule the platform's bare `opus`/`sonnet` shortcuts follow.
+ *
+ * This used to take the first registry match and rely on the registry being
+ * newest-first. That held until 2026-09-23, when `claude-opus-5-5` was listed
+ * after `claude-opus-5` and every `fable -> claude-opus-*` overflow kept going
+ * to the older model. Registry order now only breaks ties between ids with the
+ * same version (effort tiers: `gpt-6-astra` before `gpt-6-astra-high`), so the
+ * base id still wins there exactly as before.
  *
  * Returns null when the provider is unknown or nothing matches. Callers must
  * treat null as "no redirect" — a misconfigured rule is inert, never an error.
@@ -65,10 +91,24 @@ export function resolveFamilyTargetModel(provider: string, glob: string): string
   const entry = getRegistryEntry(provider);
   if (!entry || !Array.isArray(entry.models)) return null;
 
+  const ids = entry.models.map((model) => (typeof model?.id === "string" ? model.id : ""));
+  return pickNewestFamilyMember(ids, glob);
+}
+
+/**
+ * The newest id in `ids` matching `glob`; on a version tie the earlier id wins.
+ * Pure, so the ordering rule is testable against any list, not only today's
+ * registry (which happens to be newest-first and would hide a regression).
+ */
+export function pickNewestFamilyMember(ids: readonly string[], glob: string): string | null {
+  if (!glob) return null;
   const pattern = globToRegExp(glob);
-  for (const model of entry.models) {
-    const id = typeof model?.id === "string" ? model.id : "";
-    if (id && pattern.test(id.toLowerCase())) return id;
+  let best: { id: string; version: number[] } | null = null;
+  for (const id of ids) {
+    if (!id || !pattern.test(id.toLowerCase())) continue;
+    const version = modelVersion(id);
+    // Strictly newer only: on a tie the earlier entry keeps the slot.
+    if (!best || compareVersions(version, best.version) > 0) best = { id, version };
   }
-  return null;
+  return best?.id ?? null;
 }

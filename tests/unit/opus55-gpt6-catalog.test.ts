@@ -5,14 +5,11 @@ import { getModelsByProviderId } from "../../open-sse/config/providerModels.ts";
 import { resolveModelPricing } from "../../src/lib/usage/pricingResolution.ts";
 import { getDefaultPricing } from "../../src/shared/constants/pricing.ts";
 
-test("claude-opus-5-5 is registered right after claude-opus-5", () => {
+test("claude-opus-5-5 is registered newest-first, right before claude-opus-5", () => {
   const ids = getModelsByProviderId("claude").map((model) => model.id);
-  const opus5 = ids.indexOf("claude-opus-5");
-  assert.ok(opus5 >= 0, "claude-opus-5 must stay registered");
-  // Budget rules resolve `claude-opus-*` to the FIRST registry match; Opus 5
-  // must keep that slot so existing Fable->Opus overflow is unchanged.
-  assert.equal(ids[opus5 + 1], "claude-opus-5-5");
-  assert.ok(ids.indexOf("claude-opus-5-5") > opus5);
+  const opus55 = ids.indexOf("claude-opus-5-5");
+  assert.ok(opus55 >= 0, "claude-opus-5-5 must be registered");
+  assert.equal(ids[opus55 + 1], "claude-opus-5");
 
   const model = getModelsByProviderId("claude").find((m) => m.id === "claude-opus-5-5");
   assert.equal(model?.contextLength, 1000000);
