@@ -9,6 +9,9 @@ import {
   GPT_5_6_LUNA_PRICING,
   GPT_5_6_SOL_PRICING,
   GPT_5_6_TERRA_PRICING,
+  GPT_6_ASTRA_PRICING,
+  GPT_6_LUNA_PRICING,
+  GPT_6_SOL_PRICING,
 } from "./shared-tiers";
 
 export const DEFAULT_PRICING_OAUTH = {
@@ -28,6 +31,16 @@ export const DEFAULT_PRICING_OAUTH = {
       cached: 0.5,
       reasoning: 25.0,
       cache_creation: 6.25,
+    },
+    // Opus 5.5 is priced BELOW Opus 5 ($4 / $20 per MTok, cache read $0.20,
+    // 5m cache write 1.25x). Needs its own row: the `claude-opus-*` family
+    // anchor would bill it at Opus 4.8 rates, 25% too high.
+    "claude-opus-5-5": {
+      input: 4.0,
+      output: 20.0,
+      cached: 0.2,
+      reasoning: 20.0,
+      cache_creation: 5.0,
     },
     "claude-opus-4-8": {
       input: 5.0,
@@ -90,6 +103,26 @@ export const DEFAULT_PRICING_OAUTH = {
     "codex-auto-review": GPT_5_5_PRICING,
     // Codex uses credits per 1M tokens. OmniRoute stores the dollar-equivalent
     // values below at the documented conversion of 25 credits per USD.
+    "gpt-6-astra": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-ultra": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-max": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-xhigh": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-high": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-medium": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-low": GPT_6_ASTRA_PRICING,
+    "gpt-6-sol": GPT_6_SOL_PRICING,
+    "gpt-6-sol-ultra": GPT_6_SOL_PRICING,
+    "gpt-6-sol-max": GPT_6_SOL_PRICING,
+    "gpt-6-sol-xhigh": GPT_6_SOL_PRICING,
+    "gpt-6-sol-high": GPT_6_SOL_PRICING,
+    "gpt-6-sol-medium": GPT_6_SOL_PRICING,
+    "gpt-6-sol-low": GPT_6_SOL_PRICING,
+    "gpt-6-luna": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-max": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-xhigh": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-high": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-medium": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-low": GPT_6_LUNA_PRICING,
     "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol-ultra": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol-max": GPT_5_6_SOL_PRICING,

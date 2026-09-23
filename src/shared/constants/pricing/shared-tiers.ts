@@ -41,6 +41,35 @@ export const GPT_5_6_LUNA_PRICING = {
   cache_creation: 1.25,
 };
 
+// GPT-6 line — official API list prices (developers.openai.com/api/docs/pricing,
+// read 2026-09-23): Astra $10/$50, Sol $2/$10, Luna $0.10/$0.50 per MTok, cached
+// input 0.1x. Same field convention as the 5.6 tiers (reasoning = output rate,
+// cache_creation = 1.25x input). Astra shipped 2026-09-07 WITHOUT a row, so it
+// priced at $0 and the per-key `gpt-6-astra*` budget rule could never trip.
+export const GPT_6_ASTRA_PRICING = {
+  input: 10.0,
+  output: 50.0,
+  cached: 1.0,
+  reasoning: 50.0,
+  cache_creation: 12.5,
+};
+
+export const GPT_6_SOL_PRICING = {
+  input: 2.0,
+  output: 10.0,
+  cached: 0.2,
+  reasoning: 10.0,
+  cache_creation: 2.5,
+};
+
+export const GPT_6_LUNA_PRICING = {
+  input: 0.1,
+  output: 0.5,
+  cached: 0.01,
+  reasoning: 0.5,
+  cache_creation: 0.125,
+};
+
 export const GEMINI_3_7_FLASH_PROMO_PRICING = {
   input: 0.75,
   output: 3.75,

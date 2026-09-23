@@ -55,6 +55,19 @@ export const claudeProvider: RegistryEntry = {
       supportsXHighEffort: true,
       unsupportedParams: ["temperature", "top_p", "top_k"],
     },
+    // Claude Opus 5.5 — launched 2026-09-23 (1M context, 128K output, $4/$20).
+    // Listed AFTER claude-opus-5 on purpose: budget rules resolve a family glob
+    // (`claude-opus-*`) to the FIRST registry match, so putting 5.5 first would
+    // silently move every Fable->Opus overflow onto a model with different API
+    // rules (thinking cannot be disabled, forced tool_choice 400s).
+    {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      supportsXHighEffort: true,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
     {
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",

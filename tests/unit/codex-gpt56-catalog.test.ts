@@ -15,6 +15,20 @@ test("Codex catalog exposes the GPT-5.6 lineup in configured priority order", ()
     "gpt-6-astra-high",
     "gpt-6-astra-medium",
     "gpt-6-astra-low",
+    "gpt-6-sol",
+    "gpt-6-sol-ultra",
+    "gpt-6-sol-max",
+    "gpt-6-sol-xhigh",
+    "gpt-6-sol-high",
+    "gpt-6-sol-medium",
+    "gpt-6-sol-low",
+    // Luna has no ultra tier (manifest: low..max), same as gpt-5.6-luna.
+    "gpt-6-luna",
+    "gpt-6-luna-max",
+    "gpt-6-luna-xhigh",
+    "gpt-6-luna-high",
+    "gpt-6-luna-medium",
+    "gpt-6-luna-low",
     "gpt-5.6-sol",
     "gpt-5.6-sol-ultra",
     "gpt-5.6-sol-max",
@@ -55,6 +69,10 @@ test("Codex catalog exposes the GPT-5.6 lineup in configured priority order", ()
     assert.equal(model.supportsXHighEffort, true);
   }
 
+  assert.equal(
+    models.some((model) => model.id === "gpt-6-luna-ultra"),
+    false
+  );
   assert.equal(
     models.some((model) => model.id === "gpt-5.6-luna-ultra"),
     false

@@ -40,19 +40,19 @@ test("Claude CLI version constants are in lockstep across all 4 sources", () => 
   );
 });
 
-test("Claude CLI is pinned to the current published 2.1.259 release", () => {
+test("Claude CLI is pinned to the current published 2.1.281 release", () => {
   // Bumped 2026-09-03 from 2.1.207: cc/claude-fable-5-1 returned upstream 400
   // "Claude Code 2.1.207 does not support this model; version 2.1.251 or newer
   // is required", while every other Claude id answered normally on the same key.
-  // 2.1.259 is the real latest release, not the 2.1.251 floor the error names.
+  // 2.1.281 is the real latest release, not the 2.1.280 floor the Opus 5.5 error names.
   // This asserts the compiled-in DEFAULT, not the env override, so a temporary
   // CLAUDE_CODE_VERSION in production cannot silently become the pinned value.
-  assert.equal(pinned.PINNED_CLAUDE_CODE_VERSION, "2.1.259");
+  assert.equal(pinned.PINNED_CLAUDE_CODE_VERSION, "2.1.281");
   assert.equal(id.CLAUDE_CODE_VERSION, pinned.PINNED_CLAUDE_CODE_VERSION);
 });
 
-test("Codex client is pinned to the current published 0.153.4 release", () => {
-  assert.equal(codexCfg.getCodexClientVersion(), "0.153.4");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
-  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.153.4");
+test("Codex client is pinned to the current published 0.156.1 release", () => {
+  assert.equal(codexCfg.getCodexClientVersion(), "0.156.1");
+  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.156.1 (Windows 10.0.26200; x64)");
+  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.156.1");
 });

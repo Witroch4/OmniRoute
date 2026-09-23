@@ -77,6 +77,76 @@ export const codexProvider: RegistryEntry = {
       name: "GPT-6 Astra (Low)",
       ...GPT_5_6_CODEX_CAPABILITIES,
     },
+    // GPT-6 Sol / GPT-6 Luna — launched 2026-09-23. Ids and capabilities from
+    // OpenAI's public manifest (codex-rs/models-manager/models.json): both have
+    // context_window 272000 / max_context_window 872000 (the 5.6 profile);
+    // Sol exposes low..ultra (6 tiers), Luna low..max (no ultra, like 5.6 Luna).
+    // Both need minimal_client_version 0.155.0 — see config/codexClient.ts.
+    {
+      id: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-ultra",
+      name: "GPT-6 Sol (Ultra)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-max",
+      name: "GPT-6 Sol (Max)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-xhigh",
+      name: "GPT-6 Sol (xHigh)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-high",
+      name: "GPT-6 Sol (High)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-medium",
+      name: "GPT-6 Sol (Medium)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-sol-low",
+      name: "GPT-6 Sol (Low)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna-max",
+      name: "GPT-6 Luna (Max)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna-xhigh",
+      name: "GPT-6 Luna (xHigh)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna-high",
+      name: "GPT-6 Luna (High)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna-medium",
+      name: "GPT-6 Luna (Medium)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-luna-low",
+      name: "GPT-6 Luna (Low)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
     {
       id: "gpt-5.6-sol",
       name: "GPT 5.6 Sol",

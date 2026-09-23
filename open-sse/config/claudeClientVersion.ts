@@ -29,7 +29,11 @@
 // therefore cannot touch the `cc_version=` billing header, so using it alone to
 // move the version produces exactly the split fingerprint the identity lockstep
 // guard exists to prevent. This knob is version-level and feeds every surface.
-const DEFAULT_CLAUDE_CODE_VERSION = "2.1.259";
+// 2026-09-23: 2.1.259 -> 2.1.281 (current npm release). `claude-opus-5-5`
+// answered "Claude Code 2.1.259 does not support this model; version 2.1.280 or
+// newer is required" — third model launch gated on this string. Verified live
+// with CLAUDE_CODE_VERSION=2.1.281: Opus 5.5 and every existing cc/* id answer.
+const DEFAULT_CLAUDE_CODE_VERSION = "2.1.281";
 const CLAUDE_CODE_VERSION_OVERRIDE_ENV = "CLAUDE_CODE_VERSION";
 
 // Deliberately stricter than codexClient's token pattern: the identity guards

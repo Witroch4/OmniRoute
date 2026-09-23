@@ -7,6 +7,9 @@ import {
   GPT_5_6_LUNA_PRICING,
   GPT_5_6_SOL_PRICING,
   GPT_5_6_TERRA_PRICING,
+  GPT_6_ASTRA_PRICING,
+  GPT_6_LUNA_PRICING,
+  GPT_6_SOL_PRICING,
   CLAUDE_FABLE_5_PRICING,
   CLAUDE_OPUS_4_PRICING,
   CLAUDE_SONNET_4_PRICING,
@@ -17,6 +20,9 @@ import {
 
 export const DEFAULT_PRICING_FRONTIER = {
   openai: {
+    "gpt-6-astra": GPT_6_ASTRA_PRICING,
+    "gpt-6-sol": GPT_6_SOL_PRICING,
+    "gpt-6-luna": GPT_6_LUNA_PRICING,
     "gpt-5.6": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
     "gpt-5.6-terra": GPT_5_6_TERRA_PRICING,
@@ -214,6 +220,14 @@ export const DEFAULT_PRICING_FRONTIER = {
     "claude-fable-5": CLAUDE_FABLE_5_PRICING,
     "claude-sonnet-5": CLAUDE_SONNET_5_PRICING,
     "claude-opus-5": CLAUDE_OPUS_4_PRICING,
+    // $4 / $20 per MTok, cache read $0.20 — cheaper than Opus 5.
+    "claude-opus-5-5": {
+      input: 4.0,
+      output: 20.0,
+      cached: 0.2,
+      reasoning: 20.0,
+      cache_creation: 5.0,
+    },
     "claude-opus-4.8": CLAUDE_OPUS_4_PRICING,
     "claude-opus-4-8": CLAUDE_OPUS_4_PRICING,
     "claude-opus-4-7": CLAUDE_OPUS_4_PRICING,

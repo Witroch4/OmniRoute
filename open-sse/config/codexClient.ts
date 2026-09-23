@@ -28,7 +28,14 @@
 // (reset 511h), so no call reaches OpenAI. 0.153.4 may or may not be new enough
 // for a GPT-6-generation model — if it still 400s once quota returns, check npm
 // for a newer release rather than assuming the account lacks entitlement.
-const DEFAULT_CODEX_CLIENT_VERSION = "0.153.4";
+// 2026-09-23: 0.153.4 -> 0.156.1 (current npm release). gpt-6-sol and gpt-6-luna
+// carry `minimal_client_version: 0.155.0` in OpenAI's public manifest
+// (codex-rs/models-manager/models.json). ⚠️ This time the rejection did NOT name
+// the version: 0.153.4 got "The 'gpt-6-sol' model is not supported when using
+// Codex with a ChatGPT account", which reads exactly like a missing entitlement.
+// The manifest's `minimal_client_version` is the arbiter, not the error text.
+// Verified live: with CODEX_CLIENT_VERSION=0.156.1 both answer real completions.
+const DEFAULT_CODEX_CLIENT_VERSION = "0.156.1";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";
