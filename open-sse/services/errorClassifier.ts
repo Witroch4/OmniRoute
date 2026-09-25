@@ -10,7 +10,10 @@ import { getProviderCategory, getRegistryEntry } from "../config/providerRegistr
 // successful completion (truncated at the token limit, or a tool-call turn) —
 // NOT a silent "fake success" failure. Used to avoid rewriting a valid HTTP 200
 // (e.g. a Claude Code `max_tokens: 1` connectivity ping) into a synthetic 502.
-const LEGIT_EMPTY_CLAUDE_STOP = new Set(["max_tokens", "tool_use"]);
+// "refusal": a safeguards decision about the conversation (category in
+// stop_details), not a provider failure. The client must receive it as-is —
+// Claude Code shows the notice and retries on its own fallback model.
+const LEGIT_EMPTY_CLAUDE_STOP = new Set(["max_tokens", "tool_use", "refusal"]);
 const LEGIT_EMPTY_OPENAI_FINISH = new Set(["length", "tool_calls"]);
 
 export function isEmptyContentResponse(responseBody: unknown): boolean {

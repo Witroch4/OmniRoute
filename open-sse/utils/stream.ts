@@ -414,6 +414,8 @@ type ClaudeEmptyResponseLifecycle = {
   hasMessageDelta: boolean;
   hasMessageStop: boolean;
   hasError: boolean;
+  /** Upstream ended with stop_reason "refusal": a safeguards decision, never an empty-stream failure. */
+  hasRefusalStop: boolean;
   syntheticContentInjected: boolean;
   warningLogged: boolean;
 };
@@ -427,9 +429,18 @@ function createClaudeEmptyResponseLifecycle(): ClaudeEmptyResponseLifecycle {
     hasMessageDelta: false,
     hasMessageStop: false,
     hasError: false,
+    hasRefusalStop: false,
     syntheticContentInjected: false,
     warningLogged: false,
   };
+}
+
+function isClaudeRefusalDelta(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const delta = (payload as JsonRecord).delta;
+  return (
+    !!delta && typeof delta === "object" && (delta as JsonRecord).stop_reason === "refusal"
+  );
 }
 
 function getClaudeEventType(payload: unknown): string | null {
@@ -460,6 +471,7 @@ function updateClaudeEmptyResponseLifecycle(
       break;
     case "message_delta":
       lifecycle.hasMessageDelta = true;
+      if (isClaudeRefusalDelta(payload)) lifecycle.hasRefusalStop = true;
       break;
     case "message_stop":
       lifecycle.hasMessageStop = true;
@@ -481,13 +493,21 @@ function shouldInjectClaudeEmptyResponseBeforeCurrentEvent(
   payload: unknown
 ): boolean {
   const type = getClaudeEventType(payload);
-  if (!type || lifecycle.hasError || lifecycle.hasContentBlock) return false;
+  if (!type || lifecycle.hasError || lifecycle.hasContentBlock || lifecycle.hasRefusalStop) {
+    return false;
+  }
   if (!hasClaudeAssistantLifecycle(lifecycle)) return false;
-  return type === "message_delta" || type === "message_stop";
+  if (type === "message_delta") {
+    // A bare `event: message_delta` line carries no stop_reason yet — defer the
+    // verdict to its data line, which is where a refusal becomes visible.
+    if (!("delta" in (payload as JsonRecord))) return false;
+    return !isClaudeRefusalDelta(payload);
+  }
+  return type === "message_stop";
 }
 
 function shouldInjectClaudeEmptyResponseOnFlush(lifecycle: ClaudeEmptyResponseLifecycle): boolean {
-  if (lifecycle.hasError || lifecycle.hasContentBlock) return false;
+  if (lifecycle.hasError || lifecycle.hasContentBlock || lifecycle.hasRefusalStop) return false;
   return hasClaudeAssistantLifecycle(lifecycle);
 }
 
