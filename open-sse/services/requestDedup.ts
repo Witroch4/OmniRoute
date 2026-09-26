@@ -34,24 +34,14 @@ const inflight = new Map<string, Promise<unknown>>();
 
 /**
  * Compute a deterministic hash for a request body.
- * Includes: model, messages, temperature, tools, tool_choice, max_tokens, response_format
- * Excludes: stream, user, metadata (don't affect LLM output)
+ * Hash the full translated body: Responses uses input/instructions, Anthropic
+ * uses messages/system, and Gemini uses contents/generationConfig. A whitelist
+ * of OpenAI Chat fields silently merged unrelated batches after translation.
+ * False cache misses are preferable to returning another request's completion.
  */
 export function computeRequestHash(requestBody: unknown): string {
   const body = requestBody as Record<string, unknown>;
-  const canonical = {
-    model: body.model ?? null,
-    messages: body.messages ?? null,
-    temperature: typeof body.temperature === "number" ? body.temperature : 1.0,
-    tools: body.tools ?? null,
-    tool_choice: body.tool_choice ?? null,
-    max_tokens: body.max_tokens ?? null,
-    response_format: body.response_format ?? null,
-    top_p: body.top_p ?? null,
-    frequency_penalty: body.frequency_penalty ?? null,
-    presence_penalty: body.presence_penalty ?? null,
-  };
-  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 16);
+  return createHash("sha256").update(JSON.stringify(body)).digest("hex");
 }
 
 /** Determine whether a request should be deduplicated */
