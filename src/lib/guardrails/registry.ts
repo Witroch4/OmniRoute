@@ -1,4 +1,5 @@
 import { BaseGuardrail, type GuardrailContext, type GuardrailExecutionResult } from "./base";
+import { DocumentInputSupportGuardrail } from "./documentInputSupport";
 import { PIIMaskerGuardrail } from "./piiMasker";
 import { PromptInjectionGuardrail } from "./promptInjection";
 import { VisionBridgeGuardrail } from "./visionBridge";
@@ -264,6 +265,7 @@ export function registerDefaultGuardrails() {
   if (defaultGuardrailsRegistered) return guardrailRegistry;
 
   guardrailRegistry.register(new VisionBridgeGuardrail());
+  guardrailRegistry.register(new DocumentInputSupportGuardrail());
   guardrailRegistry.register(new PIIMaskerGuardrail());
   guardrailRegistry.register(new PromptInjectionGuardrail());
   defaultGuardrailsRegistered = true;
