@@ -218,6 +218,14 @@ export const DEFAULT_PRICING_FRONTIER = {
     // Intentional duplicates of dot-notation variants (e.g. claude-opus-4.6)
     // to cover hyphen-notation IDs (claude-opus-4-6) used by some clients
     "claude-fable-5": CLAUDE_FABLE_5_PRICING,
+    // $2 / $10 per MTok, cache read $0.20.
+    "claude-sonnet-5-5": {
+      input: 2.0,
+      output: 10.0,
+      cached: 0.2,
+      reasoning: 10.0,
+      cache_creation: 2.5,
+    },
     "claude-sonnet-5": CLAUDE_SONNET_5_PRICING,
     "claude-opus-5": CLAUDE_OPUS_4_PRICING,
     // $4 / $20 per MTok, cache read $0.20 — cheaper than Opus 5.

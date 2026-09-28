@@ -70,6 +70,15 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 15.0,
       cache_creation: 3.75,
     },
+    // Sonnet 5.5: $2 / $10 per MTok, cache read 0.1x ($0.20), 5m write 1.25x
+    // (platform.claude.com models overview, read 2026-09-28).
+    "claude-sonnet-5-5": {
+      input: 2.0,
+      output: 10.0,
+      cached: 0.2,
+      reasoning: 10.0,
+      cache_creation: 2.5,
+    },
     "claude-sonnet-5": {
       input: 3.0,
       output: 15.0,

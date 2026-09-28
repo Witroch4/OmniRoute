@@ -94,6 +94,17 @@ export const claudeProvider: RegistryEntry = {
       contextLength: 200000,
       maxOutputTokens: 64000,
     },
+    // Claude Sonnet 5.5 — launched 2026-09-28 (1M context, 128K output, $2/$10,
+    // adaptive thinking, default effort high). Newest Sonnet, so budget-rule
+    // overflow to `claude-sonnet-*` lands here (lib/usage/modelFamilyGlob.ts).
+    {
+      id: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      supportsXHighEffort: true,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
     {
       id: "claude-sonnet-5",
       name: "Claude Sonnet 5",

@@ -57,6 +57,12 @@ export const anthropicProvider: RegistryEntry = {
     { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
     { id: "claude-opus-4.5", name: "Claude Opus 4.5" },
     {
+      id: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      contextLength: 1048576,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
+    {
       id: "claude-sonnet-5",
       name: "Claude Sonnet 5",
       contextLength: 1048576,

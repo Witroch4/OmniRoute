@@ -39,3 +39,17 @@ test("GPT-6 codex ids bill at the published list prices", () => {
     assert.equal(resolution.pricing?.output, output, `${model} output`);
   }
 });
+
+test("claude-sonnet-5-5 is registered newest-first and bills at $2 / $10", () => {
+  const ids = getModelsByProviderId("claude").map((model) => model.id);
+  assert.equal(ids[ids.indexOf("claude-sonnet-5-5") + 1], "claude-sonnet-5");
+  const model = getModelsByProviderId("claude").find((m) => m.id === "claude-sonnet-5-5");
+  assert.equal(model?.contextLength, 1000000);
+  assert.equal(model?.maxOutputTokens, 128000);
+
+  const resolution = resolveModelPricing(getDefaultPricing(), "claude", "claude-sonnet-5-5");
+  assert.equal(resolution.source, "exact");
+  assert.equal(resolution.pricing?.input, 2.0);
+  assert.equal(resolution.pricing?.output, 10.0);
+  assert.equal(resolution.pricing?.cached, 0.2);
+});

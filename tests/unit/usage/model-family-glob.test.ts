@@ -33,7 +33,7 @@ test("a glob with no wildcard matches only that exact model", () => {
 });
 
 test("target resolution picks the registry's newest matching member", () => {
-  assert.equal(resolveFamilyTargetModel("claude", "claude-sonnet-*"), "claude-sonnet-5");
+  assert.equal(resolveFamilyTargetModel("claude", "claude-sonnet-*"), "claude-sonnet-5-5");
 });
 
 test("overflow to a family goes to its NEWEST member (Fable -> Opus lands on Opus 5.5)", () => {
