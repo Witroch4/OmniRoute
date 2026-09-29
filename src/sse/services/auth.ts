@@ -451,7 +451,7 @@ function isTerminalConnectionStatus(connection: ProviderConnectionView): boolean
   return status === "credits_exhausted" || status === "banned" || status === "expired";
 }
 
-function resolveTerminalConnectionStatus(
+export function resolveTerminalConnectionStatus(
   status: number,
   result: { permanent?: boolean; creditsExhausted?: boolean },
   providerErrorType: string | null = null

@@ -1559,7 +1559,7 @@ test("markAccountUnavailable auto-disables permanently banned accounts when the 
   const result = await auth.markAccountUnavailable(
     connection.id,
     401,
-    "Verify your account to continue",
+    "Your account has been suspended", // #14848: "Verify your account…" is no longer a ban
     "openai",
     "gpt-4o"
   );
@@ -1579,7 +1579,7 @@ test("markAccountUnavailable leaves permanently banned accounts active when auto
   const result = await auth.markAccountUnavailable(
     connection.id,
     401,
-    "Verify your account to continue",
+    "Your account has been suspended", // #14848: "Verify your account…" is no longer a ban
     "openai",
     "gpt-4o"
   );
@@ -1623,7 +1623,7 @@ test("markAccountUnavailable swallows auto-disable persistence errors", async ()
     const result = await auth.markAccountUnavailable(
       connection.id,
       401,
-      "Verify your account to continue",
+      "Your account has been suspended", // #14848: "Verify your account…" is no longer a ban
       "openai",
       "gpt-4o"
     );

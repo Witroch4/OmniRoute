@@ -137,8 +137,8 @@ export const ACCOUNT_DEACTIVATED_SIGNALS = [
   "account has been disabled",
   "your account has been suspended",
   "this account is deactivated",
-  // AG (Antigravity/Google Cloud Code) permanent ban signals
-  "verify your account to continue",
+  // AG (Antigravity/Google Cloud Code) permanent ban signals. "verify your account to continue" is NOT
+  // a ban (operator-actionable) — see ACCOUNT_VERIFICATION_REQUIRED_SIGNALS in errorClassifier.ts.
   "this service has been disabled in this account for violation",
   "this service has been disabled in this account",
 ];
