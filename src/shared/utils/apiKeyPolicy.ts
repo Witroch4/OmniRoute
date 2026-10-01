@@ -9,6 +9,12 @@
  */
 
 import { extractApiKey } from "@/sse/services/auth";
+import { extractClientIpOrNull } from "@omniroute/open-sse/services/deviceTracker.ts";
+import {
+  describeClient,
+  getTailnetDevicesByIp,
+  isClientAllowedByDeviceList,
+} from "@/lib/tailnet/tailnetDevices";
 import {
   getApiKeyMetadata,
   getComboByName,
@@ -84,6 +90,8 @@ export interface ApiKeyMetadata {
   isActive?: boolean;
   isBanned?: boolean;
   expiresAt?: string | null;
+  /** Device binding: tailnet IPs or device names (see lib/tailnet/tailnetDevices). */
+  ipAllowlist?: string[];
   accessSchedule?: AccessSchedule | null;
   maxRequestsPerDay?: number | null;
   maxRequestsPerMinute?: number | null;
@@ -365,6 +373,30 @@ export async function enforceApiKeyPolicy(
         apiKey,
         apiKeyInfo,
         rejection: errorResponse(HTTP_STATUS.FORBIDDEN, "This API key has expired"),
+      };
+    }
+  }
+
+  // ── Check 1.6: device binding (ip_allowlist) ──
+  // Entries are tailnet IPs or device names. The caller's IP comes from the
+  // OmniRoute edge, which rewrites every client-IP header from the PROXY-protocol
+  // address, so it is the real tailnet IP. Empty list = not bound (default).
+  if (apiKeyInfo.ipAllowlist && apiKeyInfo.ipAllowlist.length > 0) {
+    const clientIp = extractClientIpOrNull(request.headers);
+    const devicesByIp = getTailnetDevicesByIp();
+    if (!isClientAllowedByDeviceList(clientIp, apiKeyInfo.ipAllowlist, devicesByIp)) {
+      log.warn("API_POLICY", "API key used from a device outside its binding", {
+        keyId: apiKeyInfo.id,
+        clientIp,
+      });
+      return {
+        apiKey,
+        apiKeyInfo,
+        rejection: errorResponse(
+          HTTP_STATUS.FORBIDDEN,
+          `This API key is bound to: ${apiKeyInfo.ipAllowlist.join(", ")}. ` +
+            `This request came from ${describeClient(clientIp, devicesByIp)}.`
+        ),
       };
     }
   }

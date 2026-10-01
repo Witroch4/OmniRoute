@@ -711,6 +711,7 @@ export async function updateApiKeyPermissions(
         scopes?: string[] | null;
         proxyId?: string | null;
         allowedEndpoints?: string[] | null;
+        ipAllowlist?: string[] | null;
         streamDefaultMode?: "legacy" | "json" | null;
         disableNonPublicModels?: boolean;
         allowUsageCommand?: boolean;
@@ -757,6 +758,7 @@ export async function updateApiKeyPermissions(
           scopes: (update as { scopes?: string[] | null }).scopes,
           proxyId: (update as { proxyId?: string | null }).proxyId,
           allowedEndpoints: (update as { allowedEndpoints?: string[] | null }).allowedEndpoints,
+          ipAllowlist: (update as { ipAllowlist?: string[] | null }).ipAllowlist,
           streamDefaultMode: (update as { streamDefaultMode?: "legacy" | "json" | null })
             .streamDefaultMode,
           disableNonPublicModels: (update as { disableNonPublicModels?: boolean })
@@ -799,6 +801,7 @@ export async function updateApiKeyPermissions(
     (normalized as Record<string, unknown>).scopes === undefined &&
     (normalized as Record<string, unknown>).proxyId === undefined &&
     (normalized as Record<string, unknown>).allowedEndpoints === undefined &&
+    (normalized as Record<string, unknown>).ipAllowlist === undefined &&
     (normalized as Record<string, unknown>).streamDefaultMode === undefined &&
     normalized.disableNonPublicModels === undefined &&
     normalized.allowUsageCommand === undefined &&
@@ -1013,6 +1016,18 @@ export async function updateApiKeyPermissions(
       ? (allowedEndpointsUpdate as unknown[]).filter((s): s is string => typeof s === "string")
       : [];
     (params as Record<string, unknown>).allowedEndpoints = JSON.stringify(nextEndpoints);
+  }
+
+  const ipAllowlistUpdate = (normalized as Record<string, unknown>).ipAllowlist;
+  if (ipAllowlistUpdate !== undefined) {
+    updates.push("ip_allowlist = @ipAllowlist");
+    const nextAllowlist: string[] = Array.isArray(ipAllowlistUpdate)
+      ? (ipAllowlistUpdate as unknown[])
+          .filter((s): s is string => typeof s === "string")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    (params as Record<string, unknown>).ipAllowlist = JSON.stringify(nextAllowlist);
   }
 
   const streamDefaultModeUpdate = (normalized as Record<string, unknown>).streamDefaultMode;

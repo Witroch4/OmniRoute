@@ -45,7 +45,7 @@ export interface ApiKeyUsageLimitDeps {
   getAllProviderLimitsCache?: () => Record<string, ProviderLimitsCacheEntry>;
 }
 
-interface UsageCostRow {
+export interface UsageCostRow {
   provider: string | null;
   model: string | null;
   serviceTier: string | null;
@@ -482,6 +482,15 @@ export type SpendBasis = "normalized" | "real";
  * COALESCE in the caller), so resolving the multiplier directly off them is
  * correct — no separate billed-vs-served split needed at this layer.
  */
+/**
+ * Real USD cost of grouped usage rows (provider/model/tier + token sums), priced
+ * exactly like the per-key quota and the budget ladder. Exported for the
+ * per-device usage report so its dollars agree with every other cost figure.
+ */
+export async function priceUsageRows(rows: UsageCostRow[]): Promise<number> {
+  return sumUsageCostRows(rows);
+}
+
 async function sumUsageCostRows(
   rows: UsageCostRow[],
   multiplierRules: FamilyMultiplierRule[] | null = null

@@ -24,6 +24,7 @@ export function buildFailureUsageRecord(opts: {
   errorCode: string | null | undefined;
   latencyMs: number;
   endpoint?: string | null | undefined;
+  clientIp?: string | null | undefined;
 }) {
   return {
     provider: opts.provider || "unknown",
@@ -43,5 +44,6 @@ export function buildFailureUsageRecord(opts: {
     serviceTier: opts.effectiveServiceTier,
     comboStrategy: opts.isCombo ? opts.comboStrategy || undefined : undefined,
     endpoint: opts.endpoint || undefined,
+    clientIp: opts.clientIp || null,
   };
 }

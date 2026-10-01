@@ -486,6 +486,8 @@ function isSchemaAlreadyApplied(
       return hasColumn(db, "domain_cost_history", "billed_cost");
     case "169":
       return hasTable(db, "api_key_model_family_multipliers");
+    case "171":
+      return hasColumn(db, "usage_history", "client_ip");
     case "170":
       return (
         hasColumn(db, "api_keys", "renewal_cycle_enabled") &&

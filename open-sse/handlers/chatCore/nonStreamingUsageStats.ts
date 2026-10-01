@@ -32,6 +32,8 @@ export type RecordNonStreamingUsageStatsContext = {
   isCombo: boolean;
   comboStrategy: string | null | undefined;
   endpoint?: string | null | undefined;
+  /** Caller's tailnet IP (validated) — usage_history.client_ip. */
+  clientIp?: string | null | undefined;
 };
 
 function logUsageTrace(
@@ -63,6 +65,7 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     serviceTier: effectiveServiceTier,
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
+    clientIp: ctx.clientIp || null,
   }).catch((err) => {
     console.error("Failed to save usage stats:", err.message);
   });

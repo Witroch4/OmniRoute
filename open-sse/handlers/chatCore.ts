@@ -31,7 +31,11 @@ import {
   buildCodexExhaustedStreamBody,
 } from "./chatCore/codexFailover.ts";
 import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
-import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
+import {
+  trackDevice,
+  extractIpFromHeaders,
+  extractClientIpOrNull,
+} from "../services/deviceTracker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
 import {
@@ -480,6 +484,8 @@ export async function handleChatCore({
   if (pluginGate.body) {
     body = pluginGate.body;
   }
+  // Caller's tailnet IP, persisted on every usage row (migration 171).
+  const clientIp = extractClientIpOrNull(clientRawRequest?.headers ?? null);
   // Per-API-key device/connection tracking (port of upstream 9router#931,
   // thanks @mugnimaestra). In-memory only, never blocks the request path.
   if (apiKeyInfo?.id) {
@@ -524,6 +530,7 @@ export async function handleChatCore({
         errorCode,
         latencyMs: Date.now() - startTime,
         endpoint: endpointPath,
+        clientIp,
       })
     ).catch(() => {});
   };
@@ -3914,6 +3921,7 @@ export async function handleChatCore({
       isCombo,
       comboStrategy,
       endpoint: endpointPath,
+      clientIp,
     });
 
     // Translate response to client's expected format (usually OpenAI)
@@ -4464,6 +4472,7 @@ export async function handleChatCore({
       isCombo,
       comboStrategy,
       endpoint: endpointPath,
+      clientIp,
     });
 
     persistAttemptLogs({

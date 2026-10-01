@@ -19,6 +19,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -124,7 +125,9 @@ function findOldestDevice(
   apiKeyId: string | null
 ): { apiKeyId: string; fingerprint: string; lastSeen: number } | null {
   let oldest: { apiKeyId: string; fingerprint: string; lastSeen: number } | null = null;
-  const entries = apiKeyId ? [[apiKeyId, devicesByApiKey.get(apiKeyId)] as const] : devicesByApiKey.entries();
+  const entries = apiKeyId
+    ? [[apiKeyId, devicesByApiKey.get(apiKeyId)] as const]
+    : devicesByApiKey.entries();
 
   for (const [entryApiKeyId, devices] of entries) {
     if (!devices) continue;
@@ -304,4 +307,19 @@ export function clearDeviceTracker(): void {
     DEFAULT_MAX_DEVICES_PER_API_KEY
   );
   maxTotalDevices = parsePositiveIntegerEnv(MAX_TOTAL_ENV_NAME, DEFAULT_MAX_TOTAL_DEVICES);
+}
+
+/**
+ * The caller's IP as a validated address, or null. Same header precedence as
+ * {@link extractIpFromHeaders}; anything that is not a literal IP ("unknown",
+ * a hostname, a forged junk value) is dropped so it never lands in usage
+ * history or matches a device binding. Behind the OmniRoute edge every one of
+ * those headers is rewritten from the PROXY-protocol address, so the value is
+ * the real tailnet IP and not client-controlled.
+ */
+export function extractClientIpOrNull(
+  headers: Record<string, unknown> | Headers | null | undefined
+): string | null {
+  const ip = extractIpFromHeaders(headers);
+  return ip && isIP(ip) !== 0 ? ip : null;
 }

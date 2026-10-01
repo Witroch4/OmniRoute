@@ -80,6 +80,7 @@ export async function PATCH(request, { params }) {
       rateLimits,
       scopes,
       allowedEndpoints,
+      ipAllowlist,
       streamDefaultMode,
       disableNonPublicModels,
       allowUsageCommand,
@@ -112,6 +113,7 @@ export async function PATCH(request, { params }) {
     if (rateLimits !== undefined) payload.rateLimits = rateLimits;
     if (scopes !== undefined) payload.scopes = scopes;
     if (allowedEndpoints !== undefined) payload.allowedEndpoints = allowedEndpoints;
+    if (ipAllowlist !== undefined) payload.ipAllowlist = ipAllowlist;
     if (streamDefaultMode !== undefined) payload.streamDefaultMode = streamDefaultMode;
     if (disableNonPublicModels !== undefined)
       payload.disableNonPublicModels = disableNonPublicModels;

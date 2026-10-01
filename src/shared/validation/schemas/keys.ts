@@ -111,6 +111,8 @@ export const updateKeyPermissionsSchema = z
       .optional(),
     scopes: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
     allowedEndpoints: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+    // Device binding: tailnet IPs or device names; [] clears it.
+    ipAllowlist: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
     streamDefaultMode: z.enum(["legacy", "json"]).optional(),
     disableNonPublicModels: z.boolean().optional(),
     allowUsageCommand: z.boolean().optional(),
@@ -149,6 +151,7 @@ export const updateKeyPermissionsSchema = z
       value.rateLimits === undefined &&
       value.scopes === undefined &&
       value.allowedEndpoints === undefined &&
+      value.ipAllowlist === undefined &&
       value.streamDefaultMode === undefined &&
       value.disableNonPublicModels === undefined &&
       value.allowUsageCommand === undefined &&
