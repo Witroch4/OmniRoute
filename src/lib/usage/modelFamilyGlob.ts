@@ -70,6 +70,11 @@ function compareVersions(a: number[], b: number[]): number {
   return 0;
 }
 
+/** Whether `candidateId` is a strictly newer version than `currentId` (same version rule as above). */
+export function isNewerModelVersion(candidateId: string, currentId: string): boolean {
+  return compareVersions(modelVersion(candidateId), modelVersion(currentId)) > 0;
+}
+
 /**
  * Resolve a family glob to a concrete model id on `provider`: the NEWEST
  * registry member that matches, by the version numbers in its id — an

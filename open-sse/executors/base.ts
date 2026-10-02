@@ -28,6 +28,7 @@ import {
 } from "../services/apiKeyRotator.ts";
 import type { KeyHealth } from "../services/apiKeyRotator.ts";
 import { getOpenAICompatibleType, isClaudeCodeCompatible } from "../services/provider.ts";
+import { LONG_CONTEXT_CREDIT_GATE_REGEX } from "../services/longContextCreditGate.ts";
 import {
   runWithOnPersist,
   getRefreshLeadMs,
@@ -230,6 +231,15 @@ export function stripVersionedToolModelPrefix(tools: unknown): void {
     ) {
       t.model = t.model.split("/").pop();
     }
+  }
+}
+
+/** Peeks at a 429 body (on a clone, so the caller can still read it) for the long-context credit gate. */
+async function isLongContextCreditGateResponse(response: Response): Promise<boolean> {
+  try {
+    return LONG_CONTEXT_CREDIT_GATE_REGEX.test(await response.clone().text());
+  } catch {
+    return false;
   }
 }
 
@@ -1327,11 +1337,14 @@ export class BaseExecutor {
           }
         }
 
-        // Intra-URL retry: if 429 and we haven't exhausted per-URL retries, wait and retry the same URL
+        // Intra-URL retry: if 429 and we haven't exhausted per-URL retries, wait and retry the same URL.
+        // The long-context credit gate is the exception: it is deterministic for this body, so
+        // re-sending it only repeats the refusal (3 upstream hits per attempt, ~2s apart).
         if (
           !skipUpstreamRetry &&
           response.status === HTTP_STATUS.RATE_LIMITED &&
-          (retryAttemptsByUrl[urlIndex] ?? 0) < BaseExecutor.RETRY_CONFIG.maxAttempts
+          (retryAttemptsByUrl[urlIndex] ?? 0) < BaseExecutor.RETRY_CONFIG.maxAttempts &&
+          !(await isLongContextCreditGateResponse(response))
         ) {
           retryAttemptsByUrl[urlIndex] = (retryAttemptsByUrl[urlIndex] ?? 0) + 1;
           const attempt = retryAttemptsByUrl[urlIndex];

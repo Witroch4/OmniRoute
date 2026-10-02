@@ -55,6 +55,8 @@ import { createHookContext, runHooks, initPreRequestRegistry } from "@/lib/middl
 import { deleteHandoff, getHandoff } from "@/lib/db/contextHandoffs";
 import { updateCombo } from "@/lib/db/combos";
 import { isModelAllowedForKey } from "@/lib/db/apiKeys";
+import { getLongContextUpgradeModel } from "@omniroute/open-sse/services/modelFamilyFallback.ts";
+import { isLongContextCreditGateError } from "@omniroute/open-sse/services/longContextCreditGate.ts";
 import { promoteSuccessfulComboModel } from "@/lib/combos/autoPromote";
 import {
   deleteSessionAccountAffinity,
@@ -997,6 +999,7 @@ async function handleSingleModelChat(
   telemetry: any = null,
   runtimeOptions: {
     emergencyFallbackTried?: boolean;
+    longContextSubstituteTried?: boolean;
     forceLiveComboTest?: boolean;
     sessionId?: string | null;
     sessionAffinityKey?: string | null;
@@ -1716,6 +1719,70 @@ async function handleSingleModelChat(
         continue;
       }
 
+      // Long-context credit gate (Anthropic 429 "Usage credits are required for long
+      // context requests"): the account is healthy, THIS request is refused on THIS
+      // model at this size (Sonnet 4.6 at ~450K tokens while Sonnet 5 / Opus 5.x served
+      // 200K-980K on the same subscription). Re-serve it once from the newest newer
+      // sibling of the family. No sibling, a pinned connection, a combo step, or a key
+      // that may not use it -> the original error goes back untouched, and the cooldown
+      // guard below keeps the refusal from poisoning the shared account.
+      const isLongContextGate = isLongContextCreditGateError(
+        Number(result.status || 0),
+        String(result.error || "")
+      );
+      if (
+        isLongContextGate &&
+        !runtimeOptions.longContextSubstituteTried &&
+        !comboName &&
+        !hasForcedConnection
+      ) {
+        const upgradeModel = getLongContextUpgradeModel(provider, model, new Set([model]));
+        const upgradeModelStr = upgradeModel ? `${provider}/${upgradeModel}` : null;
+        if (
+          upgradeModelStr &&
+          (await isModelAllowedForKey(extractApiKey(request), upgradeModelStr))
+        ) {
+          log.warn(
+            "LONG_CONTEXT_FALLBACK",
+            `${provider}/${model} refused by the long-context credit gate -> ${upgradeModelStr}`
+          );
+          logAuditEvent({
+            action: "routing.long_context_substitute",
+            actor: apiKeyInfo?.name || "system",
+            target: provider,
+            details: {
+              original_model: `${provider}/${model}`,
+              substituted_with: upgradeModelStr,
+            },
+          });
+          const upgradeResponse = await handleSingleModelChat(
+            { ...body, model: upgradeModelStr },
+            upgradeModelStr,
+            clientRawRequest,
+            request,
+            comboName,
+            apiKeyInfo,
+            telemetry,
+            {
+              ...runtimeOptions,
+              longContextSubstituteTried: true,
+              forcedConnectionId: null,
+              comboStepId: null,
+              comboExecutionKey: null,
+            },
+            null,
+            false
+          );
+          if (upgradeResponse.ok) {
+            return upgradeResponse;
+          }
+          log.warn(
+            "LONG_CONTEXT_FALLBACK",
+            `${upgradeModelStr} also failed with status ${upgradeResponse.status}; returning the original ${provider}/${model} error.`
+          );
+        }
+      }
+
       // Emergency fallback for budget exhaustion (402 / billing / quota keywords):
       // reroute to a free model (default provider/model: nvidia + openai/gpt-oss-120b) exactly once.
       // Combo targets never emergency-hop: the combo is the operator's fallback policy
@@ -1828,7 +1895,7 @@ async function handleSingleModelChat(
       // 7. Mark account as quota-exhausted only for explicit long-window quota signals.
       // A plain 429/high-traffic response should trigger fallback/cooldown, not poison
       // quotaCache as exhausted for 5 minutes while usage quota may still be available.
-      if (!dailyQuotaExhausted) {
+      if (!dailyQuotaExhausted && !isLongContextGate) {
         const passthroughModels = credentials.providerSpecificData?.passthroughModels;
         if (
           result.status === 429 &&
@@ -1847,7 +1914,12 @@ async function handleSingleModelChat(
           0 || connectionHasExtraKeys(credentials.connectionId);
       const is401 = result.status === 401;
       // Our own timeout fired on a slow upstream; don't cool down a healthy account.
+      // The long-context credit gate is a verdict on this request, not on the account:
+      // cooling the (shared) connection down would block every other key and model on
+      // it for the window, and the cooldown retry loop would resend the same refused
+      // body three more times.
       const skipConnectionDisable =
+        isLongContextGate ||
         result.status === 499 ||
         result.errorCode === "client_disconnected" ||
         result.errorType === "client_disconnected" ||

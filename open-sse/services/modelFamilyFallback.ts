@@ -15,6 +15,10 @@ import { getModelContextLimit } from "../../src/lib/modelCapabilities";
 import { parseModel } from "./model.ts";
 import { CONTEXT_OVERFLOW_REGEX } from "./errorClassifier.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
+import {
+  isNewerModelVersion,
+  pickNewestFamilyMember,
+} from "../../src/lib/usage/modelFamilyGlob.ts";
 
 // ── Model Family Definitions ─────────────────────────────────────────────────
 
@@ -136,6 +140,42 @@ export function isModelUnavailableError(status: number, errorMessage: string): b
 export function isContextOverflowError(status: number, errorMessage: string): boolean {
   if (status !== 400) return false;
   return CONTEXT_OVERFLOW_REGEX.test(errorMessage);
+}
+
+/**
+ * The model that should take over a request the long-context credit gate refused:
+ * the NEWEST strictly-newer sibling in the same Claude family (`claude-sonnet-4-6` ->
+ * `claude-sonnet-5-5`), skipping what was already tried. Newer members of a family
+ * ship with native long context (Sonnet 5 / Opus 5.x served 200K-980K contexts on the
+ * same subscription while Sonnet 4.6 hit the gate), and "newest member" is the same
+ * rule budget overflow uses, so the two mechanisms never disagree about a family.
+ *
+ * Deliberately Claude-only: the gate is Anthropic's wording, and a sibling in another
+ * provider's family says nothing about its context limits. Returns the id in the same
+ * shape as `currentModel` (prefixed iff it was prefixed), or null when nothing newer
+ * is available — callers then surface the original error.
+ */
+export function getLongContextUpgradeModel(
+  provider: string,
+  currentModel: string,
+  triedModels: Set<string>
+): string | null {
+  const parsed = parseModel(currentModel);
+  const bareModel = parsed.model || currentModel;
+  const family = /^(claude-[a-z]+)-\d/.exec(bareModel);
+  if (!family) return null;
+
+  const registryProvider = parsed.provider || parsed.providerAlias || provider;
+  const entry = registryProvider ? getRegistryEntry(registryProvider) : null;
+  if (!entry || !Array.isArray(entry.models)) return null;
+
+  const prefix = currentModel.includes("/") ? `${currentModel.split("/")[0]}/` : "";
+  const candidates = entry.models
+    .map((m) => (typeof m?.id === "string" ? m.id : ""))
+    .filter((id) => id && isNewerModelVersion(id, bareModel) && !triedModels.has(`${prefix}${id}`));
+
+  const best = pickNewestFamilyMember(candidates, `${family[1]}-*`);
+  return best ? `${prefix}${best}` : null;
 }
 
 // ── Fallback Resolution ──────────────────────────────────────────────────────
