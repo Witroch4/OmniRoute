@@ -83,6 +83,41 @@ export const codexProvider: RegistryEntry = {
     // Sol exposes low..ultra (6 tiers), Luna low..max (no ultra, like 5.6 Luna).
     // Both need minimal_client_version 0.155.0 — see config/codexClient.ts.
     {
+      id: "gpt-6.1-sol",
+      name: "GPT-6.1 Sol",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-ultra",
+      name: "GPT-6.1 Sol (Ultra)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-max",
+      name: "GPT-6.1 Sol (Max)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-xhigh",
+      name: "GPT-6.1 Sol (xHigh)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-high",
+      name: "GPT-6.1 Sol (High)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-medium",
+      name: "GPT-6.1 Sol (Medium)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6.1-sol-low",
+      name: "GPT-6.1 Sol (Low)",
+      ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    {
       id: "gpt-6-sol",
       name: "GPT-6 Sol",
       ...GPT_5_6_CODEX_CAPABILITIES,

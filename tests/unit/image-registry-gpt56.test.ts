@@ -13,8 +13,9 @@ test("ChatGPT Web image catalog exposes GPT-5.5 Instant instead of GPT-5.3 Insta
   });
 });
 
-test("Codex image catalog exposes GPT-6 Sol/Luna and GPT-5.6 Sol/Terra/Luna, newest first", () => {
+test("Codex image catalog exposes GPT-6.1 Sol, GPT-6 Sol/Luna and GPT-5.6 Sol/Terra/Luna, newest first", () => {
   assert.deepEqual(IMAGE_PROVIDERS.codex.models, [
+    { id: "gpt-6.1-sol", name: "GPT 6.1 Sol (Codex Image)" },
     { id: "gpt-6-sol", name: "GPT 6 Sol (Codex Image)" },
     { id: "gpt-6-luna", name: "GPT 6 Luna (Codex Image)" },
     { id: "gpt-5.6-sol", name: "GPT 5.6 Sol (Codex Image)" },
@@ -22,7 +23,7 @@ test("Codex image catalog exposes GPT-6 Sol/Luna and GPT-5.6 Sol/Terra/Luna, new
     { id: "gpt-5.6-luna", name: "GPT 5.6 Luna (Codex Image)" },
   ]);
 
-  for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const model of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     assert.deepEqual(parseImageModel(`cx/${model}`), { provider: "codex", model });
   }
 

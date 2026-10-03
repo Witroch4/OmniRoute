@@ -62,6 +62,16 @@ export const GPT_6_SOL_PRICING = {
   cache_creation: 2.5,
 };
 
+// GPT-6.1 Sol keeps the 6 Sol list price but halves the cache read ($0.20 -> $0.10).
+// Source: docs/LLM-MODELOS-DE-VANGUARDA.md (OpenAI pricing page, 2026-10-03).
+export const GPT_6_1_SOL_PRICING = {
+  input: 2.0,
+  output: 10.0,
+  cached: 0.1,
+  reasoning: 10.0,
+  cache_creation: 2.5,
+};
+
 export const GPT_6_LUNA_PRICING = {
   input: 0.1,
   output: 0.5,

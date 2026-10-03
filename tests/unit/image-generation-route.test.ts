@@ -80,6 +80,7 @@ test("v1 image models GET exposes current Codex image models and hides inactive 
   assert.deepEqual(
     ids.filter((id) => id.startsWith("codex/")),
     [
+      "codex/gpt-6.1-sol",
       "codex/gpt-6-sol",
       "codex/gpt-6-luna",
       "codex/gpt-5.6-sol",

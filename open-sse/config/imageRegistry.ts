@@ -169,10 +169,11 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     // 2026-09-10 the handler simply never built them, so `/v1/images/edits`
     // rejected the only route serving gpt-image-2 on this account.
     supportsImageEdit: true,
-    // Newest first. The GPT-6 ids were verified live on 2026-10-03 through the same
+    // Newest first. The GPT-6/6.1 ids were verified live on 2026-10-03 through the same
     // hosted `image_generation` tool (gpt-6-sol served by the account that owns it,
     // see imageAccountFailover.ts; gpt-6-luna by both). GPT-6 has no Terra tier.
     models: [
+      { id: "gpt-6.1-sol", name: "GPT 6.1 Sol (Codex Image)" },
       { id: "gpt-6-sol", name: "GPT 6 Sol (Codex Image)" },
       { id: "gpt-6-luna", name: "GPT 6 Luna (Codex Image)" },
       { id: "gpt-5.6-sol", name: "GPT 5.6 Sol (Codex Image)" },

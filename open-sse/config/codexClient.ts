@@ -35,7 +35,16 @@
 // Codex with a ChatGPT account", which reads exactly like a missing entitlement.
 // The manifest's `minimal_client_version` is the arbiter, not the error text.
 // Verified live: with CODEX_CLIENT_VERSION=0.156.1 both answer real completions.
-const DEFAULT_CODEX_CLIENT_VERSION = "0.156.1";
+// 2026-10-03: 0.156.1 -> 0.160.0 (current npm release). `gpt-6.1-sol` is in OpenAI's public
+// manifest since 2026-09-29 (`minimal_client_version: 0.153.0`) and the account owns it
+// (the Codex app uses it), yet BOTH accounts answered `The 'gpt-6.1-sol' model is not
+// supported when using Codex with a ChatGPT account` — byte-identical to the answer for
+// a model that does not exist — and the live `/backend-api/codex/models` list omitted it.
+// Declaring 0.160.0 made it appear in the live list and answer chat + image. The manifest's
+// `minimal_client_version` was NOT the arbiter this time (0.156.1 >= 0.153.0): the backend
+// gates a brand-new model on a newer client than the manifest says. Probe with
+// CODEX_CLIENT_VERSION first (config, no build), as for gpt-6-sol on 2026-09-23.
+const DEFAULT_CODEX_CLIENT_VERSION = "0.160.0";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";

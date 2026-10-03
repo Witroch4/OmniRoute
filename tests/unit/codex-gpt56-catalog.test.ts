@@ -15,6 +15,15 @@ test("Codex catalog exposes the GPT-5.6 lineup in configured priority order", ()
     "gpt-6-astra-high",
     "gpt-6-astra-medium",
     "gpt-6-astra-low",
+    // GPT-6.1 Sol is the newest Sol: it sits before gpt-6-sol so the family shortcut and the
+    // newest-member resolvers land on it.
+    "gpt-6.1-sol",
+    "gpt-6.1-sol-ultra",
+    "gpt-6.1-sol-max",
+    "gpt-6.1-sol-xhigh",
+    "gpt-6.1-sol-high",
+    "gpt-6.1-sol-medium",
+    "gpt-6.1-sol-low",
     "gpt-6-sol",
     "gpt-6-sol-ultra",
     "gpt-6-sol-max",
