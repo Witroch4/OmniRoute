@@ -20,6 +20,7 @@ import {
   extractImageEditInputFromJson,
   type ParsedImageEditImage,
 } from "@/lib/images/imageRouteModel";
+import { retryImageOnOtherAccounts } from "@/lib/images/imageAccountFailover";
 import { z } from "zod";
 
 // JSON edit body (Open WebUI / OpenAI-style). All fields optional — the prompt
@@ -281,20 +282,54 @@ async function postHandler(request: Request, context) {
       mimeType: image.mime,
     }));
 
-    const result = await handleBuiltInImageEdit({
-      provider: parsed.provider,
-      model: parsed.model,
-      providerConfig,
-      body: {
+    // `credentials` is narrowed here (present, not rate-limited); keep that type for
+    // every retry so a failover attempt cannot receive an unusable credential.
+    const firstCredentials = credentials;
+    const editWith = (attemptCredentials: typeof firstCredentials) =>
+      handleBuiltInImageEdit({
+        provider: parsed.provider,
+        model: parsed.model,
+        providerConfig,
+        body: {
+          model: resolvedModel,
+          prompt,
+          ...(size ? { size } : {}),
+          ...(responseFormat ? { response_format: responseFormat } : {}),
+        },
+        referenceImages,
+        credentials: attemptCredentials,
+        log,
+      });
+
+    let result = await editWith(firstCredentials);
+    let servedBy = firstCredentials;
+
+    // Same account failover as /v1/images/generations: a model only some accounts
+    // own (Codex Sol/Astra) answers 400 on the others.
+    if (isBuiltInImageEditFailure(result)) {
+      const failover = await retryImageOnOtherAccounts({
+        provider: parsed.provider,
         model: resolvedModel,
-        prompt,
-        ...(size ? { size } : {}),
-        ...(responseFormat ? { response_format: responseFormat } : {}),
-      },
-      referenceImages,
-      credentials,
-      log,
-    });
+        credentials: firstCredentials,
+        result,
+        getFailure: (r) =>
+          isBuiltInImageEditFailure(r) ? { status: r.status, error: r.error } : null,
+        pickNext: async (excludeConnectionIds) => {
+          const next = await getProviderCredentialsWithQuotaPreflight(
+            parsed.provider,
+            null,
+            allowedConnections,
+            resolvedModel,
+            { excludeConnectionIds }
+          );
+          return !next || next.allRateLimited ? null : next;
+        },
+        attempt: editWith,
+        log,
+      });
+      result = failover.result;
+      servedBy = failover.credentials;
+    }
 
     if (isBuiltInImageEditFailure(result)) {
       return jsonResponse(
@@ -304,7 +339,7 @@ async function postHandler(request: Request, context) {
     }
     // Same shape as the chatgpt-web branch above: the recovered-state reset takes
     // the credentials it was resolved from, not the provider id.
-    await clearRecoveredProviderState(credentials);
+    await clearRecoveredProviderState(servedBy);
     return jsonResponse(result.data);
   }
 

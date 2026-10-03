@@ -21,6 +21,7 @@ import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
 import { getAllCustomModels, resolveProxyForConnection } from "@/lib/localDb";
 import { resolveImageRouteModel } from "@/lib/images/imageRouteModel";
+import { retryImageOnOtherAccounts } from "@/lib/images/imageAccountFailover";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
@@ -204,34 +205,59 @@ async function postHandler(request, context) {
     }
   }
 
-  // Resolve proxy for the connection if credentials exist (#1904)
-  let proxyInfo = null;
-  if (credentials?.connectionId) {
-    try {
-      proxyInfo = await resolveProxyForConnection(credentials.connectionId);
-    } catch {
-      log.debug("PROXY", `Failed to resolve proxy for image provider: ${provider}`);
+  const generateWith = async (attemptCredentials: typeof credentials) => {
+    // Resolve proxy for the connection if credentials exist (#1904)
+    let proxyInfo = null;
+    if (attemptCredentials?.connectionId) {
+      try {
+        proxyInfo = await resolveProxyForConnection(attemptCredentials.connectionId);
+      } catch {
+        log.debug("PROXY", `Failed to resolve proxy for image provider: ${provider}`);
+      }
     }
-  }
 
-  const generateImage = () =>
-    handleImageGeneration({
-      body,
+    const generateImage = () =>
+      handleImageGeneration({
+        body,
+        credentials: attemptCredentials,
+        log,
+        ...(isCustomModel && { resolvedProvider: provider }),
+        signal: request.signal,
+        clientHeaders: publicBaseUrlHeaders(request.headers),
+      });
+
+    // Execute with proxy context when available, direct otherwise (#1904)
+    return attemptCredentials?.connectionId
+      ? runWithProxyContext(proxyInfo?.proxy || null, generateImage).catch((err: any) => ({
+          success: false,
+          status: err.statusCode || 500,
+          error: err.message,
+        }))
+      : generateImage();
+  };
+
+  let result = await generateWith(credentials);
+
+  // A model only some accounts own (Codex Sol/Astra) answers 400 on the others;
+  // the chat path already re-serves on the next account, so do the same here.
+  if (credentials?.connectionId && !result.success) {
+    const failover = await retryImageOnOtherAccounts({
+      provider,
+      model: body.model,
       credentials,
+      result,
+      getFailure: (r) =>
+        r.success ? null : { status: (r as any).status, error: (r as any).error },
+      pickNext: (excludeConnectionIds) =>
+        getProviderCredentialsWithQuotaPreflight(provider, null, null, null, {
+          excludeConnectionIds,
+        }),
+      attempt: generateWith,
       log,
-      ...(isCustomModel && { resolvedProvider: provider }),
-      signal: request.signal,
-      clientHeaders: publicBaseUrlHeaders(request.headers),
     });
-
-  // Execute with proxy context when available, direct otherwise (#1904)
-  const result = await (credentials?.connectionId
-    ? runWithProxyContext(proxyInfo?.proxy || null, generateImage).catch((err: any) => ({
-        success: false,
-        status: err.statusCode || 500,
-        error: err.message,
-      }))
-    : generateImage());
+    credentials = failover.credentials;
+    result = failover.result;
+  }
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);
