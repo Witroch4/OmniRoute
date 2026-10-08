@@ -14,6 +14,7 @@ process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "long-context-wiring-
 
 const core = await import("../../src/lib/db/core.ts");
 const analytics = await import("../../src/lib/db/usageAnalytics.ts");
+const dbSettings = await import("../../src/lib/db/databaseSettings.ts");
 const limits = await import("../../src/lib/usage/apiKeyUsageLimits.ts");
 const stats = await import("../../src/lib/usage/usageStats.ts");
 const { computeCostFromPricing } = await import("../../src/lib/usage/costCalculator.ts");
@@ -119,6 +120,39 @@ test("usage stats price the recent window per request, not on the sum", async ()
 
   const result = await stats.getUsageStats();
   near(result.totalCost, perRequestCost(requests), "stats total");
+});
+
+test("usage stats with aggregation on: the UNION runs and rolled-up days stay at stored cost", async () => {
+  const current = dbSettings.getUserDatabaseSettings();
+  dbSettings.updateDatabaseSettings({
+    aggregation: { ...current.aggregation, enabled: true, rawDataRetentionDays: 7 },
+  });
+  try {
+    const now = new Date().toISOString();
+    // A rolled-up day far past the raw-data cutoff: 5M prompt tokens as ONE row.
+    core
+      .getDbInstance()
+      .prepare(
+        `INSERT INTO daily_usage_summary (date, provider, model, total_input_tokens,
+           total_output_tokens, total_requests, total_cost)
+         VALUES ('2026-05-20', 'claude', 'claude-haiku-5-5', 5000000, 200000, 2500, 0.37)`
+      )
+      .run();
+    const requests = [
+      ...Array.from({ length: 30 }, () => ({ ...SMALL, at: now })),
+      { ...LONG, at: now },
+    ];
+    for (const r of requests) insert("claude", "claude-haiku-5-5", r);
+
+    const result = await stats.getUsageStats();
+    near(
+      result.totalCost,
+      perRequestCost(requests) + 0.37,
+      "raw per request + stored summary cost"
+    );
+  } finally {
+    dbSettings.updateDatabaseSettings({ aggregation: { ...current.aggregation } });
+  }
 });
 
 test("unified analytics source: day totals from daily_usage_summary are never 'long'", () => {
