@@ -185,6 +185,7 @@ export async function computeAnalytics(
       provider: entry.provider,
       model: entry.model,
       flatRateAsZero: true,
+      requestScoped: true, // history entries are single requests
     });
 
     // Summary

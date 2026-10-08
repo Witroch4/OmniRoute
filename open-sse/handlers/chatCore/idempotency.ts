@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { getIdempotencyKey, checkIdempotency } from "@/lib/idempotencyLayer";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import {
   cloneShallowForModelEcho,
@@ -102,7 +102,7 @@ export async function checkIdempotencyCache({
     // must be priced at the BILLED model's rates, or a client comparing it against
     // the requested model's published price catches the served (cheaper) rate.
     const idempotentCost = idempotentUsage
-      ? await calculateCost(
+      ? await calculateRequestCost(
           headerProvider || provider,
           headerModel || model,
           idempotentUsage as Record<string, number>,

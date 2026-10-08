@@ -3,7 +3,7 @@ import { getApiKeys } from "@/lib/db/apiKeys";
 import { getDbInstance } from "@/lib/db/core";
 import { getAllProviderLimitsCache, getProviderLimitsCache } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStart } from "@/lib/db/quotaResetEvents";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const RECORDED_COST_MATCH_TOLERANCE_MS = 30_000;
@@ -427,7 +427,7 @@ async function getUsageRowCostUsd(
   );
   if (recordedCost) return Math.max(0, toNumber(recordedCost.cost));
 
-  return calculateCost(
+  return calculateRequestCost(
     row.provider,
     row.model,
     {

@@ -200,7 +200,7 @@ import { handleBypassRequest } from "../utils/bypassHandler.ts";
 import { saveRequestUsage, trackPendingRequest, appendRequestLog } from "@/lib/usageDb";
 import { finalizePendingScope, updatePendingScope } from "@/lib/usage/pendingRequestScope";
 import { recordCost } from "@/domain/costRules";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 import {
   applyFamilyMultiplier,
   getApiKeyFamilyMultiplier,
@@ -4044,7 +4044,9 @@ export async function handleChatCore({
         ? translatedResponse.usage
         : null);
     const estimatedCost = responseUsage
-      ? await calculateCost(provider, model, responseUsage, { serviceTier: effectiveServiceTier })
+      ? await calculateRequestCost(provider, model, responseUsage, {
+          serviceTier: effectiveServiceTier,
+        })
       : 0;
     // Confidentiality (review round 1): on a budget redirect, X-OmniRoute-Response-Cost
     // must reflect the BILLED (client-facing) model's rates, not the served model's —
@@ -4063,7 +4065,7 @@ export async function handleChatCore({
     const billedModelForCost = isBudgetRedirect ? (billedModel as string) : model;
     const normalizedBaseCost =
       responseUsage && isBudgetRedirect
-        ? await calculateCost(
+        ? await calculateRequestCost(
             // No `as string` cast needed: `provider` is already used unconditionally as a
             // plain string just above (line ~4026) — it is always resolved by this point in
             // the success path. `billedProvider` is set in lockstep with `billedModel` (see
@@ -4494,7 +4496,7 @@ export async function handleChatCore({
       model,
       streamUsage,
       serviceTier: effectiveServiceTier,
-      calculateCost,
+      calculateCost: calculateRequestCost,
       recordCost,
       billedProvider,
       billedModel,
@@ -4512,7 +4514,7 @@ export async function handleChatCore({
       streamUsage,
       streamStatus: normalizedStreamStatus,
       serviceTier: effectiveServiceTier,
-      calculateCost,
+      calculateCost: calculateRequestCost,
       log,
     });
     // === /Quota Share POST-hook streaming ===

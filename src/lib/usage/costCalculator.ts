@@ -345,6 +345,21 @@ export async function calculateCost(
   }
 }
 
+/**
+ * `calculateCost` for the tokens of exactly ONE request (the usage its own response
+ * reported). The prompt size of that request selects the long-context tier. Use this
+ * everywhere a single request is priced as it completes; never for token sums — those
+ * go through `calculateCost` with the `lc*` split from `longContextSumColumns`.
+ */
+export function calculateRequestCost(
+  provider: string,
+  model: string,
+  tokens: Record<string, number | undefined> | null | undefined,
+  options: CostCalculationOptions = {}
+): Promise<number> {
+  return calculateCost(provider, model, tokens, { ...options, requestScoped: true });
+}
+
 type ModalPricing = Record<string, unknown>;
 
 /** Per-image cost: flat per-image × n. 0 when pricing/usage absent. */

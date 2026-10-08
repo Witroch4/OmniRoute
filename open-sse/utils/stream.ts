@@ -19,7 +19,7 @@ import {
   formatSSE,
   unwrapGeminiChunk,
 } from "./streamHelpers.ts";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 import { buildOmniRouteSseMetadataComment } from "@/domain/omnirouteResponseMeta";
 import {
   createStructuredSSECollector,
@@ -988,7 +988,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     controller: TransformStreamDefaultController,
     finalUsage: UsageTokenRecord | Record<string, unknown> | null | undefined
   ) => {
-    const costUsd = finalUsage ? await calculateCost(provider, model, finalUsage) : 0;
+    const costUsd = finalUsage ? await calculateRequestCost(provider, model, finalUsage) : 0;
     const comment = buildOmniRouteSseMetadataComment({
       provider,
       model,

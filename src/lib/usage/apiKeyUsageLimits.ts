@@ -2,6 +2,7 @@ import { getDbInstance } from "@/lib/db/core";
 import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
 import { calculateCost } from "./costCalculator";
+import { longContextSumColumns, readLongContextColumns } from "./longContextSql";
 import {
   applyFamilyMultiplier,
   loadFamilyMultiplierRules,
@@ -54,6 +55,16 @@ export interface UsageCostRow {
   cacheReadTokens: number | null;
   cacheCreationTokens: number | null;
   reasoningTokens: number | null;
+  /**
+   * Portion of the token sums above that came from long-context requests, selected with
+   * `longContextSumColumns()`. Absent means "none", i.e. base pricing — never infer the
+   * tier from the sums themselves.
+   */
+  lcPromptTokens?: number | null;
+  lcCompletionTokens?: number | null;
+  lcCacheReadTokens?: number | null;
+  lcCacheCreationTokens?: number | null;
+  lcReasoningTokens?: number | null;
 }
 
 interface WeeklyResetCandidate {
@@ -510,6 +521,7 @@ async function sumUsageCostRows(
         cacheRead: toNumber(row.cacheReadTokens),
         cacheCreation: toNumber(row.cacheCreationTokens),
         reasoning: toNumber(row.reasoningTokens),
+        ...readLongContextColumns(row as unknown as Record<string, unknown>),
       },
       { provider, model, serviceTier: row.serviceTier || "standard" }
     );
@@ -569,7 +581,8 @@ export async function getApiKeyUsdSpendSince(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumColumns()}
       FROM usage_history
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso
@@ -653,7 +666,8 @@ export async function getApiKeyFamilyRealSpendSince(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumColumns()}
       FROM usage_history
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso

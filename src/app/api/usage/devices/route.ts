@@ -4,6 +4,7 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getDbInstance } from "@/lib/db/core";
 import { getTailnetDevicesByIp } from "@/lib/tailnet/tailnetDevices";
 import { priceUsageRows, type UsageCostRow } from "@/lib/usage/apiKeyUsageLimits";
+import { longContextSumColumns } from "@/lib/usage/longContextSql";
 import * as log from "@/sse/utils/logger";
 
 /**
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
                 COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
                 COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
                 COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+                ${longContextSumColumns()},
                 MAX(timestamp) as lastSeen
            FROM usage_history
           WHERE timestamp >= @since AND timestamp < @until

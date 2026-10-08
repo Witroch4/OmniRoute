@@ -1,5 +1,5 @@
 import { generateSignature, getCachedResponse, isCacheableForRead } from "@/lib/semanticCache";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 import { trackPendingRequest } from "@/lib/usageDb";
 import { synthesizeOpenAiSseFromJson } from "../../utils/jsonToSse.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
@@ -76,7 +76,7 @@ export async function checkSemanticCache({
       // redirect, or a client comparing it against the requested model's published price
       // catches the served (cheaper) rate — the same tell, just on the savings figure.
       const cachedCost = cachedUsage
-        ? await calculateCost(
+        ? await calculateRequestCost(
             headerProvider || provider,
             headerModel || model,
             cachedUsage as Record<string, number>,

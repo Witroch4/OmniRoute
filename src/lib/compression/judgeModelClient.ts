@@ -5,7 +5,7 @@ import type {
   ModelCallResult,
   ModelClient,
 } from "@omniroute/open-sse/services/compression/eval/types";
-import { calculateCost } from "@/lib/usage/costCalculator";
+import { calculateRequestCost } from "@/lib/usage/costCalculator";
 
 /**
  * Cost-aware judge ModelClient for the compression playground's fidelity verify.
@@ -33,7 +33,7 @@ export function createPricedJudgeClient(
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       const text = json.choices?.[0]?.message?.content ?? "";
-      const usdCost = await calculateCost(provider, model, {
+      const usdCost = await calculateRequestCost(provider, model, {
         prompt_tokens: json.usage?.prompt_tokens,
         completion_tokens: json.usage?.completion_tokens,
       });
