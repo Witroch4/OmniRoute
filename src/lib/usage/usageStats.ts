@@ -12,6 +12,15 @@ import { getApiKeys } from "../db/apiKeys";
 import { getPendingRequests } from "./usageHistory";
 import { getAccountDisplayName } from "@/lib/display/names";
 import { calculateCost } from "./costCalculator";
+import {
+  LONG_CONTEXT_ROW_ALIASES,
+  LONG_CONTEXT_ZERO_ROW_COLUMNS,
+  longContextRowColumns,
+  longContextSumColumns,
+  longContextSumOfRowColumns,
+  readLongContextColumns,
+  readLongContextRowColumns,
+} from "./longContextSql";
 import { getRawDataCutoffDate, isAggregationEnabled } from "./aggregateHistory";
 
 type JsonRecord = Record<string, unknown>;
@@ -79,7 +88,8 @@ function buildUsageSourceSql(aggregationEnabled: boolean) {
         COALESCE(tokens_reasoning, 0) as cost_tokens_reasoning,
         0.0 as stored_cost,
         COALESCE(service_tier, 'standard') as service_tier,
-        1 as request_count
+        1 as request_count,
+        ${longContextRowColumns()}
       FROM usage_history
     `;
   }
@@ -104,7 +114,8 @@ function buildUsageSourceSql(aggregationEnabled: boolean) {
       COALESCE(tokens_reasoning, 0) as cost_tokens_reasoning,
       0.0 as stored_cost,
       COALESCE(service_tier, 'standard') as service_tier,
-      1 as request_count
+      1 as request_count,
+      ${longContextRowColumns()}
     FROM usage_history
     WHERE DATE(timestamp) >= ?
 
@@ -129,7 +140,8 @@ function buildUsageSourceSql(aggregationEnabled: boolean) {
       0 as cost_tokens_reasoning,
       COALESCE(total_cost, 0.0) as stored_cost,
       'standard' as service_tier,
-      COALESCE(total_requests, 0) as request_count
+      COALESCE(total_requests, 0) as request_count,
+      ${LONG_CONTEXT_ZERO_ROW_COLUMNS}
     FROM daily_usage_summary
     WHERE date < ?
   `;
@@ -148,6 +160,7 @@ const AGGREGATE_FIELDS = `
   COALESCE(SUM(cost_tokens_cache_creation), 0) as cost_tokens_cache_creation,
   COALESCE(SUM(cost_tokens_reasoning), 0) as cost_tokens_reasoning,
   COALESCE(SUM(stored_cost), 0.0) as stored_cost,
+  ${longContextSumOfRowColumns("row")},
   MAX(timestamp) as last_used
 `;
 
@@ -165,6 +178,7 @@ async function calculateAggregateCost(row: JsonRecord): Promise<number> {
       cacheRead: toNumber(row.cost_tokens_cache_read ?? row.tokens_cache_read),
       cacheCreation: toNumber(row.cost_tokens_cache_creation ?? row.tokens_cache_creation),
       reasoning: toNumber(row.cost_tokens_reasoning ?? row.tokens_reasoning),
+      ...readLongContextRowColumns(row),
     },
     { provider, serviceTier, flatRateAsZero: true }
   );
@@ -245,6 +259,7 @@ export async function getConnectionSpendUsdSinceAdded(
           COALESCE(SUM(tokens_cache_read), 0) AS cacheRead,
           COALESCE(SUM(tokens_cache_creation), 0) AS cacheCreation,
           COALESCE(SUM(tokens_reasoning), 0) AS reasoning,
+          ${longContextSumColumns()},
           COUNT(*) AS requests
        FROM usage_history
        WHERE connection_id = ? AND provider = ? AND success = 1
@@ -271,6 +286,7 @@ export async function getConnectionSpendUsdSinceAdded(
       cacheRead: Number(row.cacheRead ?? 0),
       cacheCreation: Number(row.cacheCreation ?? 0),
       reasoning: Number(row.reasoning ?? 0),
+      ...readLongContextColumns(row as Record<string, unknown>),
     };
     costUsd += await calculateCost(provider, model, tokens, {
       provider,
@@ -556,7 +572,8 @@ export async function getUsageStats() {
           COALESCE(SUM(tokens_output), 0) as tokens_output,
           COALESCE(SUM(tokens_cache_read), 0) as tokens_cache_read,
           COALESCE(SUM(tokens_cache_creation), 0) as tokens_cache_creation,
-          COALESCE(SUM(tokens_reasoning), 0) as tokens_reasoning
+          COALESCE(SUM(tokens_reasoning), 0) as tokens_reasoning,
+          ${longContextSumColumns("", undefined, LONG_CONTEXT_ROW_ALIASES)}
         FROM usage_history
         WHERE timestamp >= ? AND timestamp <= ?
         GROUP BY minute, provider, model, service_tier

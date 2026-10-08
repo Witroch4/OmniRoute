@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { readLongContextColumns } from "@/lib/usage/longContextSql";
 import { getApiKeyById, getApiKeys } from "@/lib/db/apiKeys";
 import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import {
@@ -263,6 +264,9 @@ function computeUsageRowCost(
       cacheRead: toNumber(row.cacheReadTokens),
       cacheCreation: toNumber(row.cacheCreationTokens),
       reasoning: toNumber(row.reasoningTokens),
+      // Share of these sums that came from long-context requests (per-request SQL
+      // buckets); the tier is never inferred from the sums themselves.
+      ...readLongContextColumns(row),
     },
     {
       provider,

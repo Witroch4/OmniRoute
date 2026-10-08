@@ -1,4 +1,10 @@
 import { getDbInstance } from "./core";
+import {
+  CALL_LOGS_TOKEN_COLUMNS,
+  longContextSumColumns,
+  readLongContextColumns,
+} from "@/lib/usage/longContextSql";
+import type { LongContextTokens } from "@/lib/usage/costCalculator";
 
 export type ComboForecastUsageRow = {
   comboName: string;
@@ -18,6 +24,8 @@ export type ComboForecastUsageRow = {
   totalTokens: number;
   avgLatencyMs: number;
   lastUsedAt: string | null;
+  /** Portion of the token sums that came from long-context requests (see longContextSql). */
+  longContext: LongContextTokens;
 };
 
 type ComboForecastUsageSqlRow = {
@@ -86,7 +94,8 @@ export function getComboForecastUsageRows(opts: {
          COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
          COALESCE(SUM(tokens_in), 0) + COALESCE(SUM(tokens_out), 0) as totalTokens,
          COALESCE(AVG(duration), 0) as avgLatencyMs,
-         MAX(timestamp) as lastUsedAt
+         MAX(timestamp) as lastUsedAt,
+         ${longContextSumColumns("", CALL_LOGS_TOKEN_COLUMNS)}
        FROM call_logs
        WHERE ${conditions.join(" AND ")}
        GROUP BY combo_name, executionKey, combo_step_id, provider, model, requested_model, connection_id
@@ -115,5 +124,6 @@ export function getComboForecastUsageRows(opts: {
     totalTokens: toNumber(row.totalTokens),
     avgLatencyMs: toNumber(row.avgLatencyMs),
     lastUsedAt: typeof row.lastUsedAt === "string" ? row.lastUsedAt : null,
+    longContext: readLongContextColumns(row as Record<string, unknown>),
   }));
 }

@@ -43,7 +43,11 @@ test("a request exactly at the threshold bills at base rates; one token over bil
   assert.equal(isLongContextPrompt(over), true);
 
   near(computeCostFromPricing(TIERED, at, { requestScoped: true }), T * 0.1e-6 + 0.5, "at");
-  near(computeCostFromPricing(TIERED, over, { requestScoped: true }), (T + 1) * 0.5e-6 + 2.5, "over");
+  near(
+    computeCostFromPricing(TIERED, over, { requestScoped: true }),
+    (T + 1) * 0.5e-6 + 2.5,
+    "over"
+  );
 });
 
 test("the whole long request is repriced — input, output, cache read and cache write", () => {

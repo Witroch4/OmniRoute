@@ -106,6 +106,7 @@ async function attachCosts(rows: ComboForecastUsageRow[]): Promise<CostedUsageRo
         cacheRead: row.cacheReadTokens,
         cacheCreation: row.cacheCreationTokens,
         reasoning: row.reasoningTokens,
+        ...row.longContext,
       },
       { provider: row.provider, model: row.model, serviceTier: "standard" }
     );

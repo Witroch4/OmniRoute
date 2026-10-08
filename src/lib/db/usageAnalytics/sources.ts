@@ -4,7 +4,13 @@
  * Builds the UNION subqueries that merge recent `usage_history` rows with older
  * `daily_usage_summary` aggregates. These functions are pure (no DB calls, no imports)
  * and are consumed by the query functions in the parent `usageAnalytics.ts` module.
+ *
+ * Every branch also exposes the per-row `lc_*` long-context columns (see
+ * `usage/longContextSql`): raw rows compute them from their own prompt size, summary
+ * rows are always zero because their token columns are day totals, not one request.
  */
+
+import { LONG_CONTEXT_ZERO_ROW_COLUMNS, longContextRowColumns } from "../../usage/longContextSql";
 
 export type AnalyticsParams = Record<string, string>;
 
@@ -107,7 +113,8 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           api_key_id,
           api_key_name,
           billed_provider,
-          billed_model
+          billed_model,
+          ${longContextRowColumns()}
         FROM usage_history
         ${rawWhere}
         UNION ALL
@@ -127,7 +134,8 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           NULL as api_key_id,
           NULL as api_key_name,
           NULL as billed_provider,
-          NULL as billed_model
+          NULL as billed_model,
+          ${LONG_CONTEXT_ZERO_ROW_COLUMNS}
         FROM daily_usage_summary
         ${aggWhere}
        )`
@@ -137,7 +145,8 @@ export function buildUnifiedSource(opts: BuildUnifiedSourceOptions): UnifiedSour
           tokens_cache_read, tokens_cache_creation, tokens_reasoning,
           service_tier, success, latency_ms,
           connection_id, api_key_id, api_key_name,
-          billed_provider, billed_model
+          billed_provider, billed_model,
+          ${longContextRowColumns()}
         FROM usage_history
         ${rawWhere}
        )`;
@@ -186,7 +195,8 @@ export function buildPresetUnifiedSource(opts: BuildUnifiedSourceOptions): Unifi
     ? `(
         SELECT timestamp, provider, model, service_tier,
           tokens_input, tokens_output,
-          tokens_cache_read, tokens_cache_creation, tokens_reasoning
+          tokens_cache_read, tokens_cache_creation, tokens_reasoning,
+          ${longContextRowColumns()}
         FROM usage_history
         ${presetRawWhere}
         UNION ALL
@@ -198,13 +208,15 @@ export function buildPresetUnifiedSource(opts: BuildUnifiedSourceOptions): Unifi
           total_output_tokens as tokens_output,
           0 as tokens_cache_read,
           0 as tokens_cache_creation,
-          0 as tokens_reasoning
+          0 as tokens_reasoning,
+          ${LONG_CONTEXT_ZERO_ROW_COLUMNS}
         FROM daily_usage_summary
         ${presetAggWhere}
       )`
     : `(SELECT timestamp, provider, model, service_tier,
           tokens_input, tokens_output,
-          tokens_cache_read, tokens_cache_creation, tokens_reasoning
+          tokens_cache_read, tokens_cache_creation, tokens_reasoning,
+          ${longContextRowColumns()}
         FROM usage_history
         ${presetRawWhere}
       )`;

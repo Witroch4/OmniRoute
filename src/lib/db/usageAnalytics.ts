@@ -10,6 +10,7 @@
  */
 
 import { getDbInstance } from "./core";
+import { longContextSumColumns, longContextSumOfRowColumns } from "../usage/longContextSql";
 import type { AnalyticsParams } from "./usageAnalytics/sources";
 
 export { buildUnifiedSource, buildPresetUnifiedSource } from "./usageAnalytics/sources";
@@ -144,7 +145,8 @@ export function getDailyCostRows(unifiedSource: string, params: AnalyticsParams)
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumOfRowColumns()}
       FROM ${unifiedSource} AS _u
       GROUP BY DATE(timestamp), LOWER(provider), LOWER(model), serviceTier
       ORDER BY date ASC
@@ -253,6 +255,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumOfRowColumns()},
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
@@ -309,7 +312,8 @@ export function getProviderCostRows(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumOfRowColumns()}
       FROM ${unifiedSource} AS _u
       GROUP BY LOWER(provider), LOWER(model), serviceTier, LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, '')), NULLIF(api_key_id, '')
     `
@@ -403,7 +407,8 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
         COALESCE(SUM(usage_history.tokens_output), 0) as completionTokens,
         COALESCE(SUM(usage_history.tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(usage_history.tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(usage_history.tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(usage_history.tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumColumns("usage_history.")}
       FROM usage_history
       LEFT JOIN provider_connections c ON c.id = usage_history.connection_id
       ${whereClause}
@@ -506,6 +511,7 @@ export function getApiKeyUsageRows(
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumColumns()},
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
       FROM usage_history
       ${apiKeyWhereClause}
@@ -560,6 +566,7 @@ export function getServiceTierUsageRows(
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumOfRowColumns()},
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
       FROM ${unifiedSource} AS _u
       GROUP BY serviceTier, LOWER(provider), LOWER(model), LOWER(NULLIF(billed_model, '')), LOWER(NULLIF(billed_provider, '')), NULLIF(api_key_id, '')
@@ -679,7 +686,8 @@ export function getPresetCostModelRows(
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumOfRowColumns()}
       FROM ${presetUnifiedSource} AS _pu
       GROUP BY LOWER(model), LOWER(provider), serviceTier
     `
@@ -747,6 +755,7 @@ export function getEndpointUsageRows(params: EndpointUsageParams = {}): Endpoint
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        ${longContextSumColumns()},
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
