@@ -15,13 +15,21 @@ import {
 import { MAX_TIMER_TIMEOUT_MS } from "@/shared/utils/runtimeTimeouts";
 
 
+const pricingRatesShape = {
+  input: z.number().min(0).optional(),
+  output: z.number().min(0).optional(),
+  cached: z.number().min(0).optional(),
+  reasoning: z.number().min(0).optional(),
+  cache_creation: z.number().min(0).optional(),
+};
+
 export const pricingFieldsSchema = z
   .object({
-    input: z.number().min(0).optional(),
-    output: z.number().min(0).optional(),
-    cached: z.number().min(0).optional(),
-    reasoning: z.number().min(0).optional(),
-    cache_creation: z.number().min(0).optional(),
+    ...pricingRatesShape,
+    // Rates for requests whose prompt exceeds the long-context threshold. The pricing
+    // editor loads the merged catalog and posts it back whole, so a row that carries
+    // this block must round-trip instead of failing the strict key check.
+    long_context: z.object(pricingRatesShape).strict().optional(),
   })
   .strict();
 

@@ -35,6 +35,35 @@ export type CostCalculationOptions = {
    * `provider` to be set.
    */
   flatRateAsZero?: boolean;
+  /**
+   * Asserts that `tokens` belong to exactly ONE request, so the prompt size of that
+   * request decides the long-context tier (`isLongContextPrompt`). Never set it on
+   * token SUMS: a week of small requests adds up past the threshold and would be
+   * billed at the long-context rate. Grouped callers instead pass the pre-split
+   * `lc*` fields (see `LongContextTokens`) built from per-request SQL buckets.
+   */
+  requestScoped?: boolean;
+};
+
+/**
+ * Prompt size above which a model with a `long_context` pricing block (Claude Haiku 5.5:
+ * "prompts over 100,000 tokens") bills the WHOLE request — input, output, cache — at the
+ * higher rates. Prompt size counts cache reads and writes, matching the extractors'
+ * `prompt_tokens`. SQL buckets (`longContextSumColumns`) use the same constant.
+ */
+export const LONG_CONTEXT_PROMPT_THRESHOLD_TOKENS = 100_000;
+
+/**
+ * Portion of a token record that came from requests over the threshold, in the same
+ * vocabulary as the record's own totals (a subset of them, never an addition).
+ * Absent or zero means "no long-context requests in this bucket", i.e. base pricing.
+ */
+export type LongContextTokens = {
+  lcInput?: number;
+  lcOutput?: number;
+  lcCacheRead?: number;
+  lcCacheCreation?: number;
+  lcReasoning?: number;
 };
 
 /**
@@ -124,6 +153,120 @@ export function getCodexFastCostMultiplier(
  * Compute cost synchronously from a pre-fetched pricing record.
  * Use this when pricing has already been loaded (e.g. in batch analytics).
  */
+type PriceSet = {
+  input: number;
+  cached: number;
+  output: number;
+  reasoning: number;
+  cacheCreation: number;
+};
+
+type TokenSet = {
+  input: number;
+  cacheRead: number;
+  cacheCreation: number;
+  output: number;
+  reasoning: number;
+};
+
+function readPriceSet(pricing: Record<string, unknown>): PriceSet {
+  const input = toNumber(pricing.input, 0);
+  const output = toNumber(pricing.output, 0);
+  return {
+    input,
+    cached: toNumber(pricing.cached, input),
+    output,
+    reasoning: toNumber(pricing.reasoning, output),
+    cacheCreation: toNumber(pricing.cache_creation, input),
+  };
+}
+
+/**
+ * The model's long-context rates, or null when it has none. A malformed block (not an
+ * object, or without an input/output rate) is ignored rather than guessed at: the
+ * request then bills at base rates, the same as before the tier existed.
+ */
+function readLongContextPriceSet(pricing: Record<string, unknown>): PriceSet | null {
+  const tier = pricing.long_context;
+  if (!tier || typeof tier !== "object" || Array.isArray(tier)) return null;
+  const record = tier as Record<string, unknown>;
+  if (toNumber(record.input, -1) < 0 || toNumber(record.output, -1) < 0) return null;
+  return readPriceSet(record);
+}
+
+function readTokenSet(tokens: Record<string, number | undefined>): TokenSet {
+  return {
+    input: tokens.input ?? tokens.prompt_tokens ?? tokens.input_tokens ?? 0,
+    cacheRead: tokens.cacheRead ?? tokens.cached_tokens ?? tokens.cache_read_input_tokens ?? 0,
+    cacheCreation: tokens.cacheCreation ?? tokens.cache_creation_input_tokens ?? 0,
+    output: tokens.output ?? tokens.completion_tokens ?? tokens.output_tokens ?? 0,
+    reasoning: tokens.reasoning ?? tokens.reasoning_tokens ?? 0,
+  };
+}
+
+/**
+ * True when ONE request's prompt crosses the long-context threshold. `input` already
+ * includes cache reads and writes (the extractors' `prompt_tokens`), so it is the
+ * prompt size; do not add the cache fields on top.
+ */
+export function isLongContextPrompt(
+  tokens: Record<string, number | undefined> | null | undefined
+): boolean {
+  if (!tokens) return false;
+  return readTokenSet(tokens).input > LONG_CONTEXT_PROMPT_THRESHOLD_TOKENS;
+}
+
+function priceTokenSet(prices: PriceSet, t: TokenSet): number {
+  // prompt_tokens from extractors already includes cache_read + cache_creation,
+  // so we must subtract BOTH cache types to avoid pricing cache at the full
+  // input rate in addition to their dedicated cache_* rates below.
+  const nonCachedInput = Math.max(0, t.input - t.cacheRead - t.cacheCreation);
+  let cost = nonCachedInput * (prices.input / 1_000_000);
+  if (t.cacheRead > 0) cost += t.cacheRead * (prices.cached / 1_000_000);
+  cost += t.output * (prices.output / 1_000_000);
+  if (t.reasoning > 0) cost += t.reasoning * (prices.reasoning / 1_000_000);
+  if (t.cacheCreation > 0) cost += t.cacheCreation * (prices.cacheCreation / 1_000_000);
+  return cost;
+}
+
+/**
+ * Split `total` into the part that came from long-context requests and the rest.
+ * Request-scoped records are all-or-nothing on their own prompt size; grouped records
+ * carry the split computed per request in SQL. The long part is clamped to the total
+ * so a bad bucket can never bill more tokens than were counted.
+ */
+function splitLongContext(
+  tokens: Record<string, number | undefined>,
+  total: TokenSet,
+  requestScoped: boolean
+): { base: TokenSet; long: TokenSet } {
+  const zero: TokenSet = { input: 0, cacheRead: 0, cacheCreation: 0, output: 0, reasoning: 0 };
+  if (requestScoped) {
+    return total.input > LONG_CONTEXT_PROMPT_THRESHOLD_TOKENS
+      ? { base: zero, long: total }
+      : { base: total, long: zero };
+  }
+  const clamp = (value: number | undefined, max: number) =>
+    Math.min(max, Math.max(0, toNumber(value, 0)));
+  const long: TokenSet = {
+    input: clamp(tokens.lcInput, total.input),
+    cacheRead: clamp(tokens.lcCacheRead, total.cacheRead),
+    cacheCreation: clamp(tokens.lcCacheCreation, total.cacheCreation),
+    output: clamp(tokens.lcOutput, total.output),
+    reasoning: clamp(tokens.lcReasoning, total.reasoning),
+  };
+  return {
+    long,
+    base: {
+      input: total.input - long.input,
+      cacheRead: total.cacheRead - long.cacheRead,
+      cacheCreation: total.cacheCreation - long.cacheCreation,
+      output: total.output - long.output,
+      reasoning: total.reasoning - long.reasoning,
+    },
+  };
+}
+
 export function computeCostFromPricing(
   pricing: Record<string, unknown> | null | undefined,
   tokens: Record<string, number | undefined> | null | undefined,
@@ -139,32 +282,17 @@ export function computeCostFromPricing(
   // per-token pricing rows exist only for estimation, so display surfaces opt in
   // to show $0 instead of an inflated estimate (#5552).
   if (options.flatRateAsZero && isFlatRateProvider(options.provider)) return 0;
-  const inputPrice = toNumber(pricing.input, 0);
-  const cachedPrice = toNumber(pricing.cached, inputPrice);
-  const outputPrice = toNumber(pricing.output, 0);
-  const reasoningPrice = toNumber(pricing.reasoning, outputPrice);
-  const cacheCreationPrice = toNumber(pricing.cache_creation, inputPrice);
 
-  let cost = 0;
-  const inputTokens = tokens.input ?? tokens.prompt_tokens ?? tokens.input_tokens ?? 0;
-  const cachedTokens =
-    tokens.cacheRead ?? tokens.cached_tokens ?? tokens.cache_read_input_tokens ?? 0;
-  const cacheCreationTokens = tokens.cacheCreation ?? tokens.cache_creation_input_tokens ?? 0;
+  const total = readTokenSet(tokens);
+  const longPrices = readLongContextPriceSet(pricing);
 
-  // prompt_tokens from extractors already includes cache_read + cache_creation,
-  // so we must subtract BOTH cache types to avoid pricing cache at the full
-  // input rate in addition to their dedicated cache_* rates below.
-  const nonCachedInput = Math.max(0, inputTokens - cachedTokens - cacheCreationTokens);
-  cost += nonCachedInput * (inputPrice / 1_000_000);
-  if (cachedTokens > 0) cost += cachedTokens * (cachedPrice / 1_000_000);
-
-  const outputTokens = tokens.output ?? tokens.completion_tokens ?? tokens.output_tokens ?? 0;
-  cost += outputTokens * (outputPrice / 1_000_000);
-
-  const reasoningTokens = tokens.reasoning ?? tokens.reasoning_tokens ?? 0;
-  if (reasoningTokens > 0) cost += reasoningTokens * (reasoningPrice / 1_000_000);
-
-  if (cacheCreationTokens > 0) cost += cacheCreationTokens * (cacheCreationPrice / 1_000_000);
+  let cost: number;
+  if (longPrices) {
+    const { base, long } = splitLongContext(tokens, total, options.requestScoped === true);
+    cost = priceTokenSet(readPriceSet(pricing), base) + priceTokenSet(longPrices, long);
+  } else {
+    cost = priceTokenSet(readPriceSet(pricing), total);
+  }
 
   return cost * getCodexFastCostMultiplier(options.provider, options.model, options.serviceTier);
 }
