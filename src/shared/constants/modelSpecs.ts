@@ -346,6 +346,21 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     aliases: ["claude-sonnet-4.5"],
   },
 
+  // ── Claude Haiku 5.5 ────────────────────────────────────────────
+  "claude-haiku-5-5": {
+    // 1M context, 128K max output. Adaptive thinking (effort-steered); non-default
+    // temperature/top_p/top_k return 400.
+    maxOutputTokens: 128000,
+    contextWindow: 1000000,
+    defaultThinkingBudget: 32000,
+    thinkingBudgetCap: 120000,
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+    adaptiveThinkingOnly: true,
+    aliases: BEDROCK_CLAUDE_ALIASES("claude-haiku-5-5"),
+  },
+
   // ── Claude Haiku 4.5 ────────────────────────────────────────────
   "claude-haiku-4-5-20251001": {
     maxOutputTokens: 64000,

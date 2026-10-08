@@ -101,6 +101,17 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 15.0,
       cache_creation: 3.75,
     },
+    // Haiku 5.5: $0.10 / $0.50 per MTok for prompts up to 100K tokens (cache read
+    // $0.01, 5m write $0.125). Above 100K the list price is $0.50 / $2.50 — the
+    // pricing schema has no prompt-size tiers, so only the base tier is modelled.
+    // (platform.claude.com/docs/en/models/haiku-5-5/overview, read 2026-10-08.)
+    "claude-haiku-5-5": {
+      input: 0.1,
+      output: 0.5,
+      cached: 0.01,
+      reasoning: 0.5,
+      cache_creation: 0.125,
+    },
     "claude-haiku-4-5-20251001": {
       input: 1.0,
       output: 5.0,

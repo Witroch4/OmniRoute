@@ -171,6 +171,15 @@ export const DEFAULT_PRICING_FRONTIER = {
       reasoning: 15.0,
       cache_creation: 3.0,
     },
+    // Claude Haiku 5.5: $0.10 / $0.50 per MTok up to 100K-token prompts, cache read $0.01.
+    // Base tier only (the schema has no prompt-size tiers; above 100K the list is $0.50 / $2.50).
+    "claude-haiku-5-5": {
+      input: 0.1,
+      output: 0.5,
+      cached: 0.01,
+      reasoning: 0.5,
+      cache_creation: 0.125,
+    },
     // Claude 4.5 Haiku — modelo eco mais recente da Anthropic (2025-10)
     "claude-haiku-4-5-20251001": {
       input: 1.0,

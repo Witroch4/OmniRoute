@@ -40,6 +40,20 @@ test("GPT-6 codex ids bill at the published list prices", () => {
   }
 });
 
+test("claude-haiku-5-5 is registered newest-first and bills at $0.10 / $0.50", () => {
+  const ids = getModelsByProviderId("claude").map((model) => model.id);
+  assert.equal(ids[ids.indexOf("claude-haiku-5-5") + 1], "claude-haiku-4-5-20251001");
+  const model = getModelsByProviderId("claude").find((m) => m.id === "claude-haiku-5-5");
+  assert.equal(model?.contextLength, 1000000);
+  assert.equal(model?.maxOutputTokens, 128000);
+
+  const resolution = resolveModelPricing(getDefaultPricing(), "claude", "claude-haiku-5-5");
+  assert.equal(resolution.source, "exact");
+  assert.equal(resolution.pricing?.input, 0.1);
+  assert.equal(resolution.pricing?.output, 0.5);
+  assert.equal(resolution.pricing?.cached, 0.01);
+});
+
 test("claude-sonnet-5-5 is registered newest-first and bills at $2 / $10", () => {
   const ids = getModelsByProviderId("claude").map((model) => model.id);
   assert.equal(ids[ids.indexOf("claude-sonnet-5-5") + 1], "claude-sonnet-5");

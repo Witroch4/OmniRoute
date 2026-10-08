@@ -58,8 +58,11 @@ test("same-version effort tiers keep the base id (registry order breaks ties)", 
 });
 
 test("a dated snapshot is not newer than the same version without a date", () => {
-  const target = resolveFamilyTargetModel("claude", "claude-haiku-*");
-  assert.ok(target && target.startsWith("claude-haiku-4-5"), String(target));
+  assert.equal(
+    pickNewestFamilyMember(["claude-haiku-4-6", "claude-haiku-4-5-20251001"], "claude-haiku-*"),
+    "claude-haiku-4-6"
+  );
+  assert.equal(resolveFamilyTargetModel("claude", "claude-haiku-*"), "claude-haiku-5-5");
 });
 
 test("target resolution returns null when the glob matches nothing", () => {

@@ -131,6 +131,17 @@ export const claudeProvider: RegistryEntry = {
       contextLength: 200000,
       maxOutputTokens: 64000,
     },
+    // Claude Haiku 5.5 — launched 2026-10-07 (1M context, 128K output, adaptive
+    // thinking, default effort medium). Newest Haiku, so it is also the Claude Code
+    // `haiku` default (providerRegistry.getClaudeCodeDefaultModels picks the first).
+    {
+      id: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      supportsXHighEffort: false,
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
     {
       id: "claude-haiku-4-5-20251001",
       name: "Claude 4.5 Haiku",
