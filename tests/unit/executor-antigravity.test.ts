@@ -893,7 +893,7 @@ test("AntigravityExecutor.transformRequest maps Claude models through Gemini con
   const executor = new AntigravityExecutor();
   const body = {
     project: "project-1",
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5-5-high",
     userAgent: "antigravity",
     requestId: "agent-123",
     requestType: "agent",
@@ -912,12 +912,17 @@ test("AntigravityExecutor.transformRequest maps Claude models through Gemini con
     },
   };
 
-  const result = (await executor.transformRequest("antigravity/claude-sonnet-4-6", body, true, {
-    projectId: "project-1",
-  })) as AntigravityTransformResult;
+  const result = (await executor.transformRequest(
+    "antigravity/claude-sonnet-5-5-high",
+    body,
+    true,
+    {
+      projectId: "project-1",
+    }
+  )) as AntigravityTransformResult;
 
   assert.equal(result.project, "project-1");
-  assert.equal(result.model, "claude-sonnet-4-6");
+  assert.equal(result.model, "claude-sonnet-5-5-high");
   assert.equal(result.requestType, "agent");
   assert.ok(result.request.sessionId);
   assert.deepEqual(result.enabledCreditTypes, ["GOOGLE_ONE_AI"]);

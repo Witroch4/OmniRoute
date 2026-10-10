@@ -20,6 +20,10 @@ const REASONING_UNSUPPORTED_PATTERNS = [
   "antigravity/claude-sonnet-4-6",
   "antigravity/claude-sonnet-4-5",
   "antigravity/claude-sonnet-4",
+  // Claude 5.5 tiers (replaced 4.6 on the Antigravity backend, 2026-10-10): the tier IS the
+  // effort level, so there is no separate thinking param to adapt.
+  "antigravity/claude-sonnet-5-5",
+  "antigravity/claude-opus-5-5",
   // Non-Claude antigravity models don't support thinking params (#1361)
   "antigravity/gemini-",
   "antigravity/gpt-oss-",

@@ -48,8 +48,16 @@ test("agy reuses the identical antigravity Google OAuth credentials (no new embe
 
 test("agy ships its own catalog including the Claude models antigravity omits", () => {
   const ids = REGISTRY.agy.models.map((m) => m.id);
-  assert.ok(ids.includes("claude-opus-4-6-thinking"), "must expose Claude Opus 4.6 Thinking");
-  assert.ok(ids.includes("claude-sonnet-4-6"), "must expose Claude Sonnet 4.6");
+  // 2026-10-10: Claude moved 4.6 -> 5.5 (three effort tiers per family) on this backend.
+  for (const family of ["opus", "sonnet"]) {
+    for (const tier of ["low", "medium", "high"]) {
+      const id = `claude-${family}-5-5-${tier}`;
+      assert.ok(ids.includes(id), `must expose ${id}`);
+    }
+  }
+  // The retired 4.6 ids must NOT be advertised again (upstream: "no longer available").
+  assert.ok(!ids.includes("claude-opus-4-6-thinking"));
+  assert.ok(!ids.includes("claude-sonnet-4-6"));
   assert.ok(ids.includes("gemini-3.5-flash-low"), "must expose clean Flash Low tier");
   assert.ok(ids.includes("gemini-3.5-flash-medium"), "must expose clean Flash Medium tier");
   assert.ok(ids.includes("gemini-3.5-flash-high"), "must expose clean Flash High tier");
@@ -63,13 +71,12 @@ test("agy ships its own catalog including the Claude models antigravity omits", 
 });
 
 test("agy model helpers resolve catalog ids and display names", () => {
-  assert.equal(isUserCallableAgyModelId("claude-opus-4-6-thinking"), true);
+  assert.equal(isUserCallableAgyModelId("claude-opus-5-5-high"), true);
+  assert.equal(isUserCallableAgyModelId("claude-sonnet-5-5-low"), true);
   assert.equal(isUserCallableAgyModelId("tab_flash_lite_preview"), false);
   assert.equal(isUserCallableAgyModelId(""), false);
-  assert.equal(
-    getClientVisibleAgyModelName("claude-opus-4-6-thinking"),
-    "Claude Opus 4.6 (Thinking)"
-  );
+  assert.equal(getClientVisibleAgyModelName("claude-opus-5-5-high"), "Claude Opus 5.5 (High)");
+  assert.equal(getClientVisibleAgyModelName("claude-sonnet-5-5-low"), "Claude Sonnet 5.5 (Low)");
   assert.equal(getClientVisibleAgyModelName("unknown-model", "Fallback"), "Fallback");
 });
 

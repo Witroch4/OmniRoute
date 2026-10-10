@@ -8,17 +8,24 @@
 //
 // The `agy` provider reuses the `antigravity` executor/translator (identical backend),
 // but ships its OWN catalog so it can expose models the `antigravity` provider's static
-// list omits — notably the Claude models (`claude-opus-4-6-thinking`, `claude-sonnet-4-6`),
-// which `:fetchAvailableModels` reports as user-callable with quota even though the
-// `antigravity` catalog comment assumes they 404. Tab-completion models
-// (`tab_flash_lite_preview`, `tab_jump_flash_lite_preview`) are intentionally excluded —
-// they are not chat-callable.
+// list omits — notably the Claude models, which the backend reports as user-callable
+// with quota even though the `antigravity` catalog comment once assumed they 404.
+// Tab-completion models (`tab_flash_lite_preview`, `tab_jump_flash_lite_preview`) are
+// intentionally excluded — they are not chat-callable.
+//
+// 2026-10-10 — Claude moved from 4.6 to 5.5 on this backend. `agy models` (CLI 1.3.3)
+// lists `claude-{opus,sonnet}-5-5-{low,medium,high}` and no 4.6; a real
+// `claude-sonnet-5-5-low` completion succeeded on the account. The OM probe still
+// reported the retired 4.6 ids (same pattern as the Gemini 3.7/3.8 tiers below, which
+// the probe also never advertised), so the 5.5 tiers are pinned here. The retired 4.6
+// ids are kept only as hidden aliases in antigravityModelAliases.ts.
 
 export const AGY_PUBLIC_MODELS = Object.freeze([
-  // Claude (Antigravity backend) — the headline differentiator for this provider.
+  // Claude 5.5 (Antigravity backend) — the headline differentiator for this provider.
+  // Limits are the conservative values the 4.6 entries carried; not probed for 5.5 yet.
   {
-    id: "claude-opus-4-6-thinking",
-    name: "Claude Opus 4.6 (Thinking)",
+    id: "claude-opus-5-5-high",
+    name: "Claude Opus 5.5 (High)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -26,8 +33,44 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (Thinking)",
+    id: "claude-opus-5-5-medium",
+    name: "Claude Opus 5.5 (Medium)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-opus-5-5-low",
+    name: "Claude Opus 5.5 (Low)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-high",
+    name: "Claude Sonnet 5.5 (High)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-medium",
+    name: "Claude Sonnet 5.5 (Medium)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-low",
+    name: "Claude Sonnet 5.5 (Low)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,

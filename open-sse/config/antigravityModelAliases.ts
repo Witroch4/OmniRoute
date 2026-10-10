@@ -1,12 +1,21 @@
 export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
-  // Claude (Antigravity backend). The `agy` provider already ships these from the live
-  // :fetchAvailableModels probe (see agyModels.ts) and discussion #3184 confirmed they
-  // are user-callable through the `antigravity` OAuth provider too — same backend.
-  // `antigravity/claude-opus-4-6-thinking` and `antigravity/claude-sonnet-4-6` both work.
-  // They are upstream IDs, so no alias remapping is required.
+  // Claude (Antigravity backend). Same backend as the `agy` provider (see agyModels.ts);
+  // discussion #3184 confirmed Claude is user-callable through the `antigravity` OAuth
+  // provider too.
+  //
+  // 2026-10-10: Google RETIRED Claude 4.6 on this backend and replaced it with Claude 5.5,
+  // exposed as three effort tiers per family. Verified with `agy models` (CLI 1.3.3) and a
+  // real `claude-sonnet-5-5-low` completion on the account; `claude-sonnet-4-6` is now
+  // rejected by the CLI as "not a known model", and the backend answers a 200 with the
+  // text "Claude Sonnet 4.6 is no longer available. Please switch to Claude Sonnet 5.5."
+  // The tier ids are the real upstream ids (no alias needed). The retired 4.6 ids and the
+  // `claude-sonnet-5` placeholder stay callable as HIDDEN aliases below (see
+  // ANTIGRAVITY_MODEL_ALIASES) so saved combos keep routing; they are NOT re-advertised.
+  // contextLength/maxOutputTokens are the conservative values the 4.6 entries carried —
+  // not probed for 5.5 yet; raise them once measured.
   {
-    id: "claude-sonnet-5",
-    name: "Claude Sonnet 5 (Thinking)",
+    id: "claude-opus-5-5-high",
+    name: "Claude Opus 5.5 (High)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -14,8 +23,8 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "claude-opus-4-6-thinking",
-    name: "Claude Opus 4.6 (Thinking)",
+    id: "claude-opus-5-5-medium",
+    name: "Claude Opus 5.5 (Medium)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -23,8 +32,35 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (Thinking)",
+    id: "claude-opus-5-5-low",
+    name: "Claude Opus 5.5 (Low)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-high",
+    name: "Claude Sonnet 5.5 (High)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-medium",
+    name: "Claude Sonnet 5.5 (Medium)",
+    contextLength: 200000,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
+  {
+    id: "claude-sonnet-5-5-low",
+    name: "Claude Sonnet 5.5 (Low)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,
@@ -274,14 +310,20 @@ export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
   // was refuted by the agy --log-file 200 OK evidence.)
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
   "gemini-2.5-computer-use-preview-10-2025": "rev19-uic3-1p",
-  // Legacy Claude display ids → current upstream ids. NOTE: an earlier comment here
-  // assumed Claude was removed from Antigravity 2.0 and would 404; discussion #3184
-  // disproved that — the Antigravity OAuth backend still serves claude-opus-4-6-thinking
-  // and claude-sonnet-4-6 (now listed in ANTIGRAVITY_PUBLIC_MODELS above). These aliases
-  // remap the old gemini-claude-* ids to the live upstream ids.
-  "gemini-claude-sonnet-4-5": "claude-sonnet-4-6",
-  "gemini-claude-sonnet-4-5-thinking": "claude-sonnet-4-6",
-  "gemini-claude-opus-4-5-thinking": "claude-opus-4-6-thinking",
+  // Retired Claude ids → the live Claude 5.5 tiers (HIDDEN aliases, not advertised).
+  // The backend dropped Claude 4.6 on 2026-10-10 (see the catalog note above), so these ids
+  // would otherwise reach upstream and come back as a 200 "no longer available" text that
+  // health probes read as healthy. They map to the High tier because the retired entries
+  // were the "(Thinking)" models and High is the default effort of 5.5. `claude-sonnet-5`
+  // was only ever a placeholder here (served by 4.6 upstream), so it follows the same path.
+  // Resolution is single-step: every target below must be a live upstream id.
+  "claude-sonnet-4-6": "claude-sonnet-5-5-high",
+  "claude-opus-4-6-thinking": "claude-opus-5-5-high",
+  "claude-sonnet-5": "claude-sonnet-5-5-high",
+  // Legacy Claude display ids → live upstream ids (same successors as above).
+  "gemini-claude-sonnet-4-5": "claude-sonnet-5-5-high",
+  "gemini-claude-sonnet-4-5-thinking": "claude-sonnet-5-5-high",
+  "gemini-claude-opus-4-5-thinking": "claude-opus-5-5-high",
 });
 
 type AntigravityModelAliasMap = Record<string, string>;

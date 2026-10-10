@@ -2646,7 +2646,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
 
   const PAID_PREMIUM_PRESET_MODELS = [
     { model: "cu/claude-4.6-opus-high", weight: 0 },
-    { model: "antigravity/claude-sonnet-4-6", weight: 0 },
+    { model: "antigravity/claude-sonnet-5-5-high", weight: 0 },
     { model: "cu/claude-4.6-sonnet-high", weight: 0 },
     { model: "antigravity/gemini-3.1-pro-high", weight: 0 },
     { model: "antigravity/gemini-3-pro-high", weight: 0 },

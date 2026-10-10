@@ -49,12 +49,23 @@ test("resolveAntigravityModelId maps the documented Antigravity aliases to upstr
   assert.equal(resolveAntigravityModelId("gemini-3.5-flash-high"), "gemini-3-flash-agent");
   // Backward-compat: retired flagship public id routes to the High tier upstream.
   assert.equal(resolveAntigravityModelId("gemini-3.5-flash-preview"), "gemini-3-flash-agent");
-  assert.equal(resolveAntigravityModelId("gemini-claude-sonnet-4-5"), "claude-sonnet-4-6");
-  assert.equal(resolveAntigravityModelId("gemini-claude-sonnet-4-5-thinking"), "claude-sonnet-4-6");
+  // Claude 4.6 was retired upstream on 2026-10-10; every legacy Claude id now resolves
+  // (single step) to a LIVE Claude 5.5 tier.
+  assert.equal(resolveAntigravityModelId("gemini-claude-sonnet-4-5"), "claude-sonnet-5-5-high");
+  assert.equal(
+    resolveAntigravityModelId("gemini-claude-sonnet-4-5-thinking"),
+    "claude-sonnet-5-5-high"
+  );
   assert.equal(
     resolveAntigravityModelId("gemini-claude-opus-4-5-thinking"),
-    "claude-opus-4-6-thinking"
+    "claude-opus-5-5-high"
   );
+  assert.equal(resolveAntigravityModelId("claude-sonnet-4-6"), "claude-sonnet-5-5-high");
+  assert.equal(resolveAntigravityModelId("claude-opus-4-6-thinking"), "claude-opus-5-5-high");
+  assert.equal(resolveAntigravityModelId("claude-sonnet-5"), "claude-sonnet-5-5-high");
+  // The live tier ids are real upstream ids: they pass through untouched.
+  assert.equal(resolveAntigravityModelId("claude-sonnet-5-5-low"), "claude-sonnet-5-5-low");
+  assert.equal(resolveAntigravityModelId("claude-opus-5-5-medium"), "claude-opus-5-5-medium");
   assert.equal(resolveAntigravityModelId("unknown-model"), "unknown-model");
 });
 
@@ -81,8 +92,13 @@ test("isUserCallableAntigravityModelId only allows public chat-capable model IDs
   assert.equal(isUserCallableAntigravityModelId("gemini-2.5-flash-thinking"), true);
   assert.equal(isUserCallableAntigravityModelId("gemini-pro-agent"), true);
   // #3184: Claude IS user-callable through the Antigravity OAuth provider (same backend as
-  // `agy`, verified empirically). An earlier assumption that it was removed in Antigravity
-  // 2.0 was wrong.
+  // `agy`, verified empirically). 2026-10-10: the live ids are the 5.5 tiers; the retired
+  // 4.6 ids and the `claude-sonnet-5` placeholder stay callable as HIDDEN aliases.
+  for (const family of ["opus", "sonnet"]) {
+    for (const tier of ["low", "medium", "high"]) {
+      assert.equal(isUserCallableAntigravityModelId(`claude-${family}-5-5-${tier}`), true);
+    }
+  }
   assert.equal(isUserCallableAntigravityModelId("claude-opus-4-6-thinking"), true);
   assert.equal(isUserCallableAntigravityModelId("claude-sonnet-4-6"), true);
   assert.equal(isUserCallableAntigravityModelId("claude-sonnet-5"), true);
@@ -99,26 +115,27 @@ test("isUserCallableAntigravityModelId only allows public chat-capable model IDs
 
 test("ANTIGRAVITY_PUBLIC_MODELS exposes captured Antigravity 2.0.1 names and capabilities", () => {
   // #3184: Claude is exposed in the antigravity catalog (same backend as `agy`, verified).
-  assert.deepEqual(getPublicModel("claude-opus-4-6-thinking"), {
-    id: "claude-opus-4-6-thinking",
-    name: "Claude Opus 4.6 (Thinking)",
+  // 2026-10-10: Claude 4.6 was retired upstream; the catalog advertises the 5.5 tiers.
+  assert.deepEqual(getPublicModel("claude-sonnet-5-5-high"), {
+    id: "claude-sonnet-5-5-high",
+    name: "Claude Sonnet 5.5 (High)",
     contextLength: 200000,
     maxOutputTokens: 65536,
     supportsReasoning: true,
     supportsVision: true,
     toolCalling: true,
   });
-  assert.equal(getPublicModel("claude-sonnet-4-6").name, "Claude Sonnet 4.6 (Thinking)");
-  // claude-sonnet-5 was added to the Antigravity catalog alongside the existing Claude entries.
-  assert.deepEqual(getPublicModel("claude-sonnet-5"), {
-    id: "claude-sonnet-5",
-    name: "Claude Sonnet 5 (Thinking)",
-    contextLength: 200000,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  });
+  assert.equal(getPublicModel("claude-sonnet-5-5-medium").name, "Claude Sonnet 5.5 (Medium)");
+  assert.equal(getPublicModel("claude-sonnet-5-5-low").name, "Claude Sonnet 5.5 (Low)");
+  assert.equal(getPublicModel("claude-opus-5-5-high").name, "Claude Opus 5.5 (High)");
+  assert.equal(getPublicModel("claude-opus-5-5-medium").name, "Claude Opus 5.5 (Medium)");
+  assert.equal(getPublicModel("claude-opus-5-5-low").name, "Claude Opus 5.5 (Low)");
+  // Retired ids and the `claude-sonnet-5` placeholder are NOT advertised any more (the
+  // placeholder used to answer 200 with a "no longer available" text that health probes
+  // read as healthy, which kept it alive in the platform picker).
+  assert.equal(getPublicModel("claude-opus-4-6-thinking"), undefined);
+  assert.equal(getPublicModel("claude-sonnet-4-6"), undefined);
+  assert.equal(getPublicModel("claude-sonnet-5"), undefined);
   assert.deepEqual(getPublicModel("gemini-3.5-flash-high"), {
     id: "gemini-3.5-flash-high",
     name: "Gemini 3.5 Flash (High)",
