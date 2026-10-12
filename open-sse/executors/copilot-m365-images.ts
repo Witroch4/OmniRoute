@@ -8,6 +8,15 @@ interface M365Image {
   fileType: string;
 }
 
+export class M365ImageUploadError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfter: string | null
+  ) {
+    super(`Microsoft 365 image upload failed (HTTP ${status})`);
+  }
+}
+
 export interface M365ImageAnnotation {
   id: string;
   messageAnnotationMetadata: {
@@ -92,7 +101,7 @@ export async function uploadM365Images(
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     if (!response.ok)
-      throw new Error(`Microsoft 365 image upload failed (HTTP ${response.status})`);
+      throw new M365ImageUploadError(response.status, response.headers.get("retry-after"));
     const payload: unknown = await response.json();
     const docId =
       payload && typeof payload === "object" && "docId" in payload ? payload.docId : null;

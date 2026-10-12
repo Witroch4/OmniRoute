@@ -59,6 +59,29 @@ test("rate limit manager bypasses disabled connections and exposes inactive stat
   assert.deepEqual(rateLimitManager.getAllRateLimitStatus(), {});
 });
 
+test("M365 explicit protection spaces different models on the same connection", async () => {
+  const connection = await providersDb.createProviderConnection({
+    provider: "copilot-m365-web",
+    authType: "apikey",
+    name: "Protected M365",
+    apiKey: "test",
+    rateLimitProtection: true,
+    rateLimitOverrides: { rpm: 100, minTime: 50, maxConcurrent: 1 },
+  });
+  await rateLimitManager.initializeRateLimits();
+  const starts: number[] = [];
+  await Promise.all(
+    ["copilot-m365", "another-model"].map((model) =>
+      rateLimitManager.withRateLimit("copilot-m365-web", connection.id, model, async () => {
+        starts.push(Date.now());
+        await wait(5);
+      })
+    )
+  );
+  assert.equal(starts.length, 2);
+  assert.ok(starts[1] - starts[0] >= 40, `dispatch gap was ${starts[1] - starts[0]}ms`);
+});
+
 test("rate limit manager handles soft over-limit warnings and normal header learning", async () => {
   rateLimitManager.enableRateLimitProtection("conn-over-limit");
   rateLimitManager.updateFromHeaders(

@@ -334,6 +334,33 @@ export function extractFinalResultMessage(frame: Record<string, unknown> | null)
   return typeof message === "string" && message.length > 0 ? message : null;
 }
 
+/** The service can send throttling as an otherwise successful bot-text update. */
+export function extractM365RateLimitMessage(frame: Record<string, unknown> | null): string | null {
+  if (!frame) return null;
+  const item = frame.type === 2 ? (frame.item as Record<string, unknown> | undefined) : undefined;
+  const result = item?.result as Record<string, unknown> | undefined;
+  const value = result?.value;
+  const finalMessage = extractFinalResultMessage(frame);
+  if (typeof value === "string" && /^(throttled|ratelimitexceeded|toomanyrequests)$/i.test(value)) {
+    return finalMessage ?? "Microsoft 365 Copilot rate limit exceeded";
+  }
+  if (
+    typeof frame.error === "string" &&
+    /throttl|too many requests|rate.?limit/i.test(frame.error)
+  ) {
+    return frame.error;
+  }
+  // Match the observed complete service notice, never substrings in normal answers.
+  const notice = finalMessage ?? extractBotText(frame);
+  if (
+    notice?.trim().replace(/’/g, "'") ===
+    "We're temporarily unable to respond to this volume of requests. Please try again later."
+  ) {
+    return notice;
+  }
+  return null;
+}
+
 /**
  * Fold a single incoming frame into the running bot answer, returning the suffix to
  * stream (`delta`) and the new accumulated text (`next`). Handles both wire formats:

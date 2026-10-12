@@ -35,6 +35,17 @@ export function setConnectionRateLimitUntil(connectionId: string, until: number 
   invalidateDbCache("connections");
 }
 
+/** Read only the cooldown at dispatch, without loading/decrypting account credentials. */
+export function getConnectionRateLimitUntil(connectionId: string): string | number | null {
+  const db = getDbInstance() as unknown as DbLike;
+  const row = db
+    .prepare<{ rate_limited_until?: string | number | null }>(
+      "SELECT rate_limited_until FROM provider_connections WHERE id = ?"
+    )
+    .get(connectionId);
+  return row?.rate_limited_until ?? null;
+}
+
 /**
  * Mark a connection as rate-limited until `Date.now() + retryAfterMs`.
  *
