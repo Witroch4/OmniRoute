@@ -18,16 +18,20 @@ throttled. Post-success cleanup uses the existing atomic conditional clear for
 M365, so stale credentials cannot erase a newly written cooldown. Normal answers
 quoting the notice as part of a larger answer remain valid.
 
-For the active operator connection, use the existing dashboard settings or
-authenticated `PUT /api/providers/{id}`:
+For the active operator connection, enable protection using the dashboard toggle
+or authenticated `POST /api/rate-limits` with `{ "connectionId": "<id>", "enabled": true }`.
+Set queue overrides using authenticated `PUT /api/providers/{id}`:
 
 ```json
 {
-  "rateLimitProtection": true,
   "maxConcurrent": 1,
   "rateLimitOverrides": { "rpm": 2, "minTime": 30000, "maxConcurrent": 1 }
 }
 ```
+
+The provider-update route enables protection in memory when overrides change;
+the rate-limits toggle persists it for restart. The provider-update schema does
+not accept `rateLimitProtection`, so sending that field there does not save it.
 
 `minTime` is in milliseconds. The top-level concurrency setting holds the
 account semaphore through the whole streamed response; the override controls
