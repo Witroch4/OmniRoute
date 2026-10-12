@@ -257,7 +257,14 @@ export function buildPrompt(body: JsonRecord | undefined): string {
   const systemMsgs = messages.filter((m) => m.role === "system");
   const userMsg = messages.filter((m) => m.role === "user").pop();
   const userText =
-    typeof userMsg?.content === "string" ? userMsg.content : JSON.stringify(userMsg?.content ?? "");
+    typeof userMsg?.content === "string"
+      ? userMsg.content
+      : Array.isArray(userMsg?.content)
+        ? userMsg.content
+            .filter((part) => part?.type === "text" && typeof part.text === "string")
+            .map((part) => part.text)
+            .join("\n")
+        : "";
   let prompt = "";
   if (systemMsgs.length > 0) {
     const sysText = systemMsgs

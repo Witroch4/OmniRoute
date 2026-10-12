@@ -21,6 +21,12 @@ import {
   splitFrames,
 } from "./copilot-m365-frames.ts";
 
+import {
+  extractM365Images,
+  uploadM365Images,
+  type M365ImageAnnotation,
+} from "./copilot-m365-images.ts";
+
 type JsonRecord = Record<string, unknown>;
 let WebSocketCtor: typeof WebSocket = WebSocket;
 
@@ -58,6 +64,7 @@ export class CopilotM365WebExecutor extends BaseExecutor {
     wsUrl: string;
     prompt: string;
     model: string;
+    messageAnnotations?: M365ImageAnnotation[];
     signal?: AbortSignal;
     log?: ExecutorLog | null;
   }): Promise<ReadableStream<Uint8Array>> {
@@ -154,6 +161,7 @@ export class CopilotM365WebExecutor extends BaseExecutor {
                     sessionId,
                     requestId,
                     conversationId,
+                    messageAnnotations: input.messageAnnotations,
                     isStartOfSession: true,
                   })
                 ) + metricsFrame()
@@ -255,7 +263,17 @@ export class CopilotM365WebExecutor extends BaseExecutor {
     const body = input.body as JsonRecord | undefined;
     const model = input.model || (body?.model as string) || "copilot-m365";
     const stream = input.stream !== false;
-    const prompt = buildPrompt(body).trim();
+    const images = extractM365Images(body);
+    if ("error" in images) {
+      return {
+        response: errorResponse(images.error, 400),
+        url: "https://substrate.office.com/m365Copilot/UploadFile",
+        headers: {},
+        transformedBody: null,
+      };
+    }
+    const prompt =
+      buildPrompt(body).trim() || (images.length ? "Describe the attached image." : "");
 
     if (!prompt) {
       return {
@@ -279,10 +297,14 @@ export class CopilotM365WebExecutor extends BaseExecutor {
     const wsUrl = buildWsUrl(connectionParams);
 
     try {
+      const messageAnnotations = images.length
+        ? await uploadM365Images(connectionParams, wsUrl, images, input.signal ?? undefined)
+        : undefined;
       const wsStream = await this.wsChat({
         wsUrl,
         prompt,
         model,
+        messageAnnotations,
         signal: input.signal ?? undefined,
         log: input.log,
       });

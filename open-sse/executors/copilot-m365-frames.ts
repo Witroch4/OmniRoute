@@ -174,6 +174,7 @@ export interface ChatInvocationOptions {
   /** Must match chatsessionid and ConversationId in the WebSocket URL. */
   requestId: string;
   conversationId: string;
+  messageAnnotations?: import("./copilot-m365-images.ts").M365ImageAnnotation[];
   /** Whether this is the first turn of the conversation. */
   isStartOfSession?: boolean;
   /** Optional override of the consumer option flags. */
@@ -234,6 +235,9 @@ export function buildChatInvocation(opts: ChatInvocationOptions): Record<string,
           inputMethod: "Keyboard",
           text: opts.text,
           messageType: "Chat",
+          ...(opts.messageAnnotations?.length
+            ? { messageAnnotations: opts.messageAnnotations }
+            : {}),
         },
         plugins: [{ Id: "BingWebSearch", Source: "BuiltIn" }],
         productThreadType: "Office",

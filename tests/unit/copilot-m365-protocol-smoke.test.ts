@@ -14,6 +14,8 @@ type Mode = "success" | "rejected" | "empty";
 // using the current browser contract receives a response.
 class ProtocolSocket {
   static mode: Mode = "success";
+  static expectedImages: string[] = [];
+  static uploadedConversationId: string | null = null;
   listeners = new Map<string, Listener[]>();
 
   constructor(public url: string) {
@@ -39,8 +41,12 @@ class ProtocolSocket {
     const message = args.message as Record<string, unknown>;
     const client = args.clientInfo as Record<string, unknown>;
     const query = new URL(this.url).searchParams;
+    const annotations = message.messageAnnotations as Array<{ id: string }> | undefined;
+    const imageIds = annotations?.map((annotation) => annotation.id) ?? [];
     const valid =
       args.conversationId === query.get("ConversationId") &&
+      (!ProtocolSocket.expectedImages.length ||
+        args.conversationId === ProtocolSocket.uploadedConversationId) &&
       message.requestId === query.get("chatsessionid") &&
       args.sessionId === query.get("X-SessionId") &&
       args.productThreadType === "Office" &&
@@ -48,7 +54,8 @@ class ProtocolSocket {
       args.tone === "Magic" &&
       args.disconnectBehavior === "continue" &&
       frames[1]?.target === "Metrics" &&
-      frames[1]?.type === 1;
+      frames[1]?.type === 1 &&
+      JSON.stringify(imageIds) === JSON.stringify(ProtocolSocket.expectedImages);
     queueMicrotask(() => {
       if (!valid || ProtocolSocket.mode === "rejected") {
         this.emit(
@@ -64,7 +71,17 @@ class ProtocolSocket {
             encodeFrame({
               type: 1,
               target: "update",
-              arguments: [{ messages: [{ author: "bot", text: "Olá! 👋" }], isLastUpdate: true }],
+              arguments: [
+                {
+                  messages: [
+                    {
+                      author: "bot",
+                      text: ProtocolSocket.expectedImages.length ? "Imagem recebida" : "Olá! 👋",
+                    },
+                  ],
+                  isLastUpdate: true,
+                },
+              ],
             }) + encodeFrame({ type: 3 })
           )
         );
@@ -79,7 +96,7 @@ class ProtocolSocket {
   }
 }
 
-async function execute(mode: Mode, stream: boolean): Promise<Response> {
+async function execute(mode: Mode, stream: boolean, content: unknown = "Oi!"): Promise<Response> {
   ProtocolSocket.mode = mode;
   const restore = __setCopilotM365WebSocketForTesting(
     ProtocolSocket as unknown as typeof import("ws").default
@@ -88,7 +105,7 @@ async function execute(mode: Mode, stream: boolean): Promise<Response> {
     const result = await new CopilotM365WebExecutor().execute({
       model: "copilot-m365",
       stream,
-      body: { messages: [{ role: "user", content: "Oi!" }] },
+      body: { messages: [{ role: "user", content }] },
       credentials: { apiKey: "access_token=placeholder; chathubPath=user@tenant" },
     });
     // Consume while the socket substitution is still installed.
@@ -129,4 +146,54 @@ test("M365 reports an empty upstream turn in both response modes", async () => {
   assert.match((await response.json()).error.message, /no content/i);
   const stream = await execute("empty", true);
   assert.match(await stream.text(), /"error"/);
+});
+
+const pixel =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9kAAAAASUVORK5CYII=";
+const imageContent = [
+  { type: "text", text: "Descreva esta imagem" },
+  { type: "image_url", image_url: { url: pixel } },
+];
+
+test("M365 uploads multiple inline images under the WebSocket conversation and forwards their annotations", async (t) => {
+  ProtocolSocket.expectedImages = ["image-1", "image-2"];
+  let uploaded = 0;
+  let conversationId = "";
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    assert.equal(url, "https://substrate.office.com/m365Copilot/UploadFile");
+    assert.equal(init.method, "POST");
+    const form = init.body as FormData;
+    assert.equal(form.get("FileBase64"), pixel);
+    assert.equal(form.get("scenario"), "UploadImage");
+    const current = String(form.get("conversationId"));
+    if (conversationId) assert.equal(current, conversationId);
+    conversationId = current;
+    ProtocolSocket.uploadedConversationId = current;
+    assert.match(current, /^[\da-f-]{36}$/);
+    return Response.json({ docId: `image-${++uploaded}` });
+  });
+  try {
+    const response = await execute("success", false, [...imageContent, imageContent[1]]);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).choices[0].message.content, "Imagem recebida");
+    assert.equal(uploaded, 2);
+  } finally {
+    ProtocolSocket.expectedImages = [];
+    ProtocolSocket.uploadedConversationId = null;
+  }
+});
+
+test("M365 surfaces upload failure without pretending that an image was received", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("expired", { status: 401 }));
+  const response = await execute("success", false, imageContent);
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error.message, /upload.*401/i);
+});
+
+test("M365 rejects unsupported image URLs instead of putting them in the text prompt", async () => {
+  const response = await execute("success", false, [
+    { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+  ]);
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error.message, /base64/i);
 });
