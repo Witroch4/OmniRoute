@@ -75,6 +75,22 @@ export const githubProvider: RegistryEntry = {
       contextLength: 200000,
       maxOutputTokens: 32000,
     },
+    // 2026-10-12: GET api.githubcopilot.com/models on this account lists it with
+    // policy.state="enabled", model_picker_enabled=true, billing multiplier 1,
+    // supported_endpoints ["/v1/messages", "/chat/completions"] and limits
+    // 200000 context / 100000 output (numbers below are those limits, not the
+    // 1M/128K Anthropic publishes for the first-party API). Claude never goes to
+    // /responses on Copilot (see GithubExecutor.supportsResponsesEndpoint).
+    // Anthropic documents non-default temperature/top_p/top_k as 400 on Haiku 5.5;
+    // stripped here defensively (not probed through Copilot: the account's
+    // monthly premium quota was exhausted when this was registered).
+    {
+      id: "claude-haiku-5.5",
+      name: "Claude Haiku 5.5",
+      contextLength: 200000,
+      maxOutputTokens: 100000,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
     {
       id: "claude-haiku-4.5",
       name: "Claude Haiku 4.5",
@@ -126,6 +142,16 @@ export const githubProvider: RegistryEntry = {
       name: "Gemini 3.6 Flash",
       contextLength: 1000000,
       maxOutputTokens: 64000,
+    },
+    // 2026-10-12: policy.state="enabled", picker=true, multiplier 1. /responses
+    // only (supported_endpoints ["/responses", "ws:/responses"]; no
+    // /chat/completions), 400000 context / 128000 output per capabilities.limits.
+    {
+      id: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      targetFormat: "openai-responses",
+      contextLength: 400000,
+      maxOutputTokens: 128000,
     },
     {
       id: "gpt-5.6-terra",
