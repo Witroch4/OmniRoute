@@ -162,7 +162,7 @@ test("M365 uploads multiple inline images under the WebSocket conversation and f
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     assert.equal(url, "https://substrate.office.com/m365Copilot/UploadFile");
     assert.equal(init.method, "POST");
-    const form = init.body as FormData;
+    const form = await new Request(url, init).formData();
     assert.equal(form.get("FileBase64"), pixel);
     assert.equal(form.get("scenario"), "UploadImage");
     const current = String(form.get("conversationId"));

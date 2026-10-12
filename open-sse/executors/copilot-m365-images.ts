@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import type { M365ConnectionParams } from "./copilot-m365-connection.ts";
 
@@ -55,22 +56,33 @@ export async function uploadM365Images(
   if (!conversationId) throw new Error("Missing Microsoft 365 image conversation id");
   const annotations: M365ImageAnnotation[] = [];
   for (const [index, image] of images.entries()) {
-    const form = new FormData();
-    form.append("scenario", "UploadImage");
-    form.append("conversationId", conversationId);
-    form.append("FileBase64", image.dataUri);
+    // proxyFetch uses vendored undici, whose FormData differs from Node's.
+    // Reuse the byte multipart pattern from imageGeneration.ts (#3273).
+    const boundary = `----OmniRouteM365${randomUUID().replace(/-/g, "")}`;
+    const parts: Buffer[] = [];
+    const append = (name: string, value: string) =>
+      parts.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`
+        )
+      );
+    append("scenario", "UploadImage");
+    append("conversationId", conversationId);
+    append("FileBase64", image.dataUri);
     for (const option of [
       "cwcgptvsan",
       "flux_v3_gptv_enable_upload_multi_image_in_turn_wo_ch",
       "gptvnorm2048",
     ]) {
-      form.append("optionsSets", option);
+      append("optionsSets", option);
     }
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
     const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
     const response = await fetch("https://substrate.office.com/m365Copilot/UploadFile", {
       method: "POST",
-      body: form,
+      body: Buffer.concat(parts),
       headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
         Authorization: `Bearer ${params.accessToken}`,
         "x-anchormailbox": `Oid:${params.chathubPath}`,
         "x-scenario": params.scenario ?? "OfficeWebPaidConsumerCopilot",
