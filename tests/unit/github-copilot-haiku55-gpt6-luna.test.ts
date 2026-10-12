@@ -95,3 +95,71 @@ test("both ids are priced through the gh provider (never US$0)", () => {
   assert.equal(luna.pricing?.input, 0.1);
   assert.equal(luna.pricing?.output, 0.5);
 });
+
+// --- 2026-10-12, second batch: the rest of what the account lets through -----------
+
+test("Sonnet 5.5, Grok 4.7 and GPT-4.1 are on the allowlist and in the gh registry", () => {
+  const allowlist = new Set<string>(GITHUB_COPILOT_MODEL_ALLOWLIST);
+  for (const id of ["claude-sonnet-5.5", "grok-4.7", "gpt-4.1"]) {
+    assert.ok(allowlist.has(id), `${id} on allowlist`);
+  }
+  const registryIds = getProviderModels("gh").map((model) => model.id);
+  assert.deepEqual(registryIds, [...GITHUB_COPILOT_MODEL_ALLOWLIST]);
+});
+
+test("live discovery keeps the second batch and still drops policy-disabled ids", () => {
+  const ids = parseGitHubCopilotModels({
+    data: [
+      { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", policy: { state: "enabled" } },
+      { id: "grok-4.7", name: "Grok 4.7" },
+      { id: "gpt-4.1", name: "GPT-4.1", policy: { state: "enabled" } },
+      // Not on the list: GitHub answers 400 "The requested model is not supported".
+      { id: "claude-opus-5.5", name: "Claude Opus 5.5", policy: { state: "disabled" } },
+      { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", policy: { state: "disabled" } },
+    ],
+  }).map((model) => model.id);
+  assert.deepEqual(ids, ["claude-sonnet-5.5", "grok-4.7", "gpt-4.1"]);
+});
+
+test("Grok 4.7 is /responses-only, Sonnet 5.5 and GPT-4.1 use chat/completions", () => {
+  assert.equal(getModelTargetFormat("gh", "grok-4.7"), "openai-responses");
+  assert.equal(getModelTargetFormat("gh", "claude-sonnet-5.5"), null);
+  assert.equal(getModelTargetFormat("gh", "gpt-4.1"), null);
+
+  const executor = new GithubExecutor();
+  assert.equal(executor.buildUrl("grok-4.7", true), "https://api.githubcopilot.com/responses");
+  assert.equal(
+    executor.buildUrl("claude-sonnet-5.5", true),
+    "https://api.githubcopilot.com/chat/completions"
+  );
+  assert.equal(
+    executor.buildUrl("gpt-4.1", true),
+    "https://api.githubcopilot.com/chat/completions"
+  );
+});
+
+test("second batch carries Copilot's own limits", () => {
+  const byId = new Map(getProviderModels("gh").map((model) => [model.id, model]));
+  assert.equal(byId.get("claude-sonnet-5.5")?.contextLength, 328000);
+  assert.equal(byId.get("claude-sonnet-5.5")?.maxOutputTokens, 128000);
+  assert.equal(byId.get("grok-4.7")?.contextLength, 328000);
+  assert.equal(byId.get("grok-4.7")?.maxOutputTokens, 128000);
+  assert.equal(byId.get("gpt-4.1")?.contextLength, 128000);
+  assert.equal(byId.get("gpt-4.1")?.maxOutputTokens, 16384);
+});
+
+test("Sonnet 5.5 and GPT-4.1 are priced through gh; Grok has no price row (known gap)", () => {
+  const catalog = getDefaultPricing();
+
+  const sonnet = resolveModelPricing(catalog, "gh", "claude-sonnet-5.5");
+  assert.notEqual(sonnet.source, "missing");
+  assert.equal(sonnet.pricing?.input, 2);
+  assert.equal(sonnet.pricing?.output, 10);
+
+  const gpt41 = resolveModelPricing(catalog, "gh", "gpt-4.1");
+  assert.notEqual(gpt41.source, "missing");
+
+  // Pinned on purpose: when xAI pricing lands this test must be flipped, not forgotten.
+  // Grok 4.5/4.6 were already unpriced; 4.7 inherits the gap rather than hiding it.
+  assert.equal(resolveModelPricing(catalog, "gh", "grok-4.7").source, "missing");
+});

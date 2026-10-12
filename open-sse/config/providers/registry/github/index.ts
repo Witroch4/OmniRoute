@@ -63,6 +63,18 @@ export const githubProvider: RegistryEntry = {
       contextLength: 200000,
       maxOutputTokens: 32000,
     },
+    // 2026-10-12: policy.state="enabled", picker=true, multiplier 1; limits are the ones
+    // GET api.githubcopilot.com/models reports (328000 context / 128000 output),
+    // /v1/messages + /chat/completions only (Claude never goes to /responses on
+    // Copilot). Answered a real completion through OmniRoute the same day.
+    // unsupportedParams mirrors the claude/anthropic registries' claude-sonnet-5-5.
+    {
+      id: "claude-sonnet-5.5",
+      name: "Claude Sonnet 5.5",
+      contextLength: 328000,
+      maxOutputTokens: 128000,
+      unsupportedParams: ["temperature", "top_p", "top_k"],
+    },
     {
       id: "claude-sonnet-5",
       name: "Claude Sonnet 5",
@@ -168,6 +180,18 @@ export const githubProvider: RegistryEntry = {
     // xAI Grok on Copilot — /responses-only (supported_endpoints: ["/responses"];
     // 400 on /chat/completions). Distinct from xAI-direct (chat-capable) — see
     // the separate `xai` provider. Live-verified context 500k / output 128k.
+    // grok-4.7: policy.state undefined (not gated), picker=true, /responses only,
+    // 328000 context / 128000 output per capabilities.limits. Answered a real
+    // completion through OmniRoute on 2026-10-12. ⚠️ No pricing row exists for ANY
+    // Copilot grok id (4.5/4.6 either): cost resolves to "missing", i.e. US$0 in the
+    // OM cost views. Not invented here — add a row once xAI publishes the price.
+    {
+      id: "grok-4.7",
+      name: "Grok 4.7",
+      targetFormat: "openai-responses",
+      contextLength: 328000,
+      maxOutputTokens: 128000,
+    },
     {
       id: "grok-4.6",
       name: "Grok 4.6",
@@ -219,6 +243,10 @@ export const githubProvider: RegistryEntry = {
       contextLength: 264000,
       maxOutputTokens: 64000,
     },
+    // gpt-4.1: policy.state="enabled" but the account's /models lists no
+    // supported_endpoints for it; it answers on /chat/completions (HTTP 200, verified
+    // through OmniRoute 2026-10-12), so no targetFormat. Priced by the gh row.
+    { id: "gpt-4.1", name: "GPT-4.1", contextLength: 128000, maxOutputTokens: 16384 },
     {
       id: "gpt-4o-2024-11-20",
       name: "GPT-4o",
