@@ -22,6 +22,8 @@
  * stable, well-known vision families.
  */
 export const VISION_MODEL_ID_FRAGMENTS = [
+  // Native BizChat UploadFile + ImageFile annotations are live-validated.
+  "copilot-m365",
   "pixtral",
   "llava",
   "bakllava",
