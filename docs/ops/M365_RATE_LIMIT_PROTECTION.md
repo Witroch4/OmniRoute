@@ -1,3 +1,7 @@
+---
+title: "Microsoft 365 Copilot Volume Protection"
+---
+
 # Microsoft 365 Copilot volume protection
 
 The BizChat consumer endpoint can return a volume-limit notice as bot text or
