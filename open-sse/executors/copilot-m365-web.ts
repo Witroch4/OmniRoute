@@ -16,7 +16,7 @@ import {
   handshakeError,
   handshakeFrame,
   isCompletionFrame,
-  keepaliveFrame,
+  metricsFrame,
   parseFrame,
   splitFrames,
 } from "./copilot-m365-frames.ts";
@@ -88,6 +88,12 @@ export class CopilotM365WebExecutor extends BaseExecutor {
 
           const finish = () => {
             if (settled) return;
+            if (!previousText && !finalResultMessage) {
+              abort(
+                "Microsoft 365 Copilot returned no content. Check the account tier and session credential."
+              );
+              return;
+            }
             settled = true;
             cleanup();
             // Last-resort fallback (#6210): some EDU turns surface the answer only in the
@@ -104,10 +110,13 @@ export class CopilotM365WebExecutor extends BaseExecutor {
 
           const abort = (reason: string) => {
             if (settled) return;
+            clearTimeout(timeout);
             settled = true;
             cleanup();
             const message = sanitizeErrorMessage(reason);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message } })}\n\n`));
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ error: { message } })}\n\n`)
+            );
             controller.close();
           };
 
@@ -120,8 +129,11 @@ export class CopilotM365WebExecutor extends BaseExecutor {
 
           try {
             const wsUrlParts = new URL(input.wsUrl);
-            const traceId = wsUrlParts.searchParams.get("clientrequestid") ?? crypto.randomUUID().replace(/-/g, "");
+            const traceId = crypto.randomUUID();
             const sessionId = wsUrlParts.searchParams.get("X-SessionId") ?? crypto.randomUUID();
+            const requestId = wsUrlParts.searchParams.get("chatsessionid") ?? crypto.randomUUID();
+            const conversationId =
+              wsUrlParts.searchParams.get("ConversationId") ?? crypto.randomUUID();
 
             log?.debug?.("M365_WS", `connecting → ${redactWsUrl(input.wsUrl)}`);
 
@@ -134,16 +146,17 @@ export class CopilotM365WebExecutor extends BaseExecutor {
             });
 
             const sendChat = () => {
-              ws?.send(keepaliveFrame());
               ws?.send(
                 encodeFrame(
                   buildChatInvocation({
                     text: input.prompt,
                     traceId,
                     sessionId,
+                    requestId,
+                    conversationId,
                     isStartOfSession: true,
                   })
-                )
+                ) + metricsFrame()
               );
             };
 
@@ -176,6 +189,11 @@ export class CopilotM365WebExecutor extends BaseExecutor {
                   log?.debug?.("M365_WS", "handshake complete — sending chat invocation");
                   sendChat();
                   continue;
+                }
+
+                if (typeof frame?.error === "string" && frame.error) {
+                  abort(`Microsoft 365 Copilot invocation failed: ${frame.error}`);
+                  return;
                 }
 
                 const { delta, next } = accumulateBotContent(previousText, frame);
@@ -296,6 +314,14 @@ export class CopilotM365WebExecutor extends BaseExecutor {
           if (!data || data === "[DONE]") continue;
           try {
             const parsed = JSON.parse(data);
+            if (parsed.error?.message) {
+              return {
+                response: errorResponse(sanitizeErrorMessage(String(parsed.error.message))),
+                url: redactWsUrl(wsUrl),
+                headers: {},
+                transformedBody: { model, prompt: prompt.slice(0, 100) },
+              };
+            }
             const content = parsed.choices?.[0]?.delta?.content;
             if (typeof content === "string") fullText += content;
           } catch {
@@ -314,7 +340,7 @@ export class CopilotM365WebExecutor extends BaseExecutor {
             choices: [
               {
                 index: 0,
-                message: { role: "assistant", content: fullText || "(empty response)" },
+                message: { role: "assistant", content: fullText },
                 finish_reason: "stop",
               },
             ],

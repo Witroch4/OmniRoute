@@ -25,7 +25,7 @@ export const HANDSHAKE_REQUEST = { protocol: "json", version: 1 } as const;
 /** SignalR keepalive ping frame. */
 export const KEEPALIVE_PING = { type: 6 } as const;
 
-/** Allowed message types observed in the individual M365 send frame. */
+/** Consumer wire contract from the upstream #11069 browser capture. */
 export const ALLOWED_MESSAGE_TYPES = [
   "Chat",
   "Suggestion",
@@ -38,6 +38,25 @@ export const ALLOWED_MESSAGE_TYPES = [
   "AdsQuery",
   "SemanticSerp",
   "GenerateContentQuery",
+  "GenerateGraphicArt",
+  "SearchQuery",
+  "ConfirmationCard",
+  "AuthError",
+  "DeveloperLogs",
+  "TriggerPlugin",
+  "HintInvocation",
+  "MemoryUpdate",
+  "EndOfRequest",
+  "TriggerConfirmation",
+  "ResumeInvokeAction",
+  "ResumeUserInputRequest",
+  "TriggerUserInputRequest",
+  "EscapeHatch",
+  "TriggerPluginAuth",
+  "ResumePluginAuth",
+  "SideBySide",
+  "ReferencesListComplete",
+  "SwitchRespondingEndpoint",
 ] as const;
 
 export const M365_DEFAULT_OPTION_SETS = [
@@ -47,11 +66,9 @@ export const M365_DEFAULT_OPTION_SETS = [
   "cwc_flux_image",
   "cwc_code_interpreter",
   "cwc_code_interpreter_amsfix",
-  "enable_msa_user",
-  "cwcgptv",
+  "cwcfluxgptv",
   "flux_v3_gptv_enable_upload_multi_image_in_turn_wo_ch",
   "gptvnorm2048",
-  "pdnascan",
   "cwc_code_interpreter_citation_fix",
   "code_interpreter_interactive_charts",
   "cwc_code_interpreter_interactive_charts_inline_image",
@@ -63,7 +80,18 @@ export const M365_DEFAULT_OPTION_SETS = [
   "flux_v3_progress_messages",
   "enable_batch_token_processing",
   "enable_gg_gpt",
+  "async_client_interaction",
+  "flux_v3_references",
+  "flux_v3_references_entities",
+  "flux_v3_references_ci",
+  "add_filestore_filetype",
+  "cwc_code_interpreter_citation_sourceannotations",
+  "cdxcwc_code_interpreter_hallucinated_url_filter",
+  "flux_v3_image_gen_enable_dimensions",
   "flux_v3_image_gen_enable_non_watermarked_storage",
+  "flux_v3_image_gen_enable_icon_dimensions",
+  "flux_v3_image_gen_enable_system_text_with_params",
+  "flux_v3_image_gen_enable_designer_dimensions_meta_prompting_in_system_prompts",
   "flux_v3_image_gen_enable_story",
   "rich_responses",
 ] as const;
@@ -81,6 +109,24 @@ export function handshakeFrame(): string {
 /** Serialized keepalive ping frame. */
 export function keepaliveFrame(): string {
   return encodeFrame(KEEPALIVE_PING);
+}
+
+/** The chat invocation and Metrics follow-up share one socket write (#10732). */
+export function metricsFrame(): string {
+  return encodeFrame({
+    arguments: [
+      {
+        Timestamps: {
+          ConnectionEstablished: "",
+          ConnectionStart: "",
+          UserInputStart: "",
+          UserInputSubmit: "",
+        },
+      },
+    ],
+    target: "Metrics",
+    type: 1,
+  });
 }
 
 /**
@@ -121,22 +167,38 @@ export function handshakeError(frame: Record<string, unknown> | null): string | 
 
 export interface ChatInvocationOptions {
   text: string;
-  /** Per-connection trace id (hex), reused as clientCorrelationId/traceId. */
+  /** Per-invocation trace id. */
   traceId: string;
   /** Per-session id (GUID). */
   sessionId: string;
+  /** Must match chatsessionid and ConversationId in the WebSocket URL. */
+  requestId: string;
+  conversationId: string;
   /** Whether this is the first turn of the conversation. */
   isStartOfSession?: boolean;
-  /** Tier-specific option flags; left empty by default (tuned during live validation). */
+  /** Optional override of the consumer option flags. */
   optionsSets?: string[];
   tone?: string;
 }
 
 /**
  * Build the `type:4` chat invocation frame body (not yet `\x1e`-terminated).
- * Mirrors the argument shape captured on the individual M365 path in #4042.
+ * Matches the consumer capture in upstream #10732 / #11069. The legacy
+ * #4042 payload handshakes successfully but is rejected by the hub.
  */
 export function buildChatInvocation(opts: ChatInvocationOptions): Record<string, unknown> {
+  const clientInfo = {
+    clientAppName: "Office",
+    clientPlatform: "mcmcopilot-web",
+    clientEntrypoint: "mcmcopilot-officeweb",
+    clientSessionId: opts.sessionId,
+    ProductCategory: "Chat",
+    clientAppType: "Web",
+    productEntryPoint: "ChatPanel",
+    deviceOS: "Windows",
+    deviceType: "Desktop",
+    clientPlatformVersion: "10",
+  };
   return {
     type: 4,
     target: "chat",
@@ -145,10 +207,10 @@ export function buildChatInvocation(opts: ChatInvocationOptions): Record<string,
       {
         source: "officeweb",
         clientCorrelationId: opts.traceId,
+        conversationId: opts.conversationId,
         sessionId: opts.sessionId,
         optionsSets: opts.optionsSets ?? [...M365_DEFAULT_OPTION_SETS],
         streamingMode: "ConciseWithPadding",
-        spokenTextMode: "None",
         options: {},
         extraExtensionParameters: {},
         allowedMessageTypes: [...ALLOWED_MESSAGE_TYPES],
@@ -156,18 +218,30 @@ export function buildChatInvocation(opts: ChatInvocationOptions): Record<string,
         threadLevelGptId: {},
         traceId: opts.traceId,
         isStartOfSession: opts.isStartOfSession ?? true,
-        clientInfo: {},
+        clientInfo,
         message: {
+          adaptiveCards: [],
+          attachments: null,
+          clientInfo,
+          clientPreferences: {},
+          connectedFederatedConnections: ["dummyId"],
+          entityAnnotationTypes: ["People", "File", "Event", "Email", "TeamsMessage"],
+          experienceType: "Default",
+          locale: "en-us",
+          locationInfo: { timeZone: "UTC", timeZoneOffset: 0 },
+          requestId: opts.requestId,
           author: "user",
           inputMethod: "Keyboard",
           text: opts.text,
           messageType: "Chat",
         },
-        plugins: [],
-        isSbsSupported: false,
-        tone: opts.tone ?? "",
+        plugins: [{ Id: "BingWebSearch", Source: "BuiltIn" }],
+        productThreadType: "Office",
+        isSbsSupported: true,
+        tone: opts.tone ?? "Magic",
+        toolChoice: null,
         renderReferencesBehindEOS: true,
-        disconnectBehavior: "",
+        disconnectBehavior: "continue",
       },
     ],
   };
