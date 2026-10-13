@@ -1118,6 +1118,7 @@ async function handleSingleModelChat(
       model,
       usageLimitMetadata: {
         id: apiKeyInfo.id,
+        allowedModels: apiKeyInfo.allowedModels,
         allowedConnections: Array.isArray(apiKeyInfo.allowedConnections)
           ? apiKeyInfo.allowedConnections
           : [],

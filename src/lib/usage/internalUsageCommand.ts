@@ -4,6 +4,10 @@ import {
   type ApiKeyUsageLimitStatus,
 } from "@/lib/usage/apiKeyUsageLimits";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
+import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
+import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
+import { resolveProviderQuotaResetReference } from "./quotaResetReference";
+import { resolveQuotaProviderScope } from "./quotaProviderScope";
 
 export const INTERNAL_USAGE_COMMAND = "@@om-usage";
 export const USAGE_COMMAND_DISABLED_MESSAGE = "Usage command is disabled for this API key.";
@@ -17,6 +21,7 @@ interface UsageCommandApiKeyMetadata {
   id: string;
   name?: string;
   allowedConnections?: string[] | null;
+  allowedModels?: string[] | null;
   preferredProvider?: string | null;
   allowUsageCommand?: boolean;
   usageLimitEnabled?: boolean;
@@ -37,6 +42,7 @@ interface UsageSnapshot {
   plan: unknown;
   quotas: JsonRecord;
   quotaWindowThresholds?: Record<string, number> | null;
+  resetReferenceWindowKey?: string;
 }
 
 interface UsageCommandSelection {
@@ -62,6 +68,7 @@ export interface InternalUsageCommandDeps {
     deps?: { now?: () => number }
   ) => Promise<ApiKeyUsageLimitStatus>;
   getQuotaPolicy?: () => Promise<UsageCommandQuotaPolicy>;
+  getQuotaResetReferences?: () => ProviderQuotaResetReferences;
 }
 
 type RequiredDeps = Required<InternalUsageCommandDeps>;
@@ -94,6 +101,7 @@ async function normalizeDeps(deps: InternalUsageCommandDeps = {}): Promise<Requi
     getApiKeyUsageLimitStatus:
       deps.getApiKeyUsageLimitStatus ?? usageLimits!.getApiKeyUsageLimitStatus,
     getQuotaPolicy: deps.getQuotaPolicy ?? getDefaultUsageCommandQuotaPolicy,
+    getQuotaResetReferences: deps.getQuotaResetReferences ?? getProviderQuotaResetReferences,
   };
 }
 
@@ -557,10 +565,25 @@ export async function buildUsageCommandText(
   const resolvedDeps = await normalizeDeps(deps);
   const sections: string[] = [];
 
-  const snapshot = selectUsageSnapshot(
-    await collectUsageSnapshots(metadata, resolvedDeps),
-    selection
-  );
+  const snapshots = await collectUsageSnapshots(metadata, resolvedDeps);
+  const provider = resolveQuotaProviderScope({
+    ...metadata,
+    preferredProvider: selection.preferredProvider ?? metadata.preferredProvider,
+  });
+  const principal =
+    provider && !selection.preferredConnectionId
+      ? await resolveProviderQuotaResetReference(provider, resolvedDeps)
+      : null;
+  const snapshot: UsageSnapshot | null = principal
+    ? {
+        connectionId: principal.reference.connectionId,
+        provider: provider!,
+        plan: principal.cache?.plan,
+        quotas: { ...principal.cache?.quotas, [principal.reference.windowKey]: principal.quota },
+        quotaWindowThresholds: readThresholdMap(principal.connection.quotaWindowThresholds),
+        resetReferenceWindowKey: principal.reference.windowKey,
+      }
+    : selectUsageSnapshot(snapshots, { ...selection, preferredProvider: provider });
   const policy = snapshot ? await resolvedDeps.getQuotaPolicy() : null;
 
   // Cut-off cascades by window coarseness, not globally. A COARSER (longer)
@@ -575,7 +598,14 @@ export async function buildUsageCommandText(
   // weekly quota (never the raw value). The admin dashboard is unaffected and
   // still shows raw per-window real values.
   const sessionMatch = snapshot ? findQuota(snapshot.quotas, "session") : null;
-  const weeklyMatch = snapshot ? findQuota(snapshot.quotas, "weekly") : null;
+  const weeklyMatch = snapshot?.resetReferenceWindowKey
+    ? {
+        key: snapshot.resetReferenceWindowKey,
+        quota: snapshot.quotas[snapshot.resetReferenceWindowKey] as JsonRecord,
+      }
+    : snapshot
+      ? findQuota(snapshot.quotas, "weekly")
+      : null;
   const weeklyEffective =
     snapshot && policy ? windowEffectiveRemaining(weeklyMatch, snapshot, policy) : null;
   // Weekly is the coarsest window we surface: nothing longer can cap it.

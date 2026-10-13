@@ -9,6 +9,25 @@ import {
 
 const WINDOW_START = "2026-08-01T00:00:00.000Z";
 
+test("a provider reset clears a previously exhausted family within the cache TTL", async () => {
+  clearModelBudgetRoutingCacheForTests();
+  const input = { apiKeyId: "key-1", provider: "cc", model: "claude-opus-4-8", now: 1_000 };
+  const rules = [rule({ sourceFamily: "claude-opus-*", targetFamily: "claude-sonnet-*" })];
+  const exhausted = await resolveModelBudgetRedirect(
+    input,
+    depsWith(rules, { "claude-opus-*": 100 })
+  );
+  assert.ok(exhausted);
+  const reset = await resolveModelBudgetRedirect(
+    { ...input, now: 1_001 },
+    {
+      ...depsWith(rules, { "claude-opus-*": 0 }),
+      getWindowStartIso: async () => "2026-08-08T00:00:00.000Z",
+    }
+  );
+  assert.equal(reset, null);
+});
+
 function rule(partial: Partial<ModelBudgetRule> & { sourceFamily: string; targetFamily: string }) {
   return {
     id: `rule-${partial.sourceFamily}`,

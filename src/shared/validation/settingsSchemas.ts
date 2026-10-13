@@ -12,6 +12,7 @@ import { HIDEABLE_SIDEBAR_GROUP_IDS } from "@/shared/constants/sidebarGroupVisib
 import { HIDEABLE_SIDEBAR_ITEM_IDS, SIDEBAR_SECTIONS } from "@/shared/constants/sidebarVisibility";
 import { ACCOUNT_FALLBACK_STRATEGY_VALUES } from "@/shared/constants/routingStrategies";
 import { RESPONSES_PREVIOUS_RESPONSE_ID_MODES } from "@/shared/constants/responsesPreviousResponseId";
+import { providerQuotaResetReferencesSchema } from "./quotaResetReferenceSchemas";
 // Import from the server-free constants leaf, NOT from `@/server/authz/routeGuard`:
 // this schema is reachable from client components (dashboard onboarding wizard), and
 // routeGuard drags in server runtime (→ ioredis) that breaks the client/CLI build.
@@ -118,6 +119,7 @@ export const updateSettingsSchema = z.object({
   // "always" applies the short-circuit to every Claude-format request.
   claudeClassifierCompat: z.enum(["off", "auto", "always"]).optional(),
   autoRefreshProviderQuota: z.boolean().optional(),
+  providerQuotaResetReferences: providerQuotaResetReferencesSchema.optional(),
   autoRefreshProviderQuotaInterval: z.number().int().min(10).max(3600).optional(),
   pinProviderQuotaToHome: z.boolean().optional(),
   showQuickStartOnHome: z.boolean().optional(),

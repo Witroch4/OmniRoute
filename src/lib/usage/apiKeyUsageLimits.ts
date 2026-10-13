@@ -10,6 +10,10 @@ import {
   type FamilyMultiplierRule,
 } from "./modelFamilyMultiplier";
 import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
+import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
+import { resolveProviderQuotaResetReference } from "./quotaResetReference";
+import { normalizeQuotaProvider, resolveQuotaProviderScope } from "./quotaProviderScope";
 
 const FORTALEZA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +22,7 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export interface ApiKeyUsageLimitMetadata {
   id: string;
   allowedConnections?: string[] | null;
+  allowedModels?: string[] | null;
   preferredProvider?: string | null;
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
@@ -44,6 +49,7 @@ export interface ApiKeyUsageLimitDeps {
   getProviderConnections?: (filter?: Record<string, unknown>) => Promise<unknown[]>;
   getProviderLimitsCache?: (connectionId: string) => ProviderLimitsCacheEntry | null;
   getAllProviderLimitsCache?: () => Record<string, ProviderLimitsCacheEntry>;
+  getQuotaResetReferences?: () => ProviderQuotaResetReferences;
 }
 
 export interface UsageCostRow {
@@ -414,6 +420,7 @@ async function resolveDeps(deps: ApiKeyUsageLimitDeps): Promise<Required<ApiKeyU
     getProviderLimitsCache: deps.getProviderLimitsCache ?? providerLimits!.getProviderLimitsCache,
     getAllProviderLimitsCache:
       deps.getAllProviderLimitsCache ?? providerLimits!.getAllProviderLimitsCache,
+    getQuotaResetReferences: deps.getQuotaResetReferences ?? getProviderQuotaResetReferences,
   };
 }
 
@@ -426,11 +433,35 @@ async function getProviderWeeklyWindow(
     ? metadata.allowedConnections.filter((id) => typeof id === "string" && id.trim())
     : [];
 
+  let preferredProvider = resolveQuotaProviderScope(metadata);
+  if (!preferredProvider && allowedConnections.length > 0) {
+    const providers = new Set<string>();
+    for (const id of allowedConnections) {
+      const connection = connectionFromValue(await deps.getProviderConnectionById(id));
+      const provider = connection && normalizeQuotaProvider(connection.provider);
+      if (provider) providers.add(provider);
+    }
+    if (providers.size === 1) preferredProvider = [...providers][0];
+  }
+  if (preferredProvider) {
+    const principal = await resolveProviderQuotaResetReference(preferredProvider, {
+      ...deps,
+      now: () => nowMs,
+    });
+    if (principal)
+      return {
+        resetAtIso: principal.resetAtIso,
+        windowStartIso: principal.windowStartIso,
+      };
+  }
+
   const resetCandidates: WeeklyResetCandidate[] = [];
   if (allowedConnections.length > 0) {
     for (const connectionId of allowedConnections) {
       const connection = connectionFromValue(await deps.getProviderConnectionById(connectionId));
       if (!connection) continue;
+      if (preferredProvider && normalizeProvider(connection.provider) !== preferredProvider)
+        continue;
       const resetAt = resolveWeeklyResetAt(
         deps.getProviderLimitsCache(connection.id)?.quotas,
         connection.id,
@@ -451,6 +482,8 @@ async function getProviderWeeklyWindow(
     for (const rawConnection of connections) {
       const connection = connectionFromValue(rawConnection);
       if (!connection) continue;
+      if (preferredProvider && normalizeProvider(connection.provider) !== preferredProvider)
+        continue;
       const resetAt = resolveWeeklyResetAt(caches[connection.id]?.quotas, connection.id, nowMs);
       if (resetAt) {
         resetCandidates.push({
@@ -463,13 +496,12 @@ async function getProviderWeeklyWindow(
     }
   }
 
-  const preferredProvider = normalizeProvider(metadata.preferredProvider);
   const scopedCandidates = preferredProvider
     ? resetCandidates.filter(
         (candidate) => normalizeProvider(candidate.provider) === preferredProvider
       )
     : [];
-  const candidates = scopedCandidates.length > 0 ? scopedCandidates : resetCandidates;
+  const candidates = preferredProvider ? scopedCandidates : resetCandidates;
   const selected =
     candidates
       .sort((left, right) => Date.parse(left.resetAtIso) - Date.parse(right.resetAtIso))
