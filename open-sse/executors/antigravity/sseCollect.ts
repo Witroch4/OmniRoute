@@ -127,10 +127,13 @@ export function processAntigravitySSEPayload(
     }
     if (parsed?.response?.usageMetadata) {
       const um = parsed.response.usageMetadata;
+      const cachedTokens =
+        typeof um.cachedContentTokenCount === "number" ? um.cachedContentTokenCount : 0;
       collected.usage = {
         prompt_tokens: um.promptTokenCount || 0,
         completion_tokens: um.candidatesTokenCount || 0,
         total_tokens: um.totalTokenCount || 0,
+        ...(cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
       };
     }
     if (Array.isArray(parsed?.remainingCredits)) {
