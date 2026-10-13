@@ -27,7 +27,6 @@ export function resolveQuotaProviderScope(metadata: {
     if (provider) providers.add(provider);
     qualifiedModels.add(parts.slice(1).join("/"));
   }
-  if (unprefixedModels.some((model) => !qualifiedModels.has(model) && !qualifiedModels.has("*")))
-    return null;
+  if (unprefixedModels.some((model) => !qualifiedModels.has(model))) return null;
   return providers.size === 1 ? [...providers][0] : null;
 }

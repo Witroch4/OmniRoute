@@ -277,6 +277,19 @@ test("connection-only Codex keys with unrestricted models still reset with Proli
   assert.equal(status.weeklyWindowStartIso, start);
 });
 
+test("a qualified wildcard cannot claim an unrelated unprefixed model's provider", async () => {
+  const status = await limits.getApiKeyUsageLimitStatus(
+    {
+      id: "mixed-permissions",
+      allowedModels: ["cc/*", "codex-auto-review"],
+      allowedConnections: [goId],
+    },
+    { now: () => now }
+  );
+  assert.equal(status.weeklyWindowStartIso, start);
+  assert.equal(status.weeklyResetAtIso, nextReset);
+});
+
 test("unchanged percentage with a moved expiry is persisted without erasing prior spend", async () => {
   quotaCache.setQuotaCache(principalId, "codex", {
     session: { used: 10, total: 100, resetAt: nextReset },
