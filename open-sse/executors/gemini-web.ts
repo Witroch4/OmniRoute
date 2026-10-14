@@ -18,7 +18,9 @@ import { sanitizeErrorMessage } from "../utils/error.ts";
 import {
   findGeminiWebModel,
   GEMINI_WEB_MODELS,
+  GEMINI_WEB_PICKER_LABELS,
   type GeminiWebModel,
+  type GeminiWebReasoningLevel,
 } from "../config/providers/registry/gemini/web/models.ts";
 import {
   GeminiWebGateError,
@@ -209,6 +211,8 @@ function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): strin
 
 // ─── Model picker ───────────────────────────────────────────────────────────
 //
+// Measured live 2026-10-14: the picker button shows a SHORT name once a model is selected
+// ("Flash-Lite", "Flash", "Pro", "Argon" — not the menu's "3.5 Flash Lite", "3.8 Flash", …).
 // The web app answers with whatever model its mode picker currently shows (the account
 // default, or the last pick). Selecting a model therefore means driving that picker BEFORE
 // typing the prompt. The page scripts are plain strings so this file needs no DOM typings
@@ -227,7 +231,13 @@ export class GeminiWebModelSelectionError extends Error {
 
 /** The slice of Playwright's `Page` the picker needs. */
 export interface GeminiWebPickerPage {
-  evaluate<R, A>(script: string, arg: A): Promise<R>;
+  /**
+   * Evaluates a JavaScript EXPRESSION in the page and returns its value. Playwright (Node)
+   * does not call a string that happens to be a function and never passes it an argument —
+   * measured live 2026-10-14: `evaluate("(a) => …", arg)` returned undefined. Use
+   * `runPageScript`, which emits a self-invoking expression.
+   */
+  evaluate<R>(expression: string): Promise<R>;
   waitForTimeout(ms: number): Promise<void>;
   locator(selector: string): { first(): { click(): Promise<void> } };
 }
@@ -235,6 +245,11 @@ export interface GeminiWebPickerPage {
 interface PickerState {
   text: string;
   aria: string;
+}
+
+/** Run a function-valued page script with one JSON argument, as a self-invoking expression. */
+function runPageScript<R>(page: GeminiWebPickerPage, script: string, arg: unknown): Promise<R> {
+  return page.evaluate<R>(`(${script})(${JSON.stringify(arg ?? null)})`);
 }
 
 const PICKER_ATTR = "data-omni-gweb-picker";
@@ -247,15 +262,15 @@ const TAG_PICKER_SCRIPT = `(known) => {
   const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim();
   document.querySelectorAll("[${PICKER_ATTR}]").forEach((el) => el.removeAttribute("${PICKER_ATTR}"));
   const ariaRe = /seletor de modo|mode picker|model picker|selecionar modelo|choose.{0,12}model/i;
-  for (const el of document.querySelectorAll("button, [role='button']")) {
-    const text = norm(el.innerText);
-    const aria = norm(el.getAttribute("aria-label"));
-    if (known.includes(text) || ariaRe.test(aria)) {
-      el.setAttribute("${PICKER_ATTR}", "1");
-      return { text, aria };
-    }
-  }
-  return null;
+  const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+  // The button's own text is a short word ("Pro", "Flash") that can also appear elsewhere on
+  // the page, so its aria-label wins; the text is only a fallback for a relabelled button.
+  const el =
+    buttons.find((b) => ariaRe.test(norm(b.getAttribute("aria-label")))) ||
+    buttons.find((b) => known.includes(norm(b.innerText)));
+  if (!el) return null;
+  el.setAttribute("${PICKER_ATTR}", "1");
+  return { text: norm(el.innerText), aria: norm(el.getAttribute("aria-label")) };
 }`;
 
 // Tags the open menu's entry whose visible text matches `source`.
@@ -289,7 +304,12 @@ export function geminiWebMenuItemPattern(model: GeminiWebModel): string {
 function pickerShows(state: PickerState | null, model: GeminiWebModel): boolean {
   if (!state) return false;
   const labels = [model.uiLabel, ...(model.pillLabels ?? [])];
-  return labels.some((label) => state.text === label || state.aria.endsWith(label));
+  // The aria-label ends with the current model's name ("…No momento: Flash-Lite"); require a
+  // word boundary so the "Flash" button is not mistaken for "Flash-Lite" or the reverse.
+  return labels.some(
+    (label) =>
+      state.text === label || new RegExp(`(^|[^\\w-])${escapeRegExp(label)}$`).test(state.aria)
+  );
 }
 
 /**
@@ -302,11 +322,11 @@ export async function selectGeminiWebModel(
   model: GeminiWebModel,
   timeoutMs = 10_000
 ): Promise<void> {
-  const known = GEMINI_WEB_MODELS.flatMap((m) => [m.uiLabel, ...(m.pillLabels ?? [])]);
+  const known = [...GEMINI_WEB_PICKER_LABELS];
 
   let state: PickerState | null = null;
   for (let waited = 0; waited <= timeoutMs; waited += PICKER_POLL_MS) {
-    state = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    state = await runPageScript<PickerState | null>(page, TAG_PICKER_SCRIPT, known);
     if (state) break;
     await page.waitForTimeout(PICKER_POLL_MS);
   }
@@ -323,7 +343,7 @@ export async function selectGeminiWebModel(
 
   let found = false;
   for (let waited = 0; waited <= 5_000; waited += PICKER_POLL_MS) {
-    found = await page.evaluate<boolean, string>(TAG_ITEM_SCRIPT, geminiWebMenuItemPattern(model));
+    found = await runPageScript<boolean>(page, TAG_ITEM_SCRIPT, geminiWebMenuItemPattern(model));
     if (found) break;
     await page.waitForTimeout(PICKER_POLL_MS);
   }
@@ -338,7 +358,7 @@ export async function selectGeminiWebModel(
 
   for (let waited = 0; waited <= 4_000; waited += PICKER_POLL_MS) {
     await page.waitForTimeout(PICKER_POLL_MS);
-    const after = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    const after = await runPageScript<PickerState | null>(page, TAG_PICKER_SCRIPT, known);
     if (pickerShows(after, model)) return;
   }
   throw new GeminiWebModelSelectionError(
@@ -354,7 +374,7 @@ export async function selectGeminiWebModel(
 // detalhado"). Like the model, the level is a picker state: unset, the page uses whatever the
 // account last saved. It is driven only when the caller asks (`reasoning_effort`).
 
-export type GeminiWebReasoningLevel = "min" | "medium" | "max";
+export type { GeminiWebReasoningLevel };
 
 /** OpenAI-style effort → the web app's three levels. Unknown values are ignored (null). */
 export function resolveGeminiWebReasoning(effort: unknown): GeminiWebReasoningLevel | null {
@@ -403,8 +423,8 @@ export async function selectGeminiWebReasoning(
   level: GeminiWebReasoningLevel,
   timeoutMs = 6_000
 ): Promise<void> {
-  const known = GEMINI_WEB_MODELS.flatMap((m) => [m.uiLabel, ...(m.pillLabels ?? [])]);
-  const findItem = (source: string) => page.evaluate<boolean, string>(TAG_ITEM_SCRIPT, source);
+  const known = [...GEMINI_WEB_PICKER_LABELS];
+  const findItem = (source: string) => runPageScript<boolean>(page, TAG_ITEM_SCRIPT, source);
   const poll = async (source: string, ms: number): Promise<boolean> => {
     for (let waited = 0; waited <= ms; waited += PICKER_POLL_MS) {
       if (await findItem(source)) return true;
@@ -416,7 +436,7 @@ export async function selectGeminiWebReasoning(
   // The menu closes after a model pick; let that settle, then reopen unless the section is there.
   await page.waitForTimeout(PICKER_POLL_MS);
   if (!(await findItem(REASONING_SECTION_PATTERN))) {
-    const state = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    const state = await runPageScript<PickerState | null>(page, TAG_PICKER_SCRIPT, known);
     if (!state) {
       throw new GeminiWebModelSelectionError(
         502,
@@ -442,11 +462,13 @@ export async function selectGeminiWebReasoning(
   }
   await page.locator(`[${ITEM_ATTR}]`).first().click();
 
-  // Verify when the page exposes the state; trust the click when it does not.
+  // Verify only when the page exposes a checked state. Measured live 2026-10-14: the entries
+  // are role="menuitem" with NO aria-checked, so today this trusts the click; it starts
+  // verifying by itself if the page ever exposes the state.
   await page.waitForTimeout(PICKER_POLL_MS);
   const reopened = await findItem(REASONING_LEVEL_PATTERNS[level]);
   if (reopened) {
-    const checked = await page.evaluate<string | null, string>(READ_ITEM_CHECKED_SCRIPT, ITEM_ATTR);
+    const checked = await runPageScript<string | null>(page, READ_ITEM_CHECKED_SCRIPT, ITEM_ATTR);
     if (checked === "false") {
       throw new GeminiWebModelSelectionError(
         502,
@@ -618,9 +640,10 @@ export class GeminiWebExecutor extends BaseExecutor {
       if (selectedModel) {
         await selectGeminiWebModel(page, selectedModel);
       }
-      const reasoning = resolveGeminiWebReasoning(
-        requestBody.reasoning_effort ?? requestBody.reasoning?.effort
-      );
+      // A tier id (`…-high`) pins the level; `reasoning_effort` only applies to a bare id.
+      const reasoning =
+        selectedModel?.reasoning ??
+        resolveGeminiWebReasoning(requestBody.reasoning_effort ?? requestBody.reasoning?.effort);
       if (reasoning) {
         await selectGeminiWebReasoning(page, reasoning);
       }

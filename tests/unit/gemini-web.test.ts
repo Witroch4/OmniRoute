@@ -184,16 +184,25 @@ test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
   // Mirrors the web app's mode picker (measured 2026-10-14): 3.5 Flash Lite, 3.8 Flash,
-  // 3.1 Pro, 4 Argon. The executor selects each one by its picker entry.
+  // 3.1 Pro, 4 Argon — each with its three reasoning levels as separate ids.
   assert.deepEqual(
-    models.map((m: any) => [m.id, m.name]),
+    models.map((m: any) => m.id),
     [
-      ["gemini-4-argon", "Gemini 4 Argon"],
-      ["gemini-3.8-flash", "Gemini 3.8 Flash"],
-      ["gemini-3.1-pro", "Gemini 3.1 Pro"],
-      ["gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"],
+      "gemini-4-argon-high",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-low",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-medium",
+      "gemini-3.1-pro-low",
+      "gemini-3.5-flash-lite-high",
+      "gemini-3.5-flash-lite-medium",
+      "gemini-3.5-flash-lite-low",
     ]
   );
+  assert.equal(models[0].name, "Gemini 4 Argon (Max reasoning)");
 });
 
 // ─── Regression: #2832 / #3516 — Playwright missing in Docker (runner-base) ──

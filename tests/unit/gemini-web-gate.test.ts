@@ -302,18 +302,42 @@ test("defaults keep the production box safe: at most 2 browsers and 2 per accoun
 
 // ─── Catalog ────────────────────────────────────────────────────────────────
 
-test("catalog: ids are unique, newest first, and resolvable with or without the alias", () => {
+test("catalog: one id per (model, reasoning level), newest model first, high → low", () => {
   const ids = GEMINI_WEB_MODELS.map((m: { id: string }) => m.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(ids, [
-    "gemini-4-argon",
-    "gemini-3.8-flash",
-    "gemini-3.1-pro",
-    "gemini-3.5-flash-lite",
+    "gemini-4-argon-high",
+    "gemini-4-argon-medium",
+    "gemini-4-argon-low",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-medium",
+    "gemini-3.1-pro-low",
+    "gemini-3.5-flash-lite-high",
+    "gemini-3.5-flash-lite-medium",
+    "gemini-3.5-flash-lite-low",
   ]);
-  assert.equal(findGeminiWebModel("gweb/gemini-4-argon")?.uiLabel, "4 Argon");
-  assert.equal(findGeminiWebModel("gemini-3.8-flash")?.uiLabel, "3.8 Flash");
+});
+
+test("catalog: tier ids pin the level; a bare base id resolves but leaves the level alone", () => {
+  const high = findGeminiWebModel("gweb/gemini-4-argon-high")!;
+  assert.equal(high.uiLabel, "4 Argon");
+  assert.equal(high.reasoning, "max");
+  assert.equal(findGeminiWebModel("gemini-4-argon-medium")?.reasoning, "medium");
+  assert.equal(findGeminiWebModel("gemini-3.8-flash-low")?.reasoning, "min");
+
+  const base = findGeminiWebModel("gemini-4-argon")!;
+  assert.equal(base.uiLabel, "4 Argon");
+  assert.equal(base.reasoning, undefined);
+  assert.equal(
+    GEMINI_WEB_MODELS.some((m: { id: string }) => m.id === "gemini-4-argon"),
+    false,
+    "the base id is accepted but not advertised"
+  );
   assert.equal(findGeminiWebModel("gemini-2.5-pro"), undefined);
+  assert.equal(findGeminiWebModel("gemini-4-argon-ultra"), undefined);
 });
 
 // ─── Model picker (driven against a stub document) ──────────────────────────
@@ -342,6 +366,14 @@ function fakeEl(innerText: string, attrs: Record<string, string> = {}): FakeEl {
   };
 }
 
+/** Picker button text once a model is selected — measured on the live page, differs from the menu. */
+const SHORT_PILL: Record<string, string> = {
+  "4 Argon": "Argon",
+  "3.8 Flash": "Flash",
+  "3.1 Pro": "Pro",
+  "3.5 Flash Lite": "Flash-Lite",
+};
+
 interface FakePickerOptions {
   /** Text the picker button shows initially. */
   pill: string;
@@ -366,6 +398,7 @@ function makeFakePickerPage(opts: FakePickerOptions) {
     clicks: [] as string[],
     menuOpened: 0,
     level: null as string | null,
+    expressions: [] as string[],
   };
   const pill = fakeEl(opts.pill, {
     "aria-label": opts.aria ?? `Abrir seletor de modo. No momento: ${opts.pill}`,
@@ -407,10 +440,11 @@ function makeFakePickerPage(opts: FakePickerOptions) {
   };
 
   const page = {
-    async evaluate<R, A>(script: string, arg: A): Promise<R> {
-      // Run the page script against the stub document in an isolated context.
-      const fn = vm.runInNewContext(script, { document: doc }) as (a: A) => R;
-      return fn(arg);
+    // Same contract as Playwright (Node): a string is an EXPRESSION, evaluated as is. It is not
+    // called with an argument — a bare `(a) => …` would just come back as a function.
+    async evaluate<R>(expression: string): Promise<R> {
+      state.expressions.push(expression);
+      return vm.runInNewContext(expression, { document: doc }) as R;
     },
     async waitForTimeout() {},
     locator(selector: string) {
@@ -442,7 +476,7 @@ function makeFakePickerPage(opts: FakePickerOptions) {
             }
             if (tagged && opts.applies !== false) {
               const name = tagged.innerText.replace(/\s+(Respostas|Ajuda|Racioc|Tarefas).*$/, "");
-              state.pill = name === "4 Argon" ? "Argon" : name;
+              state.pill = SHORT_PILL[name] ?? name;
               pill.innerText = state.pill;
               pill.attrs["aria-label"] = `Abrir seletor de modo. No momento: ${state.pill}`;
             }
@@ -472,18 +506,56 @@ test("picker: selects the requested model from the open menu", async () => {
   const { page, state } = makeFakePickerPage({ pill: "Argon", menu: MENU });
   await selectGeminiWebModel(page, findGeminiWebModel("gemini-3.8-flash")!);
   assert.deepEqual(state.clicks, ["pill", "item:3.8 Flash Ajuda para tudo"]);
-  assert.equal(state.pill, "3.8 Flash");
+  assert.equal(state.pill, "Flash", "the button shows the short name, not the menu's");
+});
+
+test("picker: page scripts are sent as self-invoking expressions (Playwright never calls a string)", async () => {
+  const { page, state } = makeFakePickerPage({ pill: "Argon", menu: MENU, reasoning: true });
+  await selectGeminiWebModel(page, findGeminiWebModel("gemini-3.8-flash")!);
+  await selectGeminiWebReasoning(page, "max");
+  assert.ok(state.expressions.length >= 4);
+  for (const expression of state.expressions) {
+    assert.match(expression, /^\(\(.*\)\(.*\)$/s, "must be (script)(arg)");
+    // Evaluated on its own it must yield a VALUE, not a function.
+    const value = vm.runInNewContext(expression, {
+      document: { querySelectorAll: () => [], querySelector: () => null },
+    });
+    assert.notEqual(typeof value, "function");
+  }
+});
+
+test("picker: 'Flash' and 'Flash-Lite' buttons are different models", async () => {
+  // Wanting 3.8 Flash while the button reads "Flash-Lite" must click, not skip.
+  const wantFlash = makeFakePickerPage({ pill: "Flash-Lite", menu: MENU });
+  await selectGeminiWebModel(wantFlash.page, findGeminiWebModel("gemini-3.8-flash")!);
+  assert.deepEqual(wantFlash.state.clicks, ["pill", "item:3.8 Flash Ajuda para tudo"]);
+  assert.equal(wantFlash.state.pill, "Flash");
+
+  // And already showing the right short name means no click at all.
+  const already = makeFakePickerPage({ pill: "Flash-Lite", menu: MENU });
+  await selectGeminiWebModel(already.page, findGeminiWebModel("gemini-3.5-flash-lite-low")!);
+  assert.deepEqual(already.state.clicks, []);
+});
+
+test("picker: the button is found by aria-label even when its text is an ambiguous short word", async () => {
+  const { page, state } = makeFakePickerPage({
+    pill: "Pro",
+    aria: "Abrir seletor de modo. No momento: Pro",
+    menu: MENU,
+  });
+  await selectGeminiWebModel(page, findGeminiWebModel("gemini-3.1-pro-high")!);
+  assert.deepEqual(state.clicks, [], "already on Pro");
 });
 
 test("picker: Argon is satisfied by the short pill label", async () => {
-  const { page, state } = makeFakePickerPage({ pill: "3.1 Pro", menu: MENU });
+  const { page, state } = makeFakePickerPage({ pill: "Pro", menu: MENU });
   await selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!);
   assert.equal(state.pill, "Argon");
 });
 
 test("picker: a model the account's menu does not offer is a 404, not a silent default", async () => {
   const { page } = makeFakePickerPage({
-    pill: "3.8 Flash",
+    pill: "Flash",
     menu: ["3.5 Flash Lite Respostas mais rápidas", "3.8 Flash Ajuda para tudo"],
   });
   await assert.rejects(
@@ -707,7 +779,7 @@ async function chat(
 test("executor: selects the requested model, answers, echoes the id and frees the gate", async () => {
   const gate = newGate();
   try {
-    await withFakeChromium({ pill: "3.1 Pro", menu: MENU }, async (probe) => {
+    await withFakeChromium({ pill: "Pro", menu: MENU }, async (probe) => {
       const result = await chat("gemini-4-argon");
       assert.equal(result.response.status, 200);
       const json = (await result.response.json()) as {
@@ -728,7 +800,7 @@ test("executor: selects the requested model, answers, echoes the id and frees th
 test("executor: reasoning_effort sets the level after the model; no effort leaves it alone", async () => {
   const gate = newGate();
   try {
-    await withFakeChromium({ pill: "3.1 Pro", menu: MENU, reasoning: true }, async (probe) => {
+    await withFakeChromium({ pill: "Pro", menu: MENU, reasoning: true }, async (probe) => {
       const withEffort = await chat("gemini-4-argon", "__Secure-1PSID=reasoning-test", {
         reasoning_effort: "high",
       });
@@ -742,6 +814,58 @@ test("executor: reasoning_effort sets the level after the model; no effort leave
       );
     });
     assert.equal(gate.stats().pending, 0);
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
+test("executor: a tier id selects model AND level with no extra parameter", async () => {
+  const gate = newGate();
+  try {
+    await withFakeChromium({ pill: "Pro", menu: MENU, reasoning: true }, async (probe) => {
+      const result = await chat("gemini-4-argon-high", "__Secure-1PSID=tier-high");
+      assert.equal(result.response.status, 200);
+      const json = (await result.response.json()) as { model: string };
+      assert.equal(json.model, "gemini-4-argon-high", "the requested id is echoed");
+      assert.equal(probe.picker.pill, "Argon");
+      assert.equal(probe.picker.level, "Máx.");
+    });
+    await withFakeChromium({ pill: "Argon", menu: MENU, reasoning: true }, async (probe) => {
+      await chat("gemini-4-argon-low", "__Secure-1PSID=tier-low");
+      assert.equal(probe.picker.level, "Mín.");
+    });
+    await withFakeChromium({ pill: "Argon", menu: MENU, reasoning: true }, async (probe) => {
+      await chat("gemini-4-argon-medium", "__Secure-1PSID=tier-medium");
+      assert.equal(probe.picker.level, "Médio");
+    });
+    assert.equal(gate.stats().pending, 0);
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
+test("executor: the tier in the id wins over a conflicting reasoning_effort", async () => {
+  newGate();
+  try {
+    await withFakeChromium({ pill: "Argon", menu: MENU, reasoning: true }, async (probe) => {
+      await chat("gemini-4-argon-low", "__Secure-1PSID=tier-wins", { reasoning_effort: "high" });
+      assert.equal(probe.picker.level, "Mín.");
+    });
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
+test("executor: a bare base id still works and obeys reasoning_effort", async () => {
+  newGate();
+  try {
+    await withFakeChromium({ pill: "Argon", menu: MENU, reasoning: true }, async (probe) => {
+      const result = await chat("gemini-4-argon", "__Secure-1PSID=bare", {
+        reasoning_effort: "medium",
+      });
+      assert.equal(result.response.status, 200);
+      assert.equal(probe.picker.level, "Médio");
+    });
   } finally {
     __setGeminiWebGateForTests(null);
   }
@@ -782,7 +906,7 @@ test("executor: a model the account does not offer fails (404) and nothing is ty
   const gate = newGate();
   try {
     await withFakeChromium(
-      { pill: "3.8 Flash", menu: ["3.8 Flash Ajuda para tudo"] },
+      { pill: "Flash", menu: ["3.8 Flash Ajuda para tudo"] },
       async (probe) => {
         const result = await chat("gemini-3.1-pro");
         assert.equal(result.response.status, 404);
