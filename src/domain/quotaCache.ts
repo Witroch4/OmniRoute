@@ -162,24 +162,29 @@ function earliestResetAt(quotas: Record<string, QuotaInfo>): string | null {
  * The background refresh ticks every 60s for ALL connections, so idle accounts
  * (whose quota never changes) were generating 400K+ identical snapshot rows/day.
  * Returns true only when this window has no prior cached observation, or when its
- * `remaining_percentage` / `is_exhausted` differs from the last cached entry — so
+ * remaining percentage, exhaustion or reset timestamp differs from the last entry — so
  * the first observation and every real change persist, but idle no-op refreshes
  * stop writing. Pure (no I/O) for trivial unit testing.
  */
 export function quotaSnapshotChanged(
   prior:
-    | { quotas?: Record<string, { remainingPercentage: number }>; exhausted?: boolean }
+    | {
+        quotas?: Record<string, { remainingPercentage: number; resetAt?: string | null }>;
+        exhausted?: boolean;
+      }
     | null
     | undefined,
   windowKey: string,
   remainingPercentage: number,
-  exhausted: boolean
+  exhausted: boolean,
+  resetAt?: string | null
 ): boolean {
   if (!prior) return true;
   const priorWindow = prior.quotas?.[windowKey];
   if (!priorWindow) return true;
   return (
     priorWindow.remainingPercentage !== remainingPercentage ||
+    (resetAt !== undefined && priorWindow.resetAt !== resetAt) ||
     (prior.exhausted ?? false) !== exhausted
   );
 }
@@ -275,7 +280,16 @@ export function setQuotaCache(
       // windows previously never flagged that window's row as exhausted.
       const windowExhausted = remainingPercentage <= 0;
       // #4438 — only persist on the first observation or a real change.
-      if (!quotaSnapshotChanged(prior, windowKey, remainingPercentage, windowExhausted)) continue;
+      if (
+        !quotaSnapshotChanged(
+          prior,
+          windowKey,
+          remainingPercentage,
+          windowExhausted,
+          quotaInfo.resetAt ?? null
+        )
+      )
+        continue;
       try {
         saveQuotaSnapshot({
           provider,

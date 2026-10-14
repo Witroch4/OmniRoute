@@ -10,7 +10,7 @@ import {
   upsertUpstreamProxyConfig,
   getUpstreamProxyConfig,
 } from "@/lib/db/upstreamProxy";
-import { getProviderConnections } from "@/lib/db/providers";
+import { getProviderConnections, getProviderConnectionById } from "@/lib/db/providers";
 import { clearCliproxyapiUrlCache } from "@omniroute/open-sse/executors/cliproxyapi.ts";
 import {
   ensurePersistentManagementPasswordHash,
@@ -236,6 +236,24 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
     const body: typeof validation.data & { password?: string } = { ...validation.data };
+
+    if (body.providerQuotaResetReferences) {
+      for (const [provider, reference] of Object.entries(body.providerQuotaResetReferences)) {
+        const connection = await getProviderConnectionById(reference.connectionId);
+        if (!connection || connection.provider !== provider || connection.isActive === false) {
+          emitSettingsFailureAudit(request, actor, "INVALID_QUOTA_RESET_REFERENCE", attemptedKeys);
+          return NextResponse.json(
+            {
+              error: {
+                code: "INVALID_QUOTA_RESET_REFERENCE",
+                message: `Quota reset reference for ${provider} must name an active connection of that provider.`,
+              },
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
 
     // Sanitize model lockout settings: clamp values to valid bounds so that
     // stale DB values or hand-crafted requests don't bypass range validation.

@@ -421,6 +421,8 @@ export async function enforceApiKeyPolicy(
     try {
       const usageLimitRejection = await buildApiKeyUsageLimitPolicyRejection(request, {
         id: apiKeyInfo.id,
+        allowedModels: apiKeyInfo.allowedModels,
+        allowedConnections: apiKeyInfo.allowedConnections,
         usageLimitEnabled: apiKeyInfo.usageLimitEnabled,
         dailyUsageLimitUsd: apiKeyInfo.dailyUsageLimitUsd,
         weeklyUsageLimitUsd: apiKeyInfo.weeklyUsageLimitUsd,

@@ -64,8 +64,8 @@ export function clearModelBudgetRoutingCacheForTests(): void {
   structuralSpendMismatchWarned.clear();
 }
 
-function cacheKey(apiKeyId: string, ruleId: string): string {
-  return `${apiKeyId}::${ruleId}`;
+function cacheKey(apiKeyId: string, ruleId: string, sinceIso: string): string {
+  return `${apiKeyId}::${ruleId}::${sinceIso}`;
 }
 
 async function isRuleExhausted(
@@ -75,7 +75,7 @@ async function isRuleExhausted(
   getFamilySpend: NonNullable<ModelBudgetRoutingDeps["getFamilySpend"]>,
   now: number
 ): Promise<boolean> {
-  const key = cacheKey(apiKeyId, rule.id);
+  const key = cacheKey(apiKeyId, rule.id, sinceIso);
   const cached = spendCache.get(key);
   if (cached && cached.expiresAt > now) return cached.exhausted;
 

@@ -18,6 +18,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const status = await getApiKeyUsageLimitStatus({
       id: key.id,
       allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
+      allowedModels: Array.isArray(key.allowedModels) ? key.allowedModels : [],
       usageLimitEnabled: key.usageLimitEnabled === true,
       dailyUsageLimitUsd:
         typeof key.dailyUsageLimitUsd === "number" ? key.dailyUsageLimitUsd : null,

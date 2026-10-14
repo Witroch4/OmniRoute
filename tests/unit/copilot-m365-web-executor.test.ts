@@ -5,7 +5,7 @@ import {
   CopilotM365WebExecutor,
   __setCopilotM365WebSocketForTesting,
 } from "../../open-sse/executors/copilot-m365-web.ts";
-import { encodeFrame } from "../../open-sse/executors/copilot-m365-frames.ts";
+import { encodeFrame, splitFrames } from "../../open-sse/executors/copilot-m365-frames.ts";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -40,7 +40,7 @@ class MockM365WebSocket {
 
   send(data: string): void {
     this.sent.push(String(data));
-    const parsed = JSON.parse(String(data).replace(/\x1e$/, ""));
+    const parsed = JSON.parse(splitFrames(String(data)).frames[0]);
     if (parsed.protocol === "json") {
       queueMicrotask(() => this.emit("message", Buffer.from(encodeFrame({}))));
       return;
@@ -53,7 +53,9 @@ class MockM365WebSocket {
             encodeFrame({
               type: 1,
               target: "update",
-              arguments: [{ messages: [{ text: "In progress...", messageType: "Progress", author: "bot" }] }],
+              arguments: [
+                { messages: [{ text: "In progress...", messageType: "Progress", author: "bot" }] },
+              ],
             }) +
               encodeFrame({
                 type: 1,
@@ -118,7 +120,7 @@ test("CopilotM365WebExecutor streams OpenAI SSE chunks from accumulated M365 upd
 
     const sent = MockM365WebSocket.instances[0].sent.join("\n");
     assert.match(sent, /"protocol":"json"/);
-    assert.match(sent, /"type":6/);
+    assert.match(sent, /"target":"Metrics"/);
     assert.match(sent, /"target":"chat"/);
 
     const dataLines = body
@@ -126,7 +128,9 @@ test("CopilotM365WebExecutor streams OpenAI SSE chunks from accumulated M365 upd
       .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]");
     const payloads = dataLines.map((line) => JSON.parse(line.slice("data: ".length)));
     const deltas = payloads.map((payload) => payload.choices?.[0]?.delta?.content).filter(Boolean);
-    const finishReasons = payloads.map((payload) => payload.choices?.[0]?.finish_reason).filter(Boolean);
+    const finishReasons = payloads
+      .map((payload) => payload.choices?.[0]?.finish_reason)
+      .filter(Boolean);
 
     assert.deepEqual(deltas, ["po", "ng"]);
     assert.deepEqual(finishReasons, ["stop"]);

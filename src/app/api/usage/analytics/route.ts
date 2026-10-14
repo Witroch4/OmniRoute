@@ -111,6 +111,7 @@ async function resolveSinceResetRangeWindow(apiKeyIds: string[]): Promise<{
     if (key && typeof key.id === "string") {
       metadata = {
         id: key.id,
+        allowedModels: Array.isArray(key.allowedModels) ? key.allowedModels : [],
         allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
       };
     } else {

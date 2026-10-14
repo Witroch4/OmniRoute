@@ -61,7 +61,13 @@ const FINAL_UPDATE = {
   arguments: [
     {
       messages: [
-        { text: "pong", author: "bot", sourceAttributions: [], references: {}, contentOrigin: "DeepLeo" },
+        {
+          text: "pong",
+          author: "bot",
+          sourceAttributions: [],
+          references: {},
+          contentOrigin: "DeepLeo",
+        },
       ],
       isLastUpdate: true,
       requestId: "trace-id",
@@ -116,6 +122,8 @@ test("buildChatInvocation produces a type:4 chat invocation carrying the user te
     text: "protocol capture test. Reply with one word: pong.",
     traceId: "trace-id",
     sessionId: "session-id",
+    requestId: "request-id",
+    conversationId: "conversation-id",
     isStartOfSession: true,
   });
   assert.equal(frame.type, 4);
@@ -140,7 +148,13 @@ test("buildChatInvocation produces a type:4 chat invocation carrying the user te
 });
 
 test("buildChatInvocation serializes/round-trips through the framing", () => {
-  const frame = buildChatInvocation({ text: "hi", traceId: "t", sessionId: "s" });
+  const frame = buildChatInvocation({
+    text: "hi",
+    traceId: "t",
+    sessionId: "s",
+    requestId: "r",
+    conversationId: "c",
+  });
   const wire = encodeFrame(frame);
   assert.ok(wire.endsWith(RECORD_SEPARATOR));
   const { frames } = splitFrames(wire);

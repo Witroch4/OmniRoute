@@ -1,4 +1,5 @@
 import { getDbInstance } from "./core";
+import { getProviderQuotaResetReferences } from "./quotaResetReferences";
 
 interface StatementLike<TRow = unknown> {
   all: (...params: unknown[]) => TRow[];
@@ -136,7 +137,14 @@ function getLatestSnapshotObservation(
 }
 
 export function recordProviderQuotaResetEventIfChanged(input: ResetEventInput): void {
-  if (!input.connectionId || !input.windowKey || !isPrimaryWeeklyWindow(input.windowKey)) return;
+  if (!input.connectionId || !input.windowKey) return;
+  let isReferenceWindow = false;
+  if (!isPrimaryWeeklyWindow(input.windowKey)) {
+    const reference = getProviderQuotaResetReferences()[input.provider];
+    if (reference?.connectionId !== input.connectionId || reference.windowKey !== input.windowKey)
+      return;
+    isReferenceWindow = true;
+  }
 
   const currentResetIso = parseResetIso(input.currentResetAt);
   if (!currentResetIso) return;
@@ -162,9 +170,19 @@ export function recordProviderQuotaResetEventIfChanged(input: ResetEventInput): 
     currentUsed !== null &&
     isResetDrop(previousUsed, currentUsed);
 
+  if (
+    isReferenceWindow &&
+    previousResetMs > Date.parse(observedAt) &&
+    (currentUsed === null || !isResetDrop(previousUsed, currentUsed))
+  )
+    return;
+
   if (!resetMovedForward && !resetObservedWithinSameResetAt) return;
 
-  const windowStartedAt = resetMovedForward ? previousResetIso : observedAt;
+  // Early/credit resets replenish before the old expiry. That future expiry
+  // cannot be the start of the renewed budget.
+  const windowStartedAt =
+    resetMovedForward && previousResetMs <= Date.parse(observedAt) ? previousResetIso : observedAt;
 
   try {
     const db = getDbInstance() as unknown as DbLike;
@@ -198,7 +216,8 @@ export function recordProviderQuotaResetEventIfChanged(input: ResetEventInput): 
 function getRecordedQuotaWindowStartIso(
   connectionId: string,
   targetResetAtIso: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  windowKey: string | null = null
 ): string | null {
   if (!connectionId || !targetResetAtIso) return null;
   const targetDay = resetDay(targetResetAtIso);
@@ -217,13 +236,14 @@ function getRecordedQuotaWindowStartIso(
           observed_at as observedAt
         FROM provider_quota_reset_events
         WHERE connection_id = @connectionId
-          AND LOWER(window_key) LIKE '%weekly%'
-          AND LOWER(window_key) NOT LIKE '%sonnet%'
+          AND ((@windowKey IS NOT NULL AND LOWER(window_key) = LOWER(@windowKey))
+            OR (@windowKey IS NULL AND LOWER(window_key) LIKE '%weekly%'
+              AND LOWER(window_key) NOT LIKE '%sonnet%'))
           AND observed_at <= @nowIso
         ORDER BY observed_at DESC, id DESC
       `
       )
-      .all({ connectionId, nowIso });
+      .all({ connectionId, nowIso, windowKey });
 
     for (const row of rows) {
       if (resetDay(row.windowResetsAt) === targetDay) {
@@ -240,7 +260,8 @@ function getRecordedQuotaWindowStartIso(
 function getObservedQuotaWindowStartIso(
   connectionId: string,
   targetResetAtIso: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  windowKey: string | null = null
 ): { windowStartIso: string; resetDrop: boolean } | null {
   if (!connectionId || !targetResetAtIso) return null;
   const targetDay = resetDay(targetResetAtIso);
@@ -259,13 +280,42 @@ function getObservedQuotaWindowStartIso(
           created_at as createdAt
         FROM quota_snapshots
         WHERE connection_id = @connectionId
-          AND LOWER(window_key) LIKE '%weekly%'
-          AND LOWER(window_key) NOT LIKE '%sonnet%'
+          AND ((@windowKey IS NOT NULL AND LOWER(window_key) = LOWER(@windowKey))
+            OR (@windowKey IS NULL AND LOWER(window_key) LIKE '%weekly%'
+              AND LOWER(window_key) NOT LIKE '%sonnet%'))
           AND created_at <= @nowIso
         ORDER BY created_at ASC, id ASC
       `
       )
-      .all({ connectionId, nowIso });
+      .all({ connectionId, nowIso, windowKey });
+
+    if (windowKey !== null) {
+      // Principal windows may change their advertised expiry without resetting
+      // (for example on the first request after an early credit reset). Carry
+      // the last real replenishment across such timestamp adjustments.
+      let previous: QuotaSnapshotWindowRow | null = null;
+      let startIso: string | null = null;
+      for (const row of rows) {
+        const createdIso = parseResetIso(row.createdAt);
+        if (!createdIso) continue;
+        const replenished =
+          previous !== null &&
+          isResetDrop(
+            usedPercent(clampPercent(previous.remainingPercentage)),
+            usedPercent(clampPercent(row.remainingPercentage)) ?? 100
+          );
+        const previousResetMs = Date.parse(previous?.nextResetAt ?? "");
+        const elapsed =
+          Number.isFinite(previousResetMs) &&
+          previousResetMs <= Date.parse(createdIso) &&
+          Date.parse(row.nextResetAt ?? "") > previousResetMs;
+        if (replenished || elapsed) {
+          startIso = elapsed ? parseResetIso(previous?.nextResetAt ?? null) : createdIso;
+        }
+        previous = row;
+      }
+      return startIso ? { windowStartIso: startIso, resetDrop: true } : null;
+    }
 
     let firstObservedIso: string | null = null;
     let resetDropIso: string | null = null;
@@ -317,10 +367,16 @@ function getObservedQuotaWindowStartIso(
 export function getProviderQuotaWindowStart(
   connectionId: string,
   targetResetAtIso: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  windowKey: string | null = null
 ): ProviderQuotaWindowStart | null {
-  const recordedIso = getRecordedQuotaWindowStartIso(connectionId, targetResetAtIso, nowMs);
-  const observed = getObservedQuotaWindowStartIso(connectionId, targetResetAtIso, nowMs);
+  const recordedIso = getRecordedQuotaWindowStartIso(
+    connectionId,
+    targetResetAtIso,
+    nowMs,
+    windowKey
+  );
+  const observed = getObservedQuotaWindowStartIso(connectionId, targetResetAtIso, nowMs, windowKey);
 
   if (!recordedIso && !observed) return null;
   if (!recordedIso && observed) {
@@ -347,7 +403,30 @@ export function getProviderQuotaWindowStart(
 export function getProviderQuotaWindowStartIso(
   connectionId: string,
   targetResetAtIso: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  windowKey: string | null = null
 ): string | null {
-  return getProviderQuotaWindowStart(connectionId, targetResetAtIso, nowMs)?.windowStartIso ?? null;
+  return (
+    getProviderQuotaWindowStart(connectionId, targetResetAtIso, nowMs, windowKey)?.windowStartIso ??
+    null
+  );
+}
+
+export function getLatestProviderQuotaWindowSnapshot(
+  connectionId: string,
+  windowKey: string,
+  nowMs = Date.now()
+): QuotaSnapshotWindowRow | null {
+  return (
+    (getDbInstance()
+      .prepare(
+        `SELECT next_reset_at as nextResetAt,
+      remaining_percentage as remainingPercentage, created_at as createdAt
+      FROM quota_snapshots WHERE connection_id = @connectionId
+        AND LOWER(window_key) = LOWER(@windowKey) AND created_at <= @nowIso
+      ORDER BY created_at DESC, id DESC LIMIT 1`
+      )
+      .get({ connectionId, windowKey, nowIso: new Date(nowMs).toISOString() }) as
+      QuotaSnapshotWindowRow | undefined) ?? null
+  );
 }

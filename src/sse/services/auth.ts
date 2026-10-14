@@ -89,6 +89,7 @@ interface ProviderConnectionView {
   consecutiveUseCount: number;
   priority: number;
   lastError: string | null;
+  lastErrorAt: string | null;
   lastErrorType: string | null;
   lastErrorSource: string | null;
   errorCode: string | number | null;
@@ -102,8 +103,10 @@ interface ProviderConnectionView {
 
 interface RecoverableConnectionState {
   connectionId: string;
+  provider?: string;
   testStatus?: string | null;
   lastError?: string | null;
+  lastErrorAt?: string | null;
   rateLimitedUntil?: string | null;
   errorCode?: string | number | null;
   lastErrorType?: string | null;
@@ -202,6 +205,7 @@ function toProviderConnection(value: unknown): ProviderConnectionView {
     consecutiveUseCount: toNumber(row.consecutiveUseCount, 0),
     priority: toNumber(row.priority, 999),
     lastError: toStringOrNull(row.lastError),
+    lastErrorAt: toStringOrNull(row.lastErrorAt),
     lastErrorType: toStringOrNull(row.lastErrorType),
     lastErrorSource: toStringOrNull(row.lastErrorSource),
     errorCode:
@@ -1701,6 +1705,7 @@ export async function getProviderCredentials(
       // Include current status for optimization check
       testStatus: connection.testStatus,
       lastError: connection.lastError,
+      lastErrorAt: connection.lastErrorAt,
       lastErrorType: connection.lastErrorType,
       lastErrorSource: connection.lastErrorSource,
       errorCode: connection.errorCode,
@@ -2346,6 +2351,18 @@ export async function clearAccountError(
     currentConnection.lastErrorSource;
 
   if (!hasError) return; // Skip if already clean
+
+  if (currentConnection.provider === "copilot-m365-web") {
+    // Stream headers can arrive before a later throttle. Clear only the state
+    // selected for this turn, preserving a newer cooldown written by the socket.
+    const cleared = await clearConnectionErrorIfUnchanged(connectionId, {
+      testStatus: currentConnection.testStatus,
+      lastErrorAt: currentConnection.lastErrorAt,
+      rateLimitedUntil: currentConnection.rateLimitedUntil,
+    });
+    if (cleared) log.info("AUTH", `Account ${connectionId.slice(0, 8)} error cleared (CAS)`);
+    return;
+  }
 
   await updateProviderConnection(connectionId, {
     testStatus: "active",

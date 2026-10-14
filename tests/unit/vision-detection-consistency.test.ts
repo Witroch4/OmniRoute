@@ -23,6 +23,8 @@ import { modelIdLikelyVision } from "../../src/lib/modelCapabilities.ts";
 import { replaceImageUrls } from "../../open-sse/services/compression/lite.ts";
 
 const VISION = [
+  "copilot-m365",
+  "m365copilot/copilot-m365",
   "mistral/pixtral-12b-latest",
   "llava-1.5-7b",
   "qwen-vl-max",
