@@ -345,15 +345,21 @@ test("catalog: tier ids pin the level; a bare base id resolves but leaves the le
 interface FakeEl {
   innerText: string;
   attrs: Record<string, string>;
+  hidden: boolean;
+  getBoundingClientRect(): { width: number; height: number };
   getAttribute(name: string): string | null;
   setAttribute(name: string, value: string): void;
   removeAttribute(name: string): void;
 }
 
-function fakeEl(innerText: string, attrs: Record<string, string> = {}): FakeEl {
+function fakeEl(innerText: string, attrs: Record<string, string> = {}, hidden = false): FakeEl {
   return {
     innerText,
     attrs: { ...attrs },
+    hidden,
+    getBoundingClientRect() {
+      return this.hidden ? { width: 0, height: 0 } : { width: 120, height: 32 };
+    },
     getAttribute(name) {
       return this.attrs[name] ?? null;
     },
@@ -397,6 +403,10 @@ interface FakePickerOptions {
   levelsApply?: boolean;
   /** Every click fails the way Playwright's actionability wait does. */
   clickTimesOut?: boolean;
+  /** The picker re-renders right after being tagged: the first click finds no tagged node. */
+  rerenderOnce?: boolean;
+  /** A hidden button whose text is a model name sits before the picker (slow-render host). */
+  hiddenDecoy?: string;
 }
 
 function makeFakePickerPage(opts: FakePickerOptions) {
@@ -418,6 +428,8 @@ function makeFakePickerPage(opts: FakePickerOptions) {
   };
   render();
   const sidebar = fakeEl("Modelos Gemini API");
+  const decoy = opts.hiddenDecoy ? fakeEl(opts.hiddenDecoy, {}, true) : null;
+  let pendingRerender = !!opts.rerenderOnce;
   const signIn = fakeEl("Sign in");
   const items = opts.menu.map((text) =>
     fakeEl(text, opts.disabled?.some((d) => text.startsWith(d)) ? { "aria-disabled": "true" } : {})
@@ -428,7 +440,10 @@ function makeFakePickerPage(opts: FakePickerOptions) {
     "Médio Aprofundamento equilibrado",
     "Máx. Muito detalhado",
   ].map((text) => fakeEl(text));
+  // Measured: the level entries exist in the DOM while hidden; they show once the section opens.
+  const syncLevelVisibility = () => levels.forEach((l) => (l.hidden = !submenuOpen));
   let submenuOpen = false;
+  syncLevelVisibility();
   const menuEntries = () => [
     ...items,
     ...(opts.reasoning ? [section] : []),
@@ -445,7 +460,8 @@ function makeFakePickerPage(opts: FakePickerOptions) {
       }
       if (selector.startsWith("a, button")) return opts.signedOut ? [signIn] : [];
       if (selector.startsWith("button")) {
-        return opts.noPicker ? [sidebar] : [sidebar, pill];
+        const before = decoy ? [sidebar, decoy] : [sidebar];
+        return opts.noPicker ? before : [...before, pill];
       }
       if (selector.includes("menuitem")) return open ? menuEntries() : [];
       return [];
@@ -470,6 +486,12 @@ function makeFakePickerPage(opts: FakePickerOptions) {
               );
             }
             if (selector.includes("data-omni-gweb-picker")) {
+              if (pendingRerender) {
+                // Angular swapped the node: our tag is gone and the locator times out.
+                pendingRerender = false;
+                delete pill.attrs["data-omni-gweb-picker"];
+                throw new Error("locator.click: Timeout 5000ms exceeded.");
+              }
               open = !open;
               state.menuOpened++;
               state.clicks.push("pill");
@@ -479,6 +501,7 @@ function makeFakePickerPage(opts: FakePickerOptions) {
             state.clicks.push(`item:${tagged?.innerText ?? "?"}`);
             if (tagged === section) {
               submenuOpen = true;
+              syncLevelVisibility();
               return;
             }
             if (tagged && levels.includes(tagged)) {
@@ -487,6 +510,7 @@ function makeFakePickerPage(opts: FakePickerOptions) {
                 render();
               }
               submenuOpen = false;
+              syncLevelVisibility();
               open = false;
               return;
             }
@@ -762,6 +786,25 @@ test("picker: the signed-out spelling '3.5 Flash-Lite' still matches 'Flash Lite
   await selectGeminiWebModel(page, findGeminiWebModel("gemini-3.5-flash-lite")!);
   assert.deepEqual(state.clicks, ["pill", "item:3.5 Flash-Lite Fastest answers"]);
   assert.equal(state.pill, "Flash-Lite");
+});
+
+test("picker: a re-render that drops the tag is retried, not reported", async () => {
+  const { page, state } = makeFakePickerPage({ pill: "Pro", menu: MENU, rerenderOnce: true });
+  await selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!);
+  assert.equal(state.pill, "Argon");
+  assert.deepEqual(state.clicks, ["pill", "item:4 Argon Tarefas complexas Novo"]);
+});
+
+test("picker: a hidden node carrying a model name is never the one clicked", async () => {
+  // aria-label missing (relabelled button) → text fallback; a hidden "Pro" sits before it.
+  const { page, state } = makeFakePickerPage({
+    pill: "Pro",
+    aria: "",
+    menu: MENU,
+    hiddenDecoy: "Pro",
+  });
+  await selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!);
+  assert.equal(state.pill, "Argon", "the visible picker was driven");
 });
 
 test("picker: a click that cannot land is reported fast as a 502 that names the entry", async () => {
