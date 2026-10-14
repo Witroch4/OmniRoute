@@ -309,3 +309,52 @@ test("parseStreamResponse ignores wrb.fr lines whose first entry is not an array
   const raw = `)]}'\n10\n${JSON.stringify(["wrb.fr", null, "[]"])}`;
   assert.equal(parseStreamResponse(raw), "");
 });
+
+// ─── Cumulative snapshots (measured live 2026-10-14) ────────────────────────
+//
+// StreamGenerate frames are snapshots of the whole answer so far, not deltas: "ok" arrived as
+// "okokok" and a six-word count as "Um, dois,Um, dois, três, …" when frames were concatenated.
+
+function wrbFrame(text: string | null): string {
+  const inner = new Array(80).fill(null);
+  inner[4] = [[null, text === null ? [] : [text]]];
+  return `[["wrb.fr", null, ${JSON.stringify(JSON.stringify(inner))}]]`;
+}
+
+function streamOf(...texts: Array<string | null>): string {
+  return `)]}'\n${texts.map((t, i) => `${10 + i}\n${wrbFrame(t)}`).join("\n")}`;
+}
+
+test("parseStreamResponse: cumulative snapshots yield the answer once, not repeated", () => {
+  // The exact frame sequence captured from the live page.
+  const raw = streamOf(
+    null,
+    "Um, dois,",
+    "Um, dois, três, quatro, cinco, seis.",
+    "Um, dois, três, quatro, cinco, seis.",
+    "Um, dois, três, quatro, cinco, seis.",
+    null,
+    null,
+    null
+  );
+  assert.equal(parseStreamResponse(raw), "Um, dois, três, quatro, cinco, seis.");
+});
+
+test("parseStreamResponse: the same word three times is one word", () => {
+  assert.equal(parseStreamResponse(streamOf("ok", "ok", "ok")), "ok");
+});
+
+test("parseStreamResponse: a late shorter snapshot does not truncate the answer", () => {
+  assert.equal(parseStreamResponse(streamOf("Olá, mundo", "Olá", "Olá, mundo!")), "Olá, mundo!");
+});
+
+test("parseStreamResponse: a rewritten answer after snapshots takes the newest snapshot", () => {
+  assert.equal(
+    parseStreamResponse(streamOf("Resposta A", "Resposta A longa", "Outra versão")),
+    "Outra versão"
+  );
+});
+
+test("parseStreamResponse: unrelated frames with no snapshots are still treated as deltas", () => {
+  assert.equal(parseStreamResponse(streamOf("First ", "chunk")), "First chunk");
+});

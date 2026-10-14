@@ -833,6 +833,7 @@ Automatic model pricing data synchronization from external sources.
 | `GEMINI_WEB_MAX_QUEUE_DEPTH` | `4` | `open-sse/services/geminiWebGate.ts` | Requests per account that may be running or waiting; the next one is refused with 429. |
 | `GEMINI_WEB_MAX_QUEUE_WAIT_MS` | `120000` | `open-sse/services/geminiWebGate.ts` | Max time a Gemini Web request waits for its turn before being refused with 429. |
 | `GEMINI_WEB_CHALLENGE_COOLDOWN_MS` | `900000` (15 min) | `open-sse/services/geminiWebGate.ts` | How long all Gemini Web requests are refused after Google serves its unusual-traffic captcha (`google.com/sorry`). |
+| `GEMINI_WEB_RESPONSE_TIMEOUT_MS` | `120000` | `open-sse/executors/gemini-web.ts` | Max wait for Gemini Web's reply after sending the prompt (it used to be a fixed 30 s for the whole generation, which cut slow "thinking" answers). Minimum 5000. |
 
 `ENABLE_CC_COMPATIBLE_PROVIDER` is only for third-party relays that accept Claude Code clients
 exclusively. OmniRoute rewrites requests so those relays accept them. If you only want to use

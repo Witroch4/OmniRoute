@@ -223,7 +223,7 @@ test("gate: a Google challenge stops running-queue requests and every new one un
   const first = await gate.acquire("a");
   const queued = gate.acquire("a").then(
     () => "ran",
-    (err: GeminiWebGateError) => err.code
+    (err: { code: string }) => err.code
   );
   await tick();
 
@@ -375,42 +375,59 @@ const SHORT_PILL: Record<string, string> = {
 };
 
 interface FakePickerOptions {
-  /** Text the picker button shows initially. */
+  /** Short model name the picker button shows initially ("Argon", "Pro", …). */
   pill: string;
-  /** Aria-label of the picker button. */
+  /** Level word the button shows initially ("Médio"); the account saves it between sessions. */
+  level?: string;
+  /** Aria-label of the picker button (default: derived from the pill, as the real page does). */
   aria?: string;
   /** Menu entries as the page renders them ("<name> <subtitle>"). */
   menu: string[];
+  /** Menu entries rendered `aria-disabled="true"` (what the signed-out page does). */
+  disabled?: string[];
+  /** The page is the signed-out one: it carries "Sign in" controls. */
+  signedOut?: boolean;
   /** When false, clicking a menu entry does not change the picker (UI drift). */
   applies?: boolean;
   /** No picker on the page at all. */
   noPicker?: boolean;
   /** Render the "Nível de raciocínio" section (3 levels) in the menu. */
   reasoning?: boolean;
-  /** When false, clicking a level does not mark it checked (UI drift). */
+  /** When false, clicking a level does not change the picker (UI drift). */
   levelsApply?: boolean;
+  /** Every click fails the way Playwright's actionability wait does. */
+  clickTimesOut?: boolean;
 }
 
 function makeFakePickerPage(opts: FakePickerOptions) {
   let open = false;
   const state = {
+    /** Short model name currently shown ("Argon"). */
     pill: opts.pill,
     clicks: [] as string[],
     menuOpened: 0,
-    level: null as string | null,
+    /** Level word currently shown ("Máx."), null when none. */
+    level: (opts.level ?? null) as string | null,
     expressions: [] as string[],
   };
-  const pill = fakeEl(opts.pill, {
-    "aria-label": opts.aria ?? `Abrir seletor de modo. No momento: ${opts.pill}`,
-  });
+  const pill = fakeEl(opts.pill, {});
+  const render = () => {
+    const shown = state.level ? `${state.pill} ${state.level}` : state.pill;
+    pill.innerText = shown;
+    pill.attrs["aria-label"] = opts.aria ?? `Abrir seletor de modo. No momento: ${shown}`;
+  };
+  render();
   const sidebar = fakeEl("Modelos Gemini API");
-  const items = opts.menu.map((text) => fakeEl(text));
+  const signIn = fakeEl("Sign in");
+  const items = opts.menu.map((text) =>
+    fakeEl(text, opts.disabled?.some((d) => text.startsWith(d)) ? { "aria-disabled": "true" } : {})
+  );
   const section = fakeEl("Nível de raciocínio");
   const levels = [
     "Mín. Rápido e eficiente",
     "Médio Aprofundamento equilibrado",
     "Máx. Muito detalhado",
-  ].map((text) => fakeEl(text, { "aria-checked": "false" }));
+  ].map((text) => fakeEl(text));
   let submenuOpen = false;
   const menuEntries = () => [
     ...items,
@@ -426,16 +443,12 @@ function makeFakePickerPage(opts: FakePickerOptions) {
       if (selector.startsWith("[data-omni-gweb-item]")) {
         return menuEntries().filter((e) => "data-omni-gweb-item" in e.attrs);
       }
+      if (selector.startsWith("a, button")) return opts.signedOut ? [signIn] : [];
       if (selector.startsWith("button")) {
         return opts.noPicker ? [sidebar] : [sidebar, pill];
       }
       if (selector.includes("menuitem")) return open ? menuEntries() : [];
       return [];
-    },
-    querySelector(selector: string): FakeEl | null {
-      const m = /^\[([^\]]+)\]$/.exec(selector);
-      const attr = m?.[1];
-      return attr ? (menuEntries().find((e) => attr in e.attrs) ?? null) : null;
     },
   };
 
@@ -450,7 +463,12 @@ function makeFakePickerPage(opts: FakePickerOptions) {
     locator(selector: string) {
       return {
         first: () => ({
-          async click() {
+          async click(_options?: { timeout?: number }) {
+            if (opts.clickTimesOut) {
+              throw new Error(
+                "locator.click: Timeout 8000ms exceeded.\nCall log:\n  - waiting for element to be enabled"
+              );
+            }
             if (selector.includes("data-omni-gweb-picker")) {
               open = !open;
               state.menuOpened++;
@@ -464,21 +482,21 @@ function makeFakePickerPage(opts: FakePickerOptions) {
               return;
             }
             if (tagged && levels.includes(tagged)) {
-              if (opts.levelsApply === false) {
-                // A click that did nothing: the menu stays open and nothing becomes checked.
-                return;
+              if (opts.levelsApply !== false) {
+                state.level = tagged.innerText.split(" ")[0];
+                render();
               }
-              levels.forEach((l) => (l.attrs["aria-checked"] = l === tagged ? "true" : "false"));
-              state.level = tagged.innerText.split(" ")[0];
               submenuOpen = false;
               open = false;
               return;
             }
             if (tagged && opts.applies !== false) {
-              const name = tagged.innerText.replace(/\s+(Respostas|Ajuda|Racioc|Tarefas).*$/, "");
-              state.pill = SHORT_PILL[name] ?? name;
-              pill.innerText = state.pill;
-              pill.attrs["aria-label"] = `Abrir seletor de modo. No momento: ${state.pill}`;
+              const name = tagged.innerText.replace(
+                /\s+(Respostas|Fastest|Ajuda|Racioc|Tarefas).*$/,
+                ""
+              );
+              state.pill = SHORT_PILL[name.replace("Flash-Lite", "Flash Lite")] ?? name;
+              render();
             }
             open = false;
           },
@@ -553,14 +571,17 @@ test("picker: Argon is satisfied by the short pill label", async () => {
   assert.equal(state.pill, "Argon");
 });
 
-test("picker: a model the account's menu does not offer is a 404, not a silent default", async () => {
+test("picker: a model the account's menu does not offer is a 400 that lists what it offered", async () => {
   const { page } = makeFakePickerPage({
     pill: "Flash",
     menu: ["3.5 Flash Lite Respostas mais rápidas", "3.8 Flash Ajuda para tudo"],
   });
   await assert.rejects(
     selectGeminiWebModel(page, findGeminiWebModel("gemini-3.1-pro")!),
-    (err: unknown) => err instanceof GeminiWebModelSelectionError && err.status === 404
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 400 &&
+      /offered: .*3\.8 Flash/.test(err.message)
   );
 });
 
@@ -572,7 +593,7 @@ test("picker: '3.8 Flash' never selects a '3.8 Flash Lite' entry", async () => {
   });
   await assert.rejects(
     selectGeminiWebModel(page, findGeminiWebModel("gemini-3.8-flash")!),
-    (err: unknown) => err instanceof GeminiWebModelSelectionError && err.status === 404
+    (err: unknown) => err instanceof GeminiWebModelSelectionError && err.status === 400
   );
 });
 
@@ -650,9 +671,10 @@ test("reasoning: a page without the control is a 502, not a silent default", asy
   );
 });
 
-test("reasoning: a level that stays unchecked is reported", async () => {
+test("reasoning: a click that leaves a different level on the button is reported", async () => {
   const { page } = makeFakePickerPage({
     pill: "Argon",
+    level: "Mín.",
     menu: MENU,
     reasoning: true,
     levelsApply: false,
@@ -660,8 +682,122 @@ test("reasoning: a level that stays unchecked is reported", async () => {
   await assert.rejects(
     selectGeminiWebReasoning(page, "medium"),
     (err: unknown) =>
-      err instanceof GeminiWebModelSelectionError && /did not take effect/i.test(err.message)
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 502 &&
+      /did not take effect/i.test(err.message)
   );
+});
+
+test("reasoning: nothing is clicked when the button already shows the level", async () => {
+  const { page, state } = makeFakePickerPage({
+    pill: "Argon",
+    level: "Médio",
+    menu: MENU,
+    reasoning: true,
+  });
+  await selectGeminiWebReasoning(page, "medium");
+  assert.deepEqual(state.clicks, []);
+});
+
+test("reasoning: a button that shows no level cannot be checked, so the click is trusted", async () => {
+  const { page, state } = makeFakePickerPage({
+    pill: "Argon",
+    menu: MENU,
+    reasoning: true,
+    levelsApply: false, // nothing ever appears on the button
+  });
+  await selectGeminiWebReasoning(page, "max");
+  assert.deepEqual(state.clicks, ["pill", "item:Nível de raciocínio", "item:Máx. Muito detalhado"]);
+});
+
+test("picker: the saved level on the button does not hide the model", async () => {
+  // Measured: after a level is chosen the button reads "Argon Médio" and the account keeps it.
+  const already = makeFakePickerPage({ pill: "Argon", level: "Médio", menu: MENU });
+  await selectGeminiWebModel(already.page, findGeminiWebModel("gemini-4-argon")!);
+  assert.deepEqual(already.state.clicks, [], "Argon Médio already is Argon");
+
+  const switching = makeFakePickerPage({ pill: "Pro", level: "Mín.", menu: MENU });
+  await selectGeminiWebModel(switching.page, findGeminiWebModel("gemini-4-argon")!);
+  assert.equal(switching.state.pill, "Argon");
+  assert.equal(switching.state.level, "Mín.", "the saved level survives a model switch");
+});
+
+test("picker: a signed-out page is a 401 that says to paste the full Cookie header", async () => {
+  const { page, state } = makeFakePickerPage({
+    pill: "Flash-Lite",
+    menu: ["3.5 Flash-Lite Fastest answers", "4 Argon Complex tasks"],
+    signedOut: true,
+  });
+  await assert.rejects(
+    selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!),
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 401 &&
+      /FULL Cookie header/.test(err.message)
+  );
+  assert.deepEqual(state.clicks, [], "nothing is clicked on a signed-out page");
+});
+
+test("picker: a disabled entry is a fast 400, not a 30 s click timeout", async () => {
+  const { page } = makeFakePickerPage({
+    pill: "Pro",
+    menu: ["3.1 Pro Advanced reasoning", "4 Argon Complex tasks"],
+    disabled: ["4 Argon"],
+  });
+  await assert.rejects(
+    selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!),
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 400 &&
+      /not enabled for/.test(err.message) &&
+      /offered: .*4 Argon/.test(err.message)
+  );
+});
+
+test("picker: the signed-out spelling '3.5 Flash-Lite' still matches 'Flash Lite'", async () => {
+  const { page, state } = makeFakePickerPage({
+    pill: "Argon",
+    menu: ["3.5 Flash-Lite Fastest answers", "3.6 Flash All-around help"],
+  });
+  await selectGeminiWebModel(page, findGeminiWebModel("gemini-3.5-flash-lite")!);
+  assert.deepEqual(state.clicks, ["pill", "item:3.5 Flash-Lite Fastest answers"]);
+  assert.equal(state.pill, "Flash-Lite");
+});
+
+test("picker: a click that cannot land is reported fast as a 502 that names the entry", async () => {
+  const { page } = makeFakePickerPage({ pill: "Pro", menu: MENU, clickTimesOut: true });
+  await assert.rejects(
+    selectGeminiWebModel(page, findGeminiWebModel("gemini-4-argon")!),
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 502 &&
+      /could not click the model picker/.test(err.message)
+  );
+});
+
+test("fallback: 'model not available' (400 model_not_found) costs the connection nothing", async () => {
+  const { checkFallbackError } = await import("../../open-sse/services/accountFallback.ts");
+  const message =
+    'Gemini Web: model "4 Argon" is not available in this account\'s model picker ' +
+    "(plan or staged rollout). The picker offered: 3.5 Flash Lite | 3.8 Flash | 3.1 Pro.";
+  const verdict = checkFallbackError(
+    400,
+    message,
+    0,
+    "gemini-4-argon-high",
+    "gemini-web",
+    null,
+    null,
+    {
+      code: "model_not_found",
+      type: "invalid_request_error",
+    }
+  );
+  assert.equal(verdict.cooldownMs, 0, "one unavailable model must not lock every other model");
+
+  // The same text WITHOUT the structured code must still be recognised from the message alone.
+  const textOnly = checkFallbackError(400, message, 0, "gemini-4-argon-high", "gemini-web");
+  assert.equal(textOnly.cooldownMs, 0);
 });
 
 test("challenge URL detection", () => {
@@ -885,6 +1021,26 @@ test("executor: without reasoning_effort the level section is never touched", as
   }
 });
 
+test("executor: a signed-out session is a 401 and nothing is typed or selected", async () => {
+  const gate = newGate();
+  try {
+    await withFakeChromium(
+      { pill: "Flash-Lite", menu: ["4 Argon Complex tasks"], signedOut: true },
+      async (probe) => {
+        const result = await chat("gemini-4-argon-high", "__Secure-1PSID=signed-out");
+        assert.equal(result.response.status, 401);
+        const body = (await result.response.json()) as { error: string };
+        assert.match(body.error, /not signed in/);
+        assert.deepEqual(probe.typed, []);
+        assert.deepEqual(probe.clicks, []);
+      }
+    );
+    assert.equal(gate.stats().pending, 0);
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
 test("executor: an unknown model is a 400 and never launches a browser", async () => {
   const gate = newGate();
   try {
@@ -902,14 +1058,19 @@ test("executor: an unknown model is a 400 and never launches a browser", async (
   }
 });
 
-test("executor: a model the account does not offer fails (404) and nothing is typed", async () => {
+test("executor: a model the account does not offer is a 400 model_not_found and nothing is typed", async () => {
   const gate = newGate();
   try {
     await withFakeChromium(
       { pill: "Flash", menu: ["3.8 Flash Ajuda para tudo"] },
       async (probe) => {
         const result = await chat("gemini-3.1-pro");
-        assert.equal(result.response.status, 404);
+        assert.equal(result.response.status, 400);
+        const body = (await result.response.json()) as {
+          error: { code: string; message: string; type: string };
+        };
+        assert.equal(body.error.code, "model_not_found");
+        assert.match(body.error.message, /picker offered: .*3\.8 Flash/);
         assert.deepEqual(probe.typed, [], "must not ask a different model");
       }
     );
