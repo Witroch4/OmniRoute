@@ -57,6 +57,10 @@ interface GeminiRequestBody {
   messages: GeminiMessage[];
   model?: string;
   stream?: boolean;
+  /** OpenAI chat-completions reasoning knob. */
+  reasoning_effort?: string;
+  /** OpenAI responses-style reasoning knob. */
+  reasoning?: { effort?: string };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -343,6 +347,115 @@ export async function selectGeminiWebModel(
   );
 }
 
+// ─── Reasoning level ────────────────────────────────────────────────────────
+//
+// The same menu carries a "Nível de raciocínio" section with three entries (measured
+// 2026-10-14: "Mín. Rápido e eficiente", "Médio Aprofundamento equilibrado", "Máx. Muito
+// detalhado"). Like the model, the level is a picker state: unset, the page uses whatever the
+// account last saved. It is driven only when the caller asks (`reasoning_effort`).
+
+export type GeminiWebReasoningLevel = "min" | "medium" | "max";
+
+/** OpenAI-style effort → the web app's three levels. Unknown values are ignored (null). */
+export function resolveGeminiWebReasoning(effort: unknown): GeminiWebReasoningLevel | null {
+  if (typeof effort !== "string") return null;
+  switch (effort.trim().toLowerCase()) {
+    case "none":
+    case "minimal":
+    case "min":
+    case "low":
+      return "min";
+    case "medium":
+    case "med":
+      return "medium";
+    case "high":
+    case "xhigh":
+    case "max":
+      return "max";
+    default:
+      return null;
+  }
+}
+
+// The section title and level names are localized; both pt-BR (observed) and English are accepted.
+const REASONING_SECTION_PATTERN =
+  "^\\s*(?:N[ií]vel de racioc[ií]nio|Reasoning level|Thinking level|N[ií]vel de pensamento)";
+const REASONING_LEVEL_PATTERNS: Record<GeminiWebReasoningLevel, string> = {
+  min: "^\\s*(?:M[ií]n(?:imo)?|Min(?:imal)?)(?![\\w])",
+  medium: "^\\s*(?:M[ée]dio|Medium)(?![\\w])",
+  max: "^\\s*(?:M[áa]x(?:imo)?|Max(?:imum)?)(?![\\w])",
+};
+
+// State of the entry tagged by TAG_ITEM_SCRIPT: "true" / "false" / null when it exposes none.
+const READ_ITEM_CHECKED_SCRIPT = `(attr) => {
+  const el = document.querySelector("[" + attr + "]");
+  if (!el) return null;
+  const checked = el.getAttribute("aria-checked");
+  return checked === null ? null : String(checked);
+}`;
+
+/**
+ * Set the reasoning level in the open model-picker menu, or throw
+ * `GeminiWebModelSelectionError`. Opens the menu itself when it is closed.
+ */
+export async function selectGeminiWebReasoning(
+  page: GeminiWebPickerPage,
+  level: GeminiWebReasoningLevel,
+  timeoutMs = 6_000
+): Promise<void> {
+  const known = GEMINI_WEB_MODELS.flatMap((m) => [m.uiLabel, ...(m.pillLabels ?? [])]);
+  const findItem = (source: string) => page.evaluate<boolean, string>(TAG_ITEM_SCRIPT, source);
+  const poll = async (source: string, ms: number): Promise<boolean> => {
+    for (let waited = 0; waited <= ms; waited += PICKER_POLL_MS) {
+      if (await findItem(source)) return true;
+      await page.waitForTimeout(PICKER_POLL_MS);
+    }
+    return false;
+  };
+
+  // The menu closes after a model pick; let that settle, then reopen unless the section is there.
+  await page.waitForTimeout(PICKER_POLL_MS);
+  if (!(await findItem(REASONING_SECTION_PATTERN))) {
+    const state = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    if (!state) {
+      throw new GeminiWebModelSelectionError(
+        502,
+        "Gemini Web: the model picker was not found, so the reasoning level cannot be set."
+      );
+    }
+    await page.locator(`[${PICKER_ATTR}]`).first().click();
+  }
+  if (!(await poll(REASONING_SECTION_PATTERN, timeoutMs))) {
+    throw new GeminiWebModelSelectionError(
+      502,
+      "Gemini Web: the reasoning-level control was not found in the model picker " +
+        "(the web app may have changed, or this model has no reasoning levels)."
+    );
+  }
+  await page.locator(`[${ITEM_ATTR}]`).first().click();
+
+  if (!(await poll(REASONING_LEVEL_PATTERNS[level], timeoutMs))) {
+    throw new GeminiWebModelSelectionError(
+      502,
+      `Gemini Web: reasoning level "${level}" was not offered in the model picker.`
+    );
+  }
+  await page.locator(`[${ITEM_ATTR}]`).first().click();
+
+  // Verify when the page exposes the state; trust the click when it does not.
+  await page.waitForTimeout(PICKER_POLL_MS);
+  const reopened = await findItem(REASONING_LEVEL_PATTERNS[level]);
+  if (reopened) {
+    const checked = await page.evaluate<string | null, string>(READ_ITEM_CHECKED_SCRIPT, ITEM_ATTR);
+    if (checked === "false") {
+      throw new GeminiWebModelSelectionError(
+        502,
+        `Gemini Web: setting reasoning level "${level}" did not take effect.`
+      );
+    }
+  }
+}
+
 // ─── Gate / challenge helpers ───────────────────────────────────────────────
 
 /** Google's "unusual traffic" interstitial (`google.com/sorry/index`, served with HTTP 429). */
@@ -504,6 +617,12 @@ export class GeminiWebExecutor extends BaseExecutor {
       // The page answers with whatever model its picker shows; make it the requested one.
       if (selectedModel) {
         await selectGeminiWebModel(page, selectedModel);
+      }
+      const reasoning = resolveGeminiWebReasoning(
+        requestBody.reasoning_effort ?? requestBody.reasoning?.effort
+      );
+      if (reasoning) {
+        await selectGeminiWebReasoning(page, reasoning);
       }
 
       // Type and send message

@@ -15,7 +15,9 @@ const {
   GeminiWebModelSelectionError,
   geminiWebMenuItemPattern,
   isGoogleChallengeUrl,
+  resolveGeminiWebReasoning,
   selectGeminiWebModel,
+  selectGeminiWebReasoning,
 } = await import("../../open-sse/executors/gemini-web.ts");
 const { GEMINI_WEB_MODELS, findGeminiWebModel } =
   await import("../../open-sse/config/providers/registry/gemini/web/models.ts");
@@ -351,16 +353,37 @@ interface FakePickerOptions {
   applies?: boolean;
   /** No picker on the page at all. */
   noPicker?: boolean;
+  /** Render the "Nível de raciocínio" section (3 levels) in the menu. */
+  reasoning?: boolean;
+  /** When false, clicking a level does not mark it checked (UI drift). */
+  levelsApply?: boolean;
 }
 
 function makeFakePickerPage(opts: FakePickerOptions) {
   let open = false;
-  const state = { pill: opts.pill, clicks: [] as string[], menuOpened: 0 };
+  const state = {
+    pill: opts.pill,
+    clicks: [] as string[],
+    menuOpened: 0,
+    level: null as string | null,
+  };
   const pill = fakeEl(opts.pill, {
     "aria-label": opts.aria ?? `Abrir seletor de modo. No momento: ${opts.pill}`,
   });
   const sidebar = fakeEl("Modelos Gemini API");
   const items = opts.menu.map((text) => fakeEl(text));
+  const section = fakeEl("Nível de raciocínio");
+  const levels = [
+    "Mín. Rápido e eficiente",
+    "Médio Aprofundamento equilibrado",
+    "Máx. Muito detalhado",
+  ].map((text) => fakeEl(text, { "aria-checked": "false" }));
+  let submenuOpen = false;
+  const menuEntries = () => [
+    ...items,
+    ...(opts.reasoning ? [section] : []),
+    ...(opts.reasoning && submenuOpen ? levels : []),
+  ];
 
   const doc = {
     querySelectorAll(selector: string): FakeEl[] {
@@ -368,13 +391,18 @@ function makeFakePickerPage(opts: FakePickerOptions) {
         return [pill].filter((e) => "data-omni-gweb-picker" in e.attrs);
       }
       if (selector.startsWith("[data-omni-gweb-item]")) {
-        return items.filter((e) => "data-omni-gweb-item" in e.attrs);
+        return menuEntries().filter((e) => "data-omni-gweb-item" in e.attrs);
       }
       if (selector.startsWith("button")) {
         return opts.noPicker ? [sidebar] : [sidebar, pill];
       }
-      if (selector.includes("menuitem")) return open ? items : [];
+      if (selector.includes("menuitem")) return open ? menuEntries() : [];
       return [];
+    },
+    querySelector(selector: string): FakeEl | null {
+      const m = /^\[([^\]]+)\]$/.exec(selector);
+      const attr = m?.[1];
+      return attr ? (menuEntries().find((e) => attr in e.attrs) ?? null) : null;
     },
   };
 
@@ -395,8 +423,23 @@ function makeFakePickerPage(opts: FakePickerOptions) {
               state.clicks.push("pill");
               return;
             }
-            const tagged = items.find((e) => "data-omni-gweb-item" in e.attrs);
+            const tagged = menuEntries().find((e) => "data-omni-gweb-item" in e.attrs);
             state.clicks.push(`item:${tagged?.innerText ?? "?"}`);
+            if (tagged === section) {
+              submenuOpen = true;
+              return;
+            }
+            if (tagged && levels.includes(tagged)) {
+              if (opts.levelsApply === false) {
+                // A click that did nothing: the menu stays open and nothing becomes checked.
+                return;
+              }
+              levels.forEach((l) => (l.attrs["aria-checked"] = l === tagged ? "true" : "false"));
+              state.level = tagged.innerText.split(" ")[0];
+              submenuOpen = false;
+              open = false;
+              return;
+            }
             if (tagged && opts.applies !== false) {
               const name = tagged.innerText.replace(/\s+(Respostas|Ajuda|Racioc|Tarefas).*$/, "");
               state.pill = name === "4 Argon" ? "Argon" : name;
@@ -495,6 +538,60 @@ test("picker: menu entry pattern is anchored and Lite-aware", () => {
   assert.ok(!pro.test("3.15 Pro"));
 });
 
+test("reasoning: OpenAI efforts map onto the three levels, unknown values are ignored", () => {
+  assert.equal(resolveGeminiWebReasoning("low"), "min");
+  assert.equal(resolveGeminiWebReasoning("minimal"), "min");
+  assert.equal(resolveGeminiWebReasoning("MEDIUM"), "medium");
+  assert.equal(resolveGeminiWebReasoning("high"), "max");
+  assert.equal(resolveGeminiWebReasoning("xhigh"), "max");
+  assert.equal(resolveGeminiWebReasoning("turbo"), null);
+  assert.equal(resolveGeminiWebReasoning(undefined), null);
+  assert.equal(resolveGeminiWebReasoning(3), null);
+});
+
+test("reasoning: opens the menu, enters the section and picks the level", async () => {
+  const { page, state } = makeFakePickerPage({ pill: "Argon", menu: MENU, reasoning: true });
+  await selectGeminiWebReasoning(page, "max");
+  assert.deepEqual(state.clicks, ["pill", "item:Nível de raciocínio", "item:Máx. Muito detalhado"]);
+  assert.equal(state.level, "Máx.");
+});
+
+test("reasoning: picks Mín and Médio by their own entries", async () => {
+  for (const [level, first] of [
+    ["min", "Mín."],
+    ["medium", "Médio"],
+  ] as const) {
+    const { page, state } = makeFakePickerPage({ pill: "Argon", menu: MENU, reasoning: true });
+    await selectGeminiWebReasoning(page, level);
+    assert.equal(state.level, first);
+  }
+});
+
+test("reasoning: a page without the control is a 502, not a silent default", async () => {
+  const { page } = makeFakePickerPage({ pill: "Argon", menu: MENU, reasoning: false });
+  await assert.rejects(
+    selectGeminiWebReasoning(page, "max", 300),
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError &&
+      err.status === 502 &&
+      /reasoning-level control was not found/i.test(err.message)
+  );
+});
+
+test("reasoning: a level that stays unchecked is reported", async () => {
+  const { page } = makeFakePickerPage({
+    pill: "Argon",
+    menu: MENU,
+    reasoning: true,
+    levelsApply: false,
+  });
+  await assert.rejects(
+    selectGeminiWebReasoning(page, "medium"),
+    (err: unknown) =>
+      err instanceof GeminiWebModelSelectionError && /did not take effect/i.test(err.message)
+  );
+});
+
 test("challenge URL detection", () => {
   assert.equal(
     isGoogleChallengeUrl(
@@ -524,12 +621,24 @@ interface FakeBrowserOptions extends FakePickerOptions {
 
 async function withFakeChromium<T>(
   opts: FakeBrowserOptions,
-  run: (probe: { launches: number; clicks: string[]; typed: string[] }) => Promise<T>
+  run: (probe: {
+    launches: number;
+    clicks: string[];
+    typed: string[];
+    picker: { level: string | null; pill: string };
+  }) => Promise<T>
 ): Promise<T> {
   const playwright = await import("playwright");
   const original = playwright.chromium.launch;
-  const probe = { launches: 0, clicks: [] as string[], typed: [] as string[] };
   const { page: picker, state } = makeFakePickerPage(opts);
+  const probe = {
+    launches: 0,
+    clicks: state.clicks,
+    typed: [] as string[],
+    get picker() {
+      return state;
+    },
+  };
   let onResponse: ((resp: unknown) => Promise<void>) | null = null;
 
   const page = {
@@ -568,9 +677,7 @@ async function withFakeChromium<T>(
   }) as never;
 
   try {
-    const result = await run(probe);
-    probe.clicks = state.clicks;
-    return result;
+    return await run(probe);
   } finally {
     playwright.chromium.launch = original;
   }
@@ -582,10 +689,14 @@ function newGate(overrides: Record<string, unknown> = {}) {
   return gate;
 }
 
-async function chat(model: string, cookie = "__Secure-1PSID=exec-test-psid") {
+async function chat(
+  model: string,
+  cookie = "__Secure-1PSID=exec-test-psid",
+  extra: Record<string, unknown> = {}
+) {
   return new GeminiWebExecutor().execute({
     model,
-    body: { messages: [{ role: "user", content: "oi" }], stream: false },
+    body: { messages: [{ role: "user", content: "oi" }], stream: false, ...extra },
     stream: false,
     credentials: { apiKey: cookie },
     signal: AbortSignal.timeout(10_000),
@@ -609,6 +720,42 @@ test("executor: selects the requested model, answers, echoes the id and frees th
       assert.equal(probe.launches, 1);
     });
     assert.equal(gate.stats().pending, 0, "the permit must be released after the browser closes");
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
+test("executor: reasoning_effort sets the level after the model; no effort leaves it alone", async () => {
+  const gate = newGate();
+  try {
+    await withFakeChromium({ pill: "3.1 Pro", menu: MENU, reasoning: true }, async (probe) => {
+      const withEffort = await chat("gemini-4-argon", "__Secure-1PSID=reasoning-test", {
+        reasoning_effort: "high",
+      });
+      assert.equal(withEffort.response.status, 200);
+      assert.deepEqual(probe.typed, ["oi"]);
+      assert.equal(probe.picker.pill, "Argon", "model is selected first");
+      assert.equal(probe.picker.level, "Máx.", "then the level");
+      assert.ok(
+        probe.clicks.indexOf("item:4 Argon Tarefas complexas Novo") <
+          probe.clicks.indexOf("item:Nível de raciocínio")
+      );
+    });
+    assert.equal(gate.stats().pending, 0);
+  } finally {
+    __setGeminiWebGateForTests(null);
+  }
+});
+
+test("executor: without reasoning_effort the level section is never touched", async () => {
+  newGate();
+  try {
+    await withFakeChromium({ pill: "Argon", menu: MENU, reasoning: true }, async (probe) => {
+      const result = await chat("gemini-4-argon", "__Secure-1PSID=no-effort-test");
+      assert.equal(result.response.status, 200);
+      assert.equal(probe.picker.level, null);
+      assert.ok(!probe.clicks.some((c) => c.includes("Nível")), "level section untouched");
+    });
   } finally {
     __setGeminiWebGateForTests(null);
   }
