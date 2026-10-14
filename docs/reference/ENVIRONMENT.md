@@ -824,6 +824,15 @@ Automatic model pricing data synchronization from external sources.
 | `CLIPROXYAPI_CONFIG_DIR`                       | `~/.cli-proxy-api`                     | `src/lib/versionManager/processManager.ts`                                         | CLIProxyAPI config directory.                                                                               |
 | `MUX_SERVICE_PORT`                             | `8322`                                 | `src/lib/services/bootstrap.ts`                                                    | Override the port where the embedded Mux (coder/mux) agent-orchestration daemon listens (always 127.0.0.1). |
 | `LOCAL_HOSTNAMES`                              | _(empty)_                              | `open-sse/config/providerRegistry.ts`                                              | Comma-separated additional hostnames treated as "local" (Docker service names, etc.).                       |
+| `GEMINI_WEB_MAX_BROWSERS` | `2` | `open-sse/services/geminiWebGate.ts` | Max Chromium sessions running at once for Gemini Web, across all accounts. Keep ≤ 2 on small hosts (each request is a browser). |
+| `GEMINI_WEB_MAX_CONCURRENT_PER_ACCOUNT` | `2` | `open-sse/services/geminiWebGate.ts` | Max simultaneous Gemini Web requests for one Google account (like two open tabs). |
+| `GEMINI_WEB_MIN_INTERVAL_MS` | `8000` | `open-sse/services/geminiWebGate.ts` | Minimum gap between two starts — and after an end — of the same Gemini Web account. |
+| `GEMINI_WEB_JITTER_MS` | `4000` | `open-sse/services/geminiWebGate.ts` | Random extra gap (0..N ms) added to `GEMINI_WEB_MIN_INTERVAL_MS` so pacing is not metronomic. |
+| `GEMINI_WEB_RATE_LIMIT_REQUESTS` | `12` | `open-sse/services/geminiWebGate.ts` | Hard cap of Gemini Web requests per account per sliding window; beyond it HTTP 429 + `Retry-After`. `0` disables. |
+| `GEMINI_WEB_RATE_LIMIT_WINDOW_MS` | `600000` (10 min) | `open-sse/services/geminiWebGate.ts` | Length of the Gemini Web sliding window. |
+| `GEMINI_WEB_MAX_QUEUE_DEPTH` | `4` | `open-sse/services/geminiWebGate.ts` | Requests per account that may be running or waiting; the next one is refused with 429. |
+| `GEMINI_WEB_MAX_QUEUE_WAIT_MS` | `120000` | `open-sse/services/geminiWebGate.ts` | Max time a Gemini Web request waits for its turn before being refused with 429. |
+| `GEMINI_WEB_CHALLENGE_COOLDOWN_MS` | `900000` (15 min) | `open-sse/services/geminiWebGate.ts` | How long all Gemini Web requests are refused after Google serves its unusual-traffic captcha (`google.com/sorry`). |
 
 `ENABLE_CC_COMPATIBLE_PROVIDER` is only for third-party relays that accept Claude Code clients
 exclusively. OmniRoute rewrites requests so those relays accept them. If you only want to use

@@ -4,6 +4,19 @@ import assert from "node:assert/strict";
 const { GeminiWebExecutor, parseStreamResponse } =
   await import("../../open-sse/executors/gemini-web.ts");
 const { getExecutor, hasSpecializedExecutor } = await import("../../open-sse/executors/index.ts");
+const { GeminiWebGate, DEFAULT_GEMINI_WEB_GATE_CONFIG, __setGeminiWebGateForTests } =
+  await import("../../open-sse/services/geminiWebGate.ts");
+
+// These tests reuse one cookie across several executions; the production pacing (seconds
+// between requests) would only slow them down. Pacing itself is covered in gemini-web-gate.test.ts.
+__setGeminiWebGateForTests(
+  new GeminiWebGate({
+    ...DEFAULT_GEMINI_WEB_GATE_CONFIG,
+    minIntervalMs: 0,
+    jitterMs: 0,
+    window: { requests: 0, windowMs: 1 },
+  })
+);
 
 // ─── Registration ───────────────────────────────────────────────────────────
 
@@ -115,6 +128,9 @@ test("Normalizes a bare __Secure-1PSID value before adding browser cookies", asy
         newPage: async () => ({
           on: () => {},
           goto: async () => {},
+          url: () => "https://gemini.google.com/app",
+          // The picker already shows the requested model, so nothing needs clicking.
+          evaluate: async () => ({ text: "3.1 Pro", aria: "" }),
           waitForTimeout: async () => {},
           waitForSelector: async () => ({
             click: async () => {},
@@ -167,12 +183,15 @@ test("Provider: gemini-web in providerRegistry", async () => {
 test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
+  // Mirrors the web app's mode picker (measured 2026-10-14): 3.5 Flash Lite, 3.8 Flash,
+  // 3.1 Pro, 4 Argon. The executor selects each one by its picker entry.
   assert.deepEqual(
     models.map((m: any) => [m.id, m.name]),
     [
+      ["gemini-4-argon", "Gemini 4 Argon"],
+      ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["gemini-3.1-pro", "Gemini 3.1 Pro"],
-      ["gemini-3.5-flash", "Gemini 3.5 Flash"],
-      ["gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"],
+      ["gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"],
     ]
   );
 });

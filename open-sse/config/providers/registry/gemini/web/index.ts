@@ -1,4 +1,5 @@
 import type { RegistryEntry } from "../../../shared.ts";
+import { GEMINI_WEB_MODELS } from "./models.ts";
 
 export const gemini_webProvider: RegistryEntry = {
   id: "gemini-web",
@@ -8,9 +9,5 @@ export const gemini_webProvider: RegistryEntry = {
   baseUrl: "https://gemini.google.com/app",
   authType: "apikey",
   authHeader: "cookie",
-  models: [
-    { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
-    { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
-    { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite" },
-  ],
+  models: GEMINI_WEB_MODELS.map(({ id, name }) => ({ id, name })),
 };

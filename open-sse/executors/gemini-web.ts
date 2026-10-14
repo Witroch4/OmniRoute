@@ -15,6 +15,17 @@
 
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import {
+  findGeminiWebModel,
+  GEMINI_WEB_MODELS,
+  type GeminiWebModel,
+} from "../config/providers/registry/gemini/web/models.ts";
+import {
+  GeminiWebGateError,
+  geminiWebAccountKey,
+  getGeminiWebGate,
+  type GeminiWebPermit,
+} from "../services/geminiWebGate.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -192,6 +203,170 @@ function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): strin
     .join("; ");
 }
 
+// ─── Model picker ───────────────────────────────────────────────────────────
+//
+// The web app answers with whatever model its mode picker currently shows (the account
+// default, or the last pick). Selecting a model therefore means driving that picker BEFORE
+// typing the prompt. The page scripts are plain strings so this file needs no DOM typings
+// and a test can run them against a stub `document`.
+
+export class GeminiWebModelSelectionError extends Error {
+  /** 404: the account's picker does not offer the model. 502: the picker could not be driven. */
+  readonly status: 404 | 502;
+
+  constructor(status: 404 | 502, message: string) {
+    super(message);
+    this.name = "GeminiWebModelSelectionError";
+    this.status = status;
+  }
+}
+
+/** The slice of Playwright's `Page` the picker needs. */
+export interface GeminiWebPickerPage {
+  evaluate<R, A>(script: string, arg: A): Promise<R>;
+  waitForTimeout(ms: number): Promise<void>;
+  locator(selector: string): { first(): { click(): Promise<void> } };
+}
+
+interface PickerState {
+  text: string;
+  aria: string;
+}
+
+const PICKER_ATTR = "data-omni-gweb-picker";
+const ITEM_ATTR = "data-omni-gweb-item";
+const PICKER_POLL_MS = 250;
+
+// Finds the picker button (by its visible model name, or by its aria-label — the label is
+// localized, so both are accepted), tags it, and reports what it currently shows.
+const TAG_PICKER_SCRIPT = `(known) => {
+  const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim();
+  document.querySelectorAll("[${PICKER_ATTR}]").forEach((el) => el.removeAttribute("${PICKER_ATTR}"));
+  const ariaRe = /seletor de modo|mode picker|model picker|selecionar modelo|choose.{0,12}model/i;
+  for (const el of document.querySelectorAll("button, [role='button']")) {
+    const text = norm(el.innerText);
+    const aria = norm(el.getAttribute("aria-label"));
+    if (known.includes(text) || ariaRe.test(aria)) {
+      el.setAttribute("${PICKER_ATTR}", "1");
+      return { text, aria };
+    }
+  }
+  return null;
+}`;
+
+// Tags the open menu's entry whose visible text matches `source`.
+const TAG_ITEM_SCRIPT = `(source) => {
+  const re = new RegExp(source);
+  const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim();
+  document.querySelectorAll("[${ITEM_ATTR}]").forEach((el) => el.removeAttribute("${ITEM_ATTR}"));
+  const items = document.querySelectorAll(
+    "[role='menuitemradio'], [role='menuitem'], [role='option'], button[mat-menu-item]"
+  );
+  for (const el of items) {
+    if (re.test(norm(el.innerText))) {
+      el.setAttribute("${ITEM_ATTR}", "1");
+      return true;
+    }
+  }
+  return false;
+}`;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Regex source matching a menu entry's text for `model` (entries read "3.8 Flash Ajuda para tudo"). */
+export function geminiWebMenuItemPattern(model: GeminiWebModel): string {
+  // "3.8 Flash" must not select a sibling "3.8 Flash Lite"; "3.1 Pro" must not select "3.1 Pro2".
+  const notLite = /\bLite$/i.test(model.uiLabel) ? "" : "(?!\\s+Lite\\b)";
+  return `^\\s*${escapeRegExp(model.uiLabel)}(?![\\w.])${notLite}`;
+}
+
+function pickerShows(state: PickerState | null, model: GeminiWebModel): boolean {
+  if (!state) return false;
+  const labels = [model.uiLabel, ...(model.pillLabels ?? [])];
+  return labels.some((label) => state.text === label || state.aria.endsWith(label));
+}
+
+/**
+ * Make the web app's mode picker show `model`, or throw `GeminiWebModelSelectionError`.
+ * Never falls through silently: answering with a different model than the one requested is
+ * the bug this replaces.
+ */
+export async function selectGeminiWebModel(
+  page: GeminiWebPickerPage,
+  model: GeminiWebModel,
+  timeoutMs = 10_000
+): Promise<void> {
+  const known = GEMINI_WEB_MODELS.flatMap((m) => [m.uiLabel, ...(m.pillLabels ?? [])]);
+
+  let state: PickerState | null = null;
+  for (let waited = 0; waited <= timeoutMs; waited += PICKER_POLL_MS) {
+    state = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    if (state) break;
+    await page.waitForTimeout(PICKER_POLL_MS);
+  }
+  if (!state) {
+    throw new GeminiWebModelSelectionError(
+      502,
+      "Gemini Web: the model picker was not found on the page (the web app may have changed or " +
+        "the session is not signed in), so the requested model cannot be selected."
+    );
+  }
+  if (pickerShows(state, model)) return;
+
+  await page.locator(`[${PICKER_ATTR}]`).first().click();
+
+  let found = false;
+  for (let waited = 0; waited <= 5_000; waited += PICKER_POLL_MS) {
+    found = await page.evaluate<boolean, string>(TAG_ITEM_SCRIPT, geminiWebMenuItemPattern(model));
+    if (found) break;
+    await page.waitForTimeout(PICKER_POLL_MS);
+  }
+  if (!found) {
+    throw new GeminiWebModelSelectionError(
+      404,
+      `Gemini Web: model "${model.uiLabel}" is not offered by this account's model picker ` +
+        `(plan or staged rollout).`
+    );
+  }
+  await page.locator(`[${ITEM_ATTR}]`).first().click();
+
+  for (let waited = 0; waited <= 4_000; waited += PICKER_POLL_MS) {
+    await page.waitForTimeout(PICKER_POLL_MS);
+    const after = await page.evaluate<PickerState | null, string[]>(TAG_PICKER_SCRIPT, known);
+    if (pickerShows(after, model)) return;
+  }
+  throw new GeminiWebModelSelectionError(
+    502,
+    `Gemini Web: selecting "${model.uiLabel}" did not take effect in the model picker.`
+  );
+}
+
+// ─── Gate / challenge helpers ───────────────────────────────────────────────
+
+/** Google's "unusual traffic" interstitial (`google.com/sorry/index`, served with HTTP 429). */
+export function isGoogleChallengeUrl(url: string): boolean {
+  return /(^|\/\/)(www\.)?google\.[a-z.]+\/sorry\//i.test(url);
+}
+
+function jsonErrorResponse(
+  status: number,
+  message: string,
+  extraHeaders: Record<string, string> = {}
+): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json", ...extraHeaders },
+  });
+}
+
+function gateErrorResponse(err: GeminiWebGateError): Response {
+  return jsonErrorResponse(err.status, err.message, {
+    "Retry-After": String(Math.ceil(err.retryAfterMs / 1000)),
+  });
+}
+
 // ─── Executor ───────────────────────────────────────────────────────────────
 
 export class GeminiWebExecutor extends BaseExecutor {
@@ -232,12 +407,37 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
+    // Resolve the requested model BEFORE spending a browser: an id the picker cannot select
+    // must fail loudly here, not be answered by whichever model the account defaults to.
+    let selectedModel: GeminiWebModel | undefined;
+    if (model) {
+      selectedModel = findGeminiWebModel(model);
+      if (!selectedModel) {
+        return {
+          response: jsonErrorResponse(
+            400,
+            `Unknown Gemini Web model "${model}". Available: ` +
+              `${GEMINI_WEB_MODELS.map((m) => m.id).join(", ")}.`
+          ),
+          url: GEMINI_URL,
+          headers: {},
+          transformedBody: body,
+        };
+      }
+    }
+
+    const gate = getGeminiWebGate();
+    let permit: GeminiWebPermit | null = null;
     let browser: any = null;
     let abortBrowser: (() => void) | null = null;
     try {
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
+      // Serialize/pace per account and cap concurrent Chromium sessions (see geminiWebGate.ts).
+      // Rejections are 429 + Retry-After; they never reach Google.
+      permit = await gate.acquire(geminiWebAccountKey(cookie), signal);
+
       const { chromium } = await import("playwright");
       browser = await chromium.launch({ headless: true });
       abortBrowser = () => {
@@ -264,10 +464,16 @@ export class GeminiWebExecutor extends BaseExecutor {
       // Capture first StreamGenerate response
       let responseText = "";
       let captured = false;
+      let upstreamChallenged = false;
       const responsePromise = new Promise<void>((resolve) => {
         page.on("response", async (resp: any) => {
           if (captured || !resp.url().includes("StreamGenerate")) return;
           captured = true;
+          if (typeof resp.status === "function" && resp.status() === 429) {
+            upstreamChallenged = true;
+            resolve();
+            return;
+          }
           try {
             const raw = await resp.text();
             responseText = parseStreamResponse(raw);
@@ -278,11 +484,27 @@ export class GeminiWebExecutor extends BaseExecutor {
         });
       });
 
-      await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded", timeout: 20000 });
+      const navigation = await page.goto(GEMINI_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
+      // Google answers an automated-looking burst with google.com/sorry (HTTP 429 + reCAPTCHA).
+      // Stop everything for the cooldown instead of typing into a captcha page.
+      const landedUrl = typeof page.url === "function" ? String(page.url()) : "";
+      const navStatus =
+        navigation && typeof navigation.status === "function" ? navigation.status() : 0;
+      if (isGoogleChallengeUrl(landedUrl) || navStatus === 429) {
+        return this.challengeResult(gate, body);
+      }
       await page.waitForTimeout(3000);
+
+      // The page answers with whatever model its picker shows; make it the requested one.
+      if (selectedModel) {
+        await selectGeminiWebModel(page, selectedModel);
+      }
 
       // Type and send message
       const inputEl = await page.waitForSelector(".ql-editor, [contenteditable='true']", {
@@ -299,6 +521,11 @@ export class GeminiWebExecutor extends BaseExecutor {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
       }
 
+      const finalUrl = typeof page.url === "function" ? String(page.url()) : "";
+      if (upstreamChallenged || isGoogleChallengeUrl(finalUrl)) {
+        return this.challengeResult(gate, body);
+      }
+
       if (!responseText) {
         return {
           response: new Response(JSON.stringify({ error: "No response from Gemini" }), {
@@ -311,7 +538,7 @@ export class GeminiWebExecutor extends BaseExecutor {
         };
       }
 
-      const modelId = model || "gemini-2.5-pro";
+      const modelId = selectedModel?.id ?? (model || "gemini-web");
 
       if (stream) {
         // Pseudo-streaming: send complete response as single SSE chunk
@@ -361,6 +588,22 @@ export class GeminiWebExecutor extends BaseExecutor {
         transformedBody: body,
       };
     } catch (error) {
+      if (error instanceof GeminiWebGateError) {
+        return {
+          response: gateErrorResponse(error),
+          url: GEMINI_URL,
+          headers: {},
+          transformedBody: body,
+        };
+      }
+      if (error instanceof GeminiWebModelSelectionError) {
+        return {
+          response: jsonErrorResponse(error.status, error.message),
+          url: GEMINI_URL,
+          headers: {},
+          transformedBody: body,
+        };
+      }
       const rawMessage = error instanceof Error ? error.message : "Unknown error";
       // #3516: a missing Playwright browser is a host/config problem, not a transient upstream
       // fault. Surface an actionable error and tag it with the connection-cooldown hint so
@@ -408,6 +651,28 @@ export class GeminiWebExecutor extends BaseExecutor {
           /* ignore close errors */
         }
       }
+      // Only after Chromium is gone, so the browser cap really bounds live processes.
+      permit?.release();
     }
+  }
+
+  /** Google challenged us: trip the global cooldown and answer 429 + Retry-After. */
+  private challengeResult(gate: ReturnType<typeof getGeminiWebGate>, body: unknown) {
+    gate.tripChallengeCooldown("google.com/sorry");
+    const remaining = gate.challengeRemainingMs();
+    return {
+      response: gateErrorResponse(
+        new GeminiWebGateError(
+          "upstream_challenge",
+          "Gemini Web: Google served an unusual-traffic challenge (google.com/sorry) for this " +
+            "session. Requests are paused so the session is not hammered while flagged — solve " +
+            "the captcha at gemini.google.com from the same network, or wait for the cooldown.",
+          remaining
+        )
+      ),
+      url: GEMINI_URL,
+      headers: {},
+      transformedBody: body,
+    };
   }
 }
