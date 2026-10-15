@@ -48,8 +48,8 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
   },
   "gemini-web": {
     kind: "cookie",
-    credentialName: "__Secure-1PSID (optional: __Secure-1PSIDTS)",
-    placeholder: "__Secure-1PSID=...; __Secure-1PSIDTS=...",
+    credentialName: "Cookie header (full)",
+    placeholder: "paste the full Cookie header from gemini.google.com",
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "__Secure-1PSID", "__Secure-1PSIDTS"],
   },

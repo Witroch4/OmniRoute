@@ -38,6 +38,13 @@ export async function ensureCloudSyncInitialized() {
     try {
       const { initTokenHealthCheck } = await import("@/lib/tokenHealthCheck");
       initTokenHealthCheck();
+      try {
+        // Cookie sessions (gemini-web) are not OAuth, so the sweep above never refreshes them.
+        const { initGeminiWebSessionKeeper } = await import("@/lib/geminiWebSessionKeeper");
+        initGeminiWebSessionKeeper();
+      } catch (error) {
+        console.error("[ServerInit] Gemini Web session keeper failed to start:", error);
+      }
       await initializeCloudSync();
       startModelSyncScheduler();
       startBudgetResetJob();

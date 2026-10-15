@@ -42,6 +42,13 @@ import {
   getGeminiWebGate,
   type GeminiWebPermit,
 } from "../services/geminiWebGate.ts";
+import {
+  collectCookieUpdates,
+  parseCookieHeader,
+  resolveGeminiWebCookieHeader,
+  toPlaywrightCookies,
+  type CookiePair,
+} from "../services/geminiWebSession.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -109,36 +116,6 @@ function formatStreamChunk(content: string, model: string, finishReason: string 
 }
 
 /**
- * Parse cookie string, stripping attributes (Path, Domain, Expires, etc.)
- * Input: full browser cookie string or just "name=value; name2=value2"
- * Output: array of { name, value } pairs
- */
-function parseCookies(raw: string): Array<{ name: string; value: string }> {
-  return raw
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const eqIdx = part.indexOf("=");
-      if (eqIdx === -1) return null;
-      const name = part.substring(0, eqIdx).trim();
-      const value = part.substring(eqIdx + 1).trim();
-      // Skip cookie attributes that aren't name=value pairs
-      if (!name || !value) return null;
-      const lowerName = name.toLowerCase();
-      if (
-        ["path", "domain", "expires", "max-age", "secure", "httponly", "samesite"].includes(
-          lowerName
-        )
-      ) {
-        return null;
-      }
-      return { name, value };
-    })
-    .filter(Boolean) as Array<{ name: string; value: string }>;
-}
-
-/**
  * Parse Gemini StreamGenerate response text.
  *
  * Response format:
@@ -199,57 +176,6 @@ export function parseStreamResponse(raw: string): string {
   return current;
 }
 
-function readCredentialString(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : "";
-}
-
-function readProviderSpecificString(
-  providerSpecificData: unknown,
-  keys: readonly string[]
-): string {
-  if (
-    !providerSpecificData ||
-    typeof providerSpecificData !== "object" ||
-    Array.isArray(providerSpecificData)
-  ) {
-    return "";
-  }
-  const data = providerSpecificData as Record<string, unknown>;
-  for (const key of keys) {
-    const value = readCredentialString(data[key]);
-    if (value) return value;
-  }
-  return "";
-}
-
-function normalizeGeminiCookieInput(raw: string, cookieName = "__Secure-1PSID"): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  return trimmed.includes("=") ? trimmed : `${cookieName}=${trimmed}`;
-}
-
-function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): string {
-  const directCookie =
-    readCredentialString(credentials?.apiKey) ||
-    readCredentialString((credentials as Record<string, unknown> | undefined)?.cookie);
-  if (directCookie) return normalizeGeminiCookieInput(directCookie);
-
-  const providerSpecificData = credentials?.providerSpecificData;
-  const cookie = readProviderSpecificString(providerSpecificData, ["cookie"]);
-  if (cookie) return normalizeGeminiCookieInput(cookie);
-
-  const psid = readProviderSpecificString(providerSpecificData, ["__Secure-1PSID"]);
-  const psidts = readProviderSpecificString(providerSpecificData, ["__Secure-1PSIDTS"]);
-  return [
-    psid ? normalizeGeminiCookieInput(psid, "__Secure-1PSID") : "",
-    psidts ? normalizeGeminiCookieInput(psidts, "__Secure-1PSIDTS") : "",
-  ]
-    .filter(Boolean)
-    .join("; ");
-}
-
 // ─── Gate / challenge helpers ───────────────────────────────────────────────
 
 /** Google's "unusual traffic" interstitial (`google.com/sorry/index`, served with HTTP 429). */
@@ -274,6 +200,26 @@ function gateErrorResponse(err: GeminiWebGateError): Response {
   });
 }
 
+/**
+ * Send whatever Google rotated during this page session to the connection's stored header.
+ * Best effort: a failure here must never turn a good answer into an error.
+ */
+async function persistRotatedCookies(
+  connectionId: string | undefined,
+  context: { cookies?: () => Promise<Array<{ name: string; value: string; domain?: string }>> },
+  sent: readonly CookiePair[]
+): Promise<void> {
+  if (!connectionId || typeof context.cookies !== "function") return;
+  try {
+    const updates = collectCookieUpdates(sent, await context.cookies());
+    if (updates.length === 0) return;
+    const { applyGeminiWebCookieUpdates } = await import("@/lib/geminiWebSessionKeeper");
+    await applyGeminiWebCookieUpdates(connectionId, updates);
+  } catch {
+    /* best effort */
+  }
+}
+
 // ─── Executor ───────────────────────────────────────────────────────────────
 
 export class GeminiWebExecutor extends BaseExecutor {
@@ -285,7 +231,11 @@ export class GeminiWebExecutor extends BaseExecutor {
     const { model, body, stream, credentials, signal } = input;
     const requestBody = body as GeminiRequestBody;
 
-    const cookie = resolveGeminiWebCookie(credentials);
+    const cookie = resolveGeminiWebCookieHeader({
+      apiKey: credentials?.apiKey,
+      cookie: (credentials as Record<string, unknown> | undefined)?.cookie,
+      providerSpecificData: credentials?.providerSpecificData,
+    });
     if (!cookie) {
       return {
         response: new Response(JSON.stringify({ error: "Missing Gemini cookies" }), {
@@ -354,17 +304,10 @@ export class GeminiWebExecutor extends BaseExecutor {
 
       const context = await browser.newContext({ userAgent: GEMINI_USER_AGENT });
 
-      // Parse cookies — strips attributes like Path, Domain, Expires
-      const cookiePairs = parseCookies(cookie);
-      await context.addCookies(
-        cookiePairs.map(({ name, value }) => ({
-          name,
-          value,
-          domain: ".google.com",
-          path: "/",
-          secure: true,
-        }))
-      );
+      // Parse cookies — strips attributes like Path, Domain, Expires. `__Host-` cookies go in by
+      // URL: with a Domain Chromium rejects the whole batch (see toPlaywrightCookies).
+      const cookiePairs = parseCookieHeader(cookie);
+      await context.addCookies(toPlaywrightCookies(cookiePairs));
 
       const page = await context.newPage();
 
@@ -442,6 +385,10 @@ export class GeminiWebExecutor extends BaseExecutor {
       if (upstreamChallenged || isGoogleChallengeUrl(finalUrl)) {
         return this.challengeResult(gate, body);
       }
+
+      // The page may have re-minted the session cookies while it was open. Chromium is closed
+      // right after this request, so hand them back or the stored header keeps aging.
+      await persistRotatedCookies(credentials?.connectionId, context, cookiePairs);
 
       if (!responseText) {
         return {

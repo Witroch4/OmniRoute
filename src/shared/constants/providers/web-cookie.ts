@@ -37,7 +37,7 @@ export const WEB_COOKIE_PROVIDERS = {
     textIcon: "GWeb",
     website: "https://gemini.google.com",
     authHint:
-      "Paste your __Secure-1PSID cookie value from gemini.google.com. Optionally add __Secure-1PSIDTS separated by semicolon.",
+      "Paste the FULL Cookie header of a signed-in gemini.google.com request (DevTools > Network > any request > Request Headers > cookie > Copy value). __Secure-1PSID + __Secure-1PSIDTS alone open a signed-out page. OmniRoute then rotates the session cookies every few minutes to keep it alive.",
     subscriptionRisk: true,
     riskNoticeVariant: "webCookie",
   },
