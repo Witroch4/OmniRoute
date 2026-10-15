@@ -337,3 +337,110 @@ test("quota recovery path does NOT overwrite a concurrent mark (TOCTOU closed)",
   assert.equal(after.backoffLevel, 3, "fresh backoff level must survive");
   assert.equal(after.lastError, "fresh concurrent 429");
 });
+
+// --- credits_exhausted that renews with the month (GitHub Copilot) ---------------------
+
+const COPILOT_RESET = "2026-11-01T00:00:00.000Z";
+
+async function createCopilotConnectionExhausted(lastErrorType: string = "quota_exhausted") {
+  return providersDb.createProviderConnection({
+    provider: "github",
+    authType: "oauth",
+    name: `Copilot ${lastErrorType} ${Date.now()}`,
+    accessToken: "ghu_test_token",
+    testStatus: "credits_exhausted",
+    lastError: "[402]: You have exceeded your monthly quota",
+    lastErrorType,
+    lastErrorSource: "provider_response",
+    errorCode: 402,
+    backoffLevel: 0,
+  });
+}
+
+/** Mirrors GET api.github.com/copilot_internal/user for a Pro+ plan. */
+function copilotUserResponse(premiumRemaining: number) {
+  return new Response(
+    JSON.stringify({
+      copilot_plan: "individual_pro_plus",
+      quota_reset_date: "2026-11-01",
+      quota_snapshots: {
+        premium_interactions: { entitlement: 1500, remaining: premiumRemaining, unlimited: false },
+        chat: { entitlement: 100, remaining: 100, unlimited: true },
+        completions: { entitlement: 100, remaining: 100, unlimited: true },
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}
+
+async function syncCopilot(connectionId: string, premiumRemaining: number) {
+  const mockedFetch: typeof fetch = async () => copilotUserResponse(premiumRemaining);
+  await withMockedFetch(mockedFetch, async () => {
+    await providerLimits.fetchAndPersistProviderLimits(connectionId, "manual");
+  });
+  return (await providersDb.getProviderConnectionById(connectionId)) as Record<string, unknown>;
+}
+
+test("hasRenewedFiniteQuota ignores unlimited windows and vetoes on an empty finite one", () => {
+  const { hasRenewedFiniteQuota } = providerLimits;
+
+  assert.equal(
+    hasRenewedFiniteQuota({
+      quotas: {
+        premium_interactions: { remaining: 1494, total: 1500, resetAt: COPILOT_RESET },
+        chat: { remaining: 100, total: 100, unlimited: true, resetAt: COPILOT_RESET },
+      },
+    }),
+    true
+  );
+  // The pool that caused the 402 is still empty; the unlimited chat window must not hide it.
+  assert.equal(
+    hasRenewedFiniteQuota({
+      quotas: {
+        premium_interactions: { remaining: 0, total: 1500, resetAt: COPILOT_RESET },
+        chat: { remaining: 100, total: 100, unlimited: true, resetAt: COPILOT_RESET },
+      },
+    }),
+    false
+  );
+  // Only unlimited windows: nothing says the exhausted pool renewed.
+  assert.equal(
+    hasRenewedFiniteQuota({ quotas: { chat: { remaining: 100, unlimited: true } } }),
+    false
+  );
+  // A balance without a reset is not a renewed quota.
+  assert.equal(hasRenewedFiniteQuota({ quotas: { credits: { remaining: 12.5, total: 20 } } }), false);
+  assert.equal(hasRenewedFiniteQuota({}), false);
+});
+
+test("credits_exhausted from a quota 402 recovers once the finite window renewed", async () => {
+  const connection = await createCopilotConnectionExhausted();
+  const connectionId = (connection as { id: string }).id;
+
+  const updated = await syncCopilot(connectionId, 1494);
+
+  assert.equal(updated.testStatus, "active");
+  assert.equal(updated.errorCode, undefined);
+  assert.equal(updated.lastErrorType, undefined);
+  assert.equal(updated.rateLimitedUntil, undefined);
+});
+
+test("credits_exhausted stays while the premium pool is still empty (no flip-flop)", async () => {
+  const connection = await createCopilotConnectionExhausted();
+  const connectionId = (connection as { id: string }).id;
+
+  const updated = await syncCopilot(connectionId, 0);
+
+  assert.equal(updated.testStatus, "credits_exhausted");
+  assert.equal(updated.lastErrorType, "quota_exhausted");
+});
+
+test("credits_exhausted whose recorded cause was not a quota is left alone", async () => {
+  const connection = await createCopilotConnectionExhausted("permanent");
+  const connectionId = (connection as { id: string }).id;
+
+  const updated = await syncCopilot(connectionId, 1494);
+
+  assert.equal(updated.testStatus, "credits_exhausted");
+  assert.equal(updated.lastErrorType, "permanent");
+});

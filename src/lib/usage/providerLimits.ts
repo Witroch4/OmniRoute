@@ -426,12 +426,75 @@ export function hasUsableQuota(usage: JsonRecord): boolean {
   return false;
 }
 
+/**
+ * True when the provider reports at least one FINITE, PERIODIC quota window and every
+ * finite window has headroom again (`remaining > 0`).
+ *
+ * This is deliberately stricter than {@link hasUsableQuota}: that one is satisfied by any
+ * `unlimited` window, and a Copilot Pro+ account always carries `chat` / `completions`
+ * windows with `unlimited: true` next to the 1500-request `premium_interactions` pool
+ * that actually runs dry. Reading "usable" off the unlimited ones would flip the
+ * connection back on while the pool that caused the 402 is still at zero, and the next
+ * request would 402 again. Unlimited windows say nothing about the exhausted pool, so
+ * they are skipped; an empty finite window vetoes the recovery.
+ *
+ * `periodic` (a window that carries `resetAt`) keeps balance-style providers out: a
+ * prepaid balance that is > 0 again is not a renewed quota, and whoever topped it up
+ * can re-test the connection by hand.
+ */
+export function hasRenewedFiniteQuota(usage: JsonRecord): boolean {
+  const quotas = usage?.quotas;
+  if (!isRecord(quotas)) return false;
+
+  let finiteWindows = 0;
+  let periodic = false;
+  for (const value of Object.values(quotas)) {
+    if (!isRecord(value)) continue;
+    if (value.unlimited === true) continue;
+    const remaining =
+      typeof value.remaining === "number"
+        ? value.remaining
+        : typeof value.remainingPercentage === "number"
+          ? value.remainingPercentage
+          : null;
+    if (remaining === null) continue;
+    finiteWindows += 1;
+    if (remaining <= 0) return false;
+    if (typeof value.resetAt === "string" && value.resetAt.length > 0) periodic = true;
+  }
+  return finiteWindows > 0 && periodic;
+}
+
+/**
+ * `credits_exhausted` written by a 402 quota error is the one terminal status that is
+ * reversible by itself: a monthly quota renews, so the connection must come back when the
+ * provider says it did. `banned` / `expired` / `deactivated` stay terminal (a quota
+ * reading says nothing about them), and so does a `credits_exhausted` whose recorded
+ * cause was not a quota (`lastErrorType !== "quota_exhausted"`).
+ *
+ * Without this the status was permanent: every recovery path skips terminal states, so a
+ * Copilot connection that hit its monthly premium quota on 2026-09-27 stayed out of
+ * routing through the 1st of the next month, reading 1494/1500 remaining on every sync.
+ */
+function isRenewedQuotaRecovery(connection: ProviderConnectionLike, usage: JsonRecord): boolean {
+  return (
+    connection.testStatus === "credits_exhausted" &&
+    connection.lastErrorType === "quota_exhausted" &&
+    hasRenewedFiniteQuota(usage)
+  );
+}
+
 export async function maybeClearRecoveredQuotaState(
   connection: ProviderConnectionLike,
   usage: JsonRecord
 ): Promise<ProviderConnectionLike> {
   if (!hasUsableQuota(usage)) return connection;
-  if (isTerminalStatusForQuotaRecovery(connection.testStatus)) return connection;
+  if (
+    isTerminalStatusForQuotaRecovery(connection.testStatus) &&
+    !isRenewedQuotaRecovery(connection, usage)
+  ) {
+    return connection;
+  }
 
   const hasTransientState =
     connection.testStatus === "unavailable" ||
