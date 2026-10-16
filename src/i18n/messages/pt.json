@@ -4269,6 +4269,8 @@
     "disableConnection": "Desativar conexão",
     "enableConnection": "Habilitar conexão",
     "reauthenticateConnection": "Autentique novamente esta conexão",
+    "verifyAccount": "Verificar conta",
+    "verifyAccountHint": "A Google exige que verifique esta conta. Abra a ligação, conclua a verificação e tente novamente.",
     "proxyConfig": "Configuração de proxy",
     "aliasExistsAlert": "O alias \"{alias}\" já existe. Use um modelo diferente ou edite o alias existente.",
     "aliasInputPlaceholder": "alias name",

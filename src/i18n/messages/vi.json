@@ -3904,6 +3904,8 @@
     "disableConnection": "Tắt kết nối",
     "enableConnection": "Kích hoạt kết nối",
     "reauthenticateConnection": "Xác thực lại kết nối này",
+    "verifyAccount": "Xác minh tài khoản",
+    "verifyAccountHint": "Google yêu cầu bạn xác minh tài khoản này. Mở liên kết, hoàn tất bước kiểm tra rồi thử lại.",
     "proxyConfig": "Cấu hình proxy",
     "aliasExistsAlert": "Bí danh \"{alias}\" đã tồn tại. Vui lòng sử dụng một mô hình khác hoặc chỉnh sửa bí danh hiện có.",
     "aliasInputPlaceholder": "alias name",

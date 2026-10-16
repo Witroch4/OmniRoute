@@ -3904,6 +3904,8 @@
     "disableConnection": "Kapcsolódás letiltása",
     "enableConnection": "Kapcsolat engedélyezése",
     "reauthenticateConnection": "Hitelesítse újra ezt a kapcsolatot",
+    "verifyAccount": "Fiók ellenőrzése",
+    "verifyAccountHint": "A Google kéri a fiók ellenőrzését. Nyisd meg a linket, végezd el az ellenőrzést, majd próbáld újra.",
     "proxyConfig": "Proxy konfig",
     "aliasExistsAlert": "A \"{alias}\" alias már létezik. Kérjük, használjon másik modellt, vagy módosítsa a meglévő álnevet.",
     "aliasInputPlaceholder": "alias name",

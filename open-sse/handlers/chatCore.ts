@@ -162,6 +162,7 @@ import {
   isEmptyContentResponse,
 } from "../services/errorClassifier.ts";
 import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
+import { recordAntigravityVerificationUrl } from "./chatCore/antigravityVerificationState.ts";
 import { wasRefreshTokenRotated } from "@omniroute/open-sse/services/refreshSerializer.ts";
 import { connectionHasExtraKeys } from "../services/apiKeyRotator.ts";
 import { recordKeyHealthStatus as recordKeyHealthStatusFor } from "./chatCore/keyHealth.ts";
@@ -3413,6 +3414,14 @@ export async function handleChatCore({
           console.warn(
             `[provider] Node ${errorConnectionId} project routing error (${statusCode}) — not banning`
           );
+          // Antigravity 403 VALIDATION_REQUIRED: keep Google's "verify your account"
+          // link on the connection so the dashboard can offer a Verify button.
+          await recordAntigravityVerificationUrl({
+            provider,
+            connectionId: errorConnectionId,
+            upstreamErrorBody,
+            message,
+          });
         } else if (errorType === PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND) {
           // 404 — model/endpoint does not exist upstream. Lock the model so the
           // retry/backoff loop stops hammering the dead endpoint (which would

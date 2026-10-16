@@ -3904,6 +3904,8 @@
     "disableConnection": "تعطيل الاتصال",
     "enableConnection": "تمكين الاتصال",
     "reauthenticateConnection": "إعادة مصادقة هذا الاتصال",
+    "verifyAccount": "التحقق من الحساب",
+    "verifyAccountHint": "تطلب Google التحقق من هذا الحساب. افتح الرابط وأكمل التحقق ثم أعد المحاولة.",
     "proxyConfig": "تكوين الوكيل",
     "aliasExistsAlert": "الاسم المستعار \"{alias}\" موجود بالفعل. الرجاء استخدام نموذج مختلف أو تعديل الاسم المستعار الموجود.",
     "aliasInputPlaceholder": "alias name",

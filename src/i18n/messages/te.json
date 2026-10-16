@@ -3904,6 +3904,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "ఖాతాను ధృవీకరించండి",
+    "verifyAccountHint": "ఈ ఖాతాను ధృవీకరించమని Google కోరుతోంది. లింక్‌ను తెరిచి, తనిఖీని పూర్తి చేసి, మళ్లీ ప్రయత్నించండి.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

@@ -3904,6 +3904,8 @@
     "disableConnection": "השבת את החיבור",
     "enableConnection": "אפשר חיבור",
     "reauthenticateConnection": "אימות מחדש את החיבור הזה",
+    "verifyAccount": "אמת חשבון",
+    "verifyAccountHint": "Google דורשת לאמת את החשבון הזה. פתח את הקישור, השלם את הבדיקה ונסה שוב.",
     "proxyConfig": "תצורת פרוקסי",
     "aliasExistsAlert": "הכינוי \"{alias}\" כבר קיים. אנא השתמש בדגם אחר או ערוך כינוי קיים.",
     "aliasInputPlaceholder": "alias name",

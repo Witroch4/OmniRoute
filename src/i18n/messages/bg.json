@@ -3904,6 +3904,8 @@
     "disableConnection": "Деактивирайте връзката",
     "enableConnection": "Разрешете връзката",
     "reauthenticateConnection": "Повторно удостоверяване на тази връзка",
+    "verifyAccount": "Потвърди акаунта",
+    "verifyAccountHint": "Google изисква да потвърдите този акаунт. Отворете връзката, завършете проверката и опитайте отново.",
     "proxyConfig": "Прокси конфигурация",
     "aliasExistsAlert": "Псевдонимът „{alias}“ вече съществува. Моля, използвайте различен модел или редактирайте съществуващ псевдоним.",
     "aliasInputPlaceholder": "alias name",

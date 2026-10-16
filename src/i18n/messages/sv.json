@@ -4254,6 +4254,8 @@
     "disableConnection": "Inaktivera anslutningen",
     "enableConnection": "Aktivera anslutning",
     "reauthenticateConnection": "Autentisera den här anslutningen igen",
+    "verifyAccount": "Verifiera konto",
+    "verifyAccountHint": "Google kräver att du verifierar det här kontot. Öppna länken, slutför kontrollen och försök igen.",
     "proxyConfig": "Proxykonfiguration",
     "aliasExistsAlert": "Aliaset \"{alias}\" finns redan. Använd en annan modell eller redigera befintligt alias.",
     "aliasInputPlaceholder": "alias name",

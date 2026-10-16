@@ -3904,6 +3904,8 @@
     "disableConnection": "कनेक्शन अक्षम करें",
     "enableConnection": "कनेक्शन सक्षम करें",
     "reauthenticateConnection": "इस कनेक्शन को पुनः प्रमाणित करें",
+    "verifyAccount": "खाता सत्यापित करें",
+    "verifyAccountHint": "Google इस खाते को सत्यापित करने के लिए कहता है। लिंक खोलें, जाँच पूरी करें, फिर दोबारा प्रयास करें।",
     "proxyConfig": "प्रॉक्सी कॉन्फ़िगरेशन",
     "aliasExistsAlert": "उपनाम \"{alias}\" पहले से मौजूद है। कृपया किसी भिन्न मॉडल का उपयोग करें या मौजूदा उपनाम संपादित करें।",
     "aliasInputPlaceholder": "alias name",

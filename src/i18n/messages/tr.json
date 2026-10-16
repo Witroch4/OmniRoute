@@ -3904,6 +3904,8 @@
     "disableConnection": "Bağlantıyı devre dışı bırak",
     "enableConnection": "Bağlantıyı etkinleştir",
     "reauthenticateConnection": "Bu bağlantıyı yeniden kimlik doğrula",
+    "verifyAccount": "Hesabı doğrula",
+    "verifyAccountHint": "Google bu hesabı doğrulamanızı istiyor. Bağlantıyı açın, doğrulamayı tamamlayın ve yeniden deneyin.",
     "proxyConfig": "Proxy ayarları",
     "aliasExistsAlert": "\"{alias}\" takma adı zaten mevcut. Lütfen farklı bir model kullanın veya mevcut takma adı düzenleyin.",
     "aliasInputPlaceholder": "alias name",

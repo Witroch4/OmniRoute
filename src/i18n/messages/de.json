@@ -3909,6 +3909,8 @@
     "disableConnection": "Verbindung deaktivieren",
     "enableConnection": "Verbindung aktivieren",
     "reauthenticateConnection": "Authentifizieren Sie diese Verbindung erneut",
+    "verifyAccount": "Konto verifizieren",
+    "verifyAccountHint": "Google verlangt, dass du dieses Konto verifizierst. Öffne den Link, schließe die Prüfung ab und versuche es erneut.",
     "proxyConfig": "Proxy-Konfiguration",
     "aliasExistsAlert": "Alias „{alias}“ existiert bereits. Bitte verwenden Sie ein anderes Modell oder bearbeiten Sie den vorhandenen Alias.",
     "aliasInputPlaceholder": "alias name",

@@ -4254,6 +4254,8 @@
     "disableConnection": "接続を無効にする",
     "enableConnection": "接続を有効にする",
     "reauthenticateConnection": "この接続を再認証します",
+    "verifyAccount": "アカウントを確認",
+    "verifyAccountHint": "Google がこのアカウントの確認を求めています。リンクを開いて確認を完了してから、再試行してください。",
     "proxyConfig": "プロキシ構成",
     "aliasExistsAlert": "エイリアス「{alias}」はすでに存在します。別のモデルを使用するか、既存のエイリアスを編集してください。",
     "aliasInputPlaceholder": "alias name",

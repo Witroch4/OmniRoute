@@ -3904,6 +3904,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "تأیید حساب",
+    "verifyAccountHint": "Google از شما می‌خواهد این حساب را تأیید کنید. پیوند را باز کنید، بررسی را کامل کنید و دوباره تلاش کنید.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

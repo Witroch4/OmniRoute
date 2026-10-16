@@ -4288,6 +4288,8 @@
     "disableConnection": "停用連線",
     "enableConnection": "啟用連線",
     "reauthenticateConnection": "重新驗證此連線",
+    "verifyAccount": "驗證帳號",
+    "verifyAccountHint": "Google 要求驗證此帳號。請開啟連結完成驗證後再試一次。",
     "proxyConfig": "代理配置",
     "aliasExistsAlert": "別名“{alias}”已存在。請使用不同的模型或編輯現有別名。",
     "aliasInputPlaceholder": "alias name",

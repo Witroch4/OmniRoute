@@ -3904,6 +3904,8 @@
     "disableConnection": "Zakázat připojení",
     "enableConnection": "Povolit připojení",
     "reauthenticateConnection": "Znovu ověřit toto připojení",
+    "verifyAccount": "Ověřit účet",
+    "verifyAccountHint": "Google vyžaduje ověření tohoto účtu. Otevřete odkaz, dokončete ověření a zkuste to znovu.",
     "proxyConfig": "Nastavení Proxy",
     "aliasExistsAlert": "Alias \"​{alias}\" již existuje. Použijte prosím jiný model nebo upravte existující alias.",
     "aliasInputPlaceholder": "alias name",

@@ -3904,6 +3904,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "கணக்கைச் சரிபார்க்கவும்",
+    "verifyAccountHint": "இந்தக் கணக்கைச் சரிபார்க்க Google கேட்கிறது. இணைப்பைத் திறந்து, சரிபார்ப்பை முடித்து, மீண்டும் முயலவும்.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

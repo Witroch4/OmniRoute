@@ -4254,6 +4254,8 @@
     "disableConnection": "Отключить соединение",
     "enableConnection": "Включить соединение",
     "reauthenticateConnection": "Повторно аутентифицировать это соединение",
+    "verifyAccount": "Подтвердить аккаунт",
+    "verifyAccountHint": "Google требует подтвердить этот аккаунт. Откройте ссылку, пройдите проверку и повторите попытку.",
     "proxyConfig": "Конфигурация прокси",
     "aliasExistsAlert": "Псевдоним «{alias}» уже существует. Используйте другую модель или измените существующий псевдоним.",
     "aliasInputPlaceholder": "alias name",

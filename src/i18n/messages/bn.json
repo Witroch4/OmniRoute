@@ -3904,6 +3904,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "অ্যাকাউন্ট যাচাই করুন",
+    "verifyAccountHint": "Google এই অ্যাকাউন্টটি যাচাই করতে বলছে। লিঙ্কটি খুলুন, যাচাই সম্পূর্ণ করুন, তারপর আবার চেষ্টা করুন।",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

@@ -4254,6 +4254,8 @@
     "disableConnection": "Dezactivați conexiunea",
     "enableConnection": "Activați conexiunea",
     "reauthenticateConnection": "Re-autentificați această conexiune",
+    "verifyAccount": "Verifică contul",
+    "verifyAccountHint": "Google solicită verificarea acestui cont. Deschide linkul, finalizează verificarea, apoi încearcă din nou.",
     "proxyConfig": "Configurare proxy",
     "aliasExistsAlert": "Aliasul „{alias}” există deja. Vă rugăm să utilizați un alt model sau să editați alias-ul existent.",
     "aliasInputPlaceholder": "alias name",

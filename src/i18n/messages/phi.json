@@ -4254,6 +4254,8 @@
     "disableConnection": "Huwag paganahin ang koneksyon",
     "enableConnection": "Paganahin ang koneksyon",
     "reauthenticateConnection": "Muling patotohanan ang koneksyong ito",
+    "verifyAccount": "I-verify ang account",
+    "verifyAccountHint": "Hinihingi ng Google na i-verify mo ang account na ito. Buksan ang link, tapusin ang pagsusuri, saka subukang muli.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Umiiral na ang alyas na \"{alias}\". Mangyaring gumamit ng ibang modelo o i-edit ang kasalukuyang alias.",
     "aliasInputPlaceholder": "alias name",

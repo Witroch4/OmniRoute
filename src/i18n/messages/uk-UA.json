@@ -3904,6 +3904,8 @@
     "disableConnection": "Відключити підключення",
     "enableConnection": "Увімкнути підключення",
     "reauthenticateConnection": "Повторно автентифікуйте це підключення",
+    "verifyAccount": "Підтвердити обліковий запис",
+    "verifyAccountHint": "Google вимагає підтвердити цей обліковий запис. Відкрийте посилання, пройдіть перевірку й повторіть спробу.",
     "proxyConfig": "Конфігурація проксі",
     "aliasExistsAlert": "Псевдонім \"{alias}\" вже існує. Використовуйте іншу модель або відредагуйте існуючий псевдонім.",
     "aliasInputPlaceholder": "alias name",

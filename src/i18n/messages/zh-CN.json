@@ -4146,6 +4146,8 @@
     "disableConnection": "禁用连接",
     "enableConnection": "启用连接",
     "reauthenticateConnection": "重新验证此连接",
+    "verifyAccount": "验证账号",
+    "verifyAccountHint": "Google 要求验证此账号。请打开链接完成验证后重试。",
     "proxyConfig": "代理配置",
     "aliasExistsAlert": "别名“{alias}”已存在。请使用不同的模型或编辑现有别名。",
     "aliasInputPlaceholder": "alias name",

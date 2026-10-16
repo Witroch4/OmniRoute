@@ -4254,6 +4254,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "खाते सत्यापित करा",
+    "verifyAccountHint": "Google हे खाते सत्यापित करण्यास सांगत आहे. लिंक उघडा, तपासणी पूर्ण करा, नंतर पुन्हा प्रयत्न करा.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

@@ -3904,6 +3904,8 @@
     "disableConnection": "Disable connection",
     "enableConnection": "Enable connection",
     "reauthenticateConnection": "Re-authenticate this connection",
+    "verifyAccount": "Thibitisha akaunti",
+    "verifyAccountHint": "Google inahitaji uthibitishe akaunti hii. Fungua kiungo, kamilisha ukaguzi, kisha jaribu tena.",
     "proxyConfig": "Proxy config",
     "aliasExistsAlert": "Alias \"{alias}\" already exists. Please use a different model or edit existing alias.",
     "aliasInputPlaceholder": "alias name",

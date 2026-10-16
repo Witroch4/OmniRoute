@@ -11,6 +11,7 @@ import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import useEmailPrivacyStore from "@/store/emailPrivacyStore";
 import { isClaudeExtraUsageBlockEnabled } from "@/lib/providers/claudeExtraUsage";
 import { shouldShowConnectionLastError } from "./connectionRowHelpers";
+import { readStoredVerificationUrl } from "@omniroute/open-sse/services/antigravityVerification.ts";
 import {
   getCodexEffectiveServiceTier,
   type CodexGlobalServiceMode,
@@ -401,6 +402,8 @@ export default function ConnectionRow({
   // updates every 30s via interval only (no sync setState in effect body).
   // Prefer tokenExpiresAt (updated on each refresh) over expiresAt (original grant date).
   const effectiveExpiresAt = connection.tokenExpiresAt || connection.expiresAt;
+  // Antigravity 403 VALIDATION_REQUIRED: Google link that unlocks the account (validated host).
+  const verificationUrl = readStoredVerificationUrl(connection.providerSpecificData);
   const getTokenMinsLeft = () => {
     if (!isOAuth || !effectiveExpiresAt) return null;
     const expiresMs = new Date(effectiveExpiresAt).getTime();
@@ -867,6 +870,19 @@ export default function ConnectionRow({
             >
               <span className="material-symbols-outlined text-[18px]">passkey</span>
             </button>
+          )}
+          {verificationUrl && (
+            <a
+              href={verificationUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 hover:bg-amber-500/10 rounded text-amber-600 hover:text-amber-500"
+              title={t("verifyAccountHint")}
+              aria-label={t("verifyAccount")}
+              data-testid="connection-verify-account"
+            >
+              <span className="material-symbols-outlined text-[18px]">verified_user</span>
+            </a>
           )}
           <button
             onClick={onEdit}

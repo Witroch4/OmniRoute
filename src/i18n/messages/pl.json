@@ -4254,6 +4254,8 @@
     "disableConnection": "Wyłącz połączenie",
     "enableConnection": "Włącz połączenie",
     "reauthenticateConnection": "Ponownie uwierzytelnij to połączenie",
+    "verifyAccount": "Zweryfikuj konto",
+    "verifyAccountHint": "Google wymaga weryfikacji tego konta. Otwórz link, dokończ weryfikację i spróbuj ponownie.",
     "proxyConfig": "Konfiguracja proxy",
     "aliasExistsAlert": "Alias „{alias}” już istnieje. Użyj innego modelu lub edytuj istniejący alias.",
     "aliasInputPlaceholder": "alias name",

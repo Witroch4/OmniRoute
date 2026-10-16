@@ -4254,6 +4254,8 @@
     "disableConnection": "Deaktiver tilkobling",
     "enableConnection": "Aktiver tilkobling",
     "reauthenticateConnection": "Autentiser denne tilkoblingen på nytt",
+    "verifyAccount": "Bekreft konto",
+    "verifyAccountHint": "Google krever at du bekrefter denne kontoen. Åpne lenken, fullfør kontrollen og prøv igjen.",
     "proxyConfig": "Proxy konfig",
     "aliasExistsAlert": "Aliaset \"{alias}\" eksisterer allerede. Bruk en annen modell eller rediger eksisterende alias.",
     "aliasInputPlaceholder": "alias name",

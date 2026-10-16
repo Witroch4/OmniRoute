@@ -3904,6 +3904,8 @@
     "disableConnection": "Deaktiver forbindelse",
     "enableConnection": "Aktiver forbindelse",
     "reauthenticateConnection": "Genautentificer denne forbindelse",
+    "verifyAccount": "Bekræft konto",
+    "verifyAccountHint": "Google kræver, at du bekræfter denne konto. Åbn linket, gennemfør kontrollen, og prøv igen.",
     "proxyConfig": "Proxy konfiguration",
     "aliasExistsAlert": "Aliaset \"{alias}\" findes allerede. Brug venligst en anden model, eller rediger eksisterende alias.",
     "aliasInputPlaceholder": "alias name",

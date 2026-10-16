@@ -547,6 +547,8 @@ function _updateConnectionRow(db: DbLike, id: string, data: JsonRecord) {
   });
 }
 
+export { mergeConnectionProviderSpecificData } from "./providers/providerSpecificDataMerge";
+
 export async function updateProviderConnection(id: string, data: JsonRecord) {
   const db = getDbInstance() as unknown as DbLike;
   const existing = db.prepare("SELECT * FROM provider_connections WHERE id = ?").get(id);

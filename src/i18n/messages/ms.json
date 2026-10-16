@@ -4254,6 +4254,8 @@
     "disableConnection": "Lumpuhkan sambungan",
     "enableConnection": "Dayakan sambungan",
     "reauthenticateConnection": "Sahkan semula sambungan ini",
+    "verifyAccount": "Sahkan akaun",
+    "verifyAccountHint": "Google memerlukan anda mengesahkan akaun ini. Buka pautan, lengkapkan semakan, kemudian cuba lagi.",
     "proxyConfig": "Konfigurasi proksi",
     "aliasExistsAlert": "Alias \"{alias}\" sudah wujud. Sila gunakan model lain atau edit alias sedia ada.",
     "aliasInputPlaceholder": "alias name",

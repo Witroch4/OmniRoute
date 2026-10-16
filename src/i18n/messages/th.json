@@ -3904,6 +3904,8 @@
     "disableConnection": "ปิดการใช้งานการเชื่อมต่อ",
     "enableConnection": "เปิดใช้งานการเชื่อมต่อ",
     "reauthenticateConnection": "ตรวจสอบการเชื่อมต่อนี้อีกครั้ง",
+    "verifyAccount": "ยืนยันบัญชี",
+    "verifyAccountHint": "Google กำหนดให้ยืนยันบัญชีนี้ เปิดลิงก์ ทำการตรวจสอบให้เสร็จ แล้วลองอีกครั้ง",
     "proxyConfig": "การกำหนดค่าพร็อกซี",
     "aliasExistsAlert": "มีนามแฝง \"{alias}\" อยู่แล้ว โปรดใช้โมเดลอื่นหรือแก้ไขนามแฝงที่มีอยู่",
     "aliasInputPlaceholder": "alias name",

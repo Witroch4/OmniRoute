@@ -4254,6 +4254,8 @@
     "disableConnection": "Verbinding uitschakelen",
     "enableConnection": "Verbinding inschakelen",
     "reauthenticateConnection": "Authenticeer deze verbinding opnieuw",
+    "verifyAccount": "Account verifiëren",
+    "verifyAccountHint": "Google vereist dat je dit account verifieert. Open de link, rond de controle af en probeer het opnieuw.",
     "proxyConfig": "Proxy-configuratie",
     "aliasExistsAlert": "Alias \"{alias}\" bestaat al. Gebruik een ander model of bewerk de bestaande alias.",
     "aliasInputPlaceholder": "alias name",

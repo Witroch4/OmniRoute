@@ -4254,6 +4254,8 @@
     "disableConnection": "Zakázať pripojenie",
     "enableConnection": "Povoliť pripojenie",
     "reauthenticateConnection": "Znova overte toto pripojenie",
+    "verifyAccount": "Overiť účet",
+    "verifyAccountHint": "Google vyžaduje overenie tohto účtu. Otvorte odkaz, dokončite overenie a skúste to znova.",
     "proxyConfig": "Konfigurácia proxy",
     "aliasExistsAlert": "Alias „{alias}“ už existuje. Použite iný model alebo upravte existujúci alias.",
     "aliasInputPlaceholder": "alias name",

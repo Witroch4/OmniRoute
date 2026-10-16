@@ -3904,6 +3904,8 @@
     "disableConnection": "Nonaktifkan koneksi",
     "enableConnection": "Aktifkan koneksi",
     "reauthenticateConnection": "Otentikasi ulang koneksi ini",
+    "verifyAccount": "Verifikasi akun",
+    "verifyAccountHint": "Google meminta Anda memverifikasi akun ini. Buka tautan, selesaikan pemeriksaan, lalu coba lagi.",
     "proxyConfig": "Konfigurasi proxy",
     "aliasExistsAlert": "Alias \"{alias}\" sudah ada. Silakan gunakan model lain atau edit alias yang ada.",
     "aliasInputPlaceholder": "alias name",

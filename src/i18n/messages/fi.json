@@ -3904,6 +3904,8 @@
     "disableConnection": "Poista yhteys käytöstä",
     "enableConnection": "Ota yhteys käyttöön",
     "reauthenticateConnection": "Todenna tämä yhteys uudelleen",
+    "verifyAccount": "Vahvista tili",
+    "verifyAccountHint": "Google vaatii tämän tilin vahvistamisen. Avaa linkki, suorita tarkistus ja yritä uudelleen.",
     "proxyConfig": "Välityspalvelimen konfigurointi",
     "aliasExistsAlert": "Alias \"{alias}\" on jo olemassa. Käytä toista mallia tai muokkaa olemassa olevaa aliasta.",
     "aliasInputPlaceholder": "alias name",
