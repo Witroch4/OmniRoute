@@ -4,6 +4,35 @@ import assert from "node:assert/strict";
 const usage = await import("../../open-sse/services/usage.ts");
 const { USAGE_SUPPORTED_PROVIDERS } = await import("../../src/shared/constants/providers.ts");
 
+// The external quota API path is opt-in: by default the OpenCode Go key is never sent to another host.
+// The tests below that exercise that path opt in, as an operator would.
+const OPT_IN_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
+process.env.OMNIROUTE_OPENCODE_GO_QUOTA_URL = OPT_IN_QUOTA_URL;
+
+test("without an explicit quota URL the OpenCode Go key is never sent anywhere", async () => {
+  let called = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    called = true;
+    return new Response("unexpected", { status: 500 });
+  };
+  delete process.env.OMNIROUTE_OPENCODE_GO_QUOTA_URL;
+
+  try {
+    const result = (await usage.getUsageForProvider({
+      id: "opencode-go-no-quota-url",
+      provider: "opencode-go",
+      apiKey: "sk-opencode-go-key",
+    })) as { message?: string };
+
+    assert.equal(called, false, "the key must not leave without an operator-chosen quota URL");
+    assert.match(result.message ?? "", /OPENCODE_GO_WORKSPACE_ID/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OMNIROUTE_OPENCODE_GO_QUOTA_URL = OPT_IN_QUOTA_URL;
+  }
+});
+
 test("USAGE_SUPPORTED_PROVIDERS includes opencode-go", () => {
   assert.ok(
     (USAGE_SUPPORTED_PROVIDERS as string[]).includes("opencode-go"),

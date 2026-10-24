@@ -13,8 +13,14 @@ type UsageQuota = {
   currency?: string;
 };
 
-const OPENCODE_GO_QUOTA_URL =
-  process.env.OMNIROUTE_OPENCODE_GO_QUOTA_URL ?? "https://api.z.ai/api/monitor/usage/quota/limit";
+/**
+ * Opt-in external quota API for the OpenCode Go key. It used to default to Z.AI's GLM Coding Plan
+ * endpoint, which sent the OpenCode key to another company on every background quota refresh (and Z.AI
+ * answers 401 to it). Read per call so an operator can set it without a rebuild; unset = never sent.
+ */
+function openCodeGoQuotaUrl(): string | null {
+  return process.env.OMNIROUTE_OPENCODE_GO_QUOTA_URL?.trim() || null;
+}
 const OPENCODE_GO_DASHBOARD_BASE_URL =
   process.env.OMNIROUTE_OPENCODE_GO_DASHBOARD_URL ?? "https://opencode.ai/workspace";
 const OPENCODE_GO_QUOTA_TOTALS = { session: 12, weekly: 30, mcp_monthly: 60 } as const;
@@ -37,9 +43,7 @@ type OllamaCloudUsage = {
   planTier?: string | null;
 };
 type OllamaCloudConfig =
-  | { state: "configured"; cookie: string }
-  | { state: "invalid"; error: string }
-  | { state: "none" };
+  { state: "configured"; cookie: string } | { state: "invalid"; error: string } | { state: "none" };
 
 function toRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
@@ -335,8 +339,17 @@ export async function getOpenCodeGoUsage(apiKey: string, providerSpecificData?: 
     };
   }
 
+  const quotaUrl = openCodeGoQuotaUrl();
+  if (!quotaUrl) {
+    return {
+      message:
+        "OpenCode Go quota requires OPENCODE_GO_WORKSPACE_ID and OPENCODE_GO_AUTH_COOKIE. " +
+        "OpenCode does not expose quota through the API key, and the key is not sent to any other host.",
+    };
+  }
+
   try {
-    const res = await fetch(OPENCODE_GO_QUOTA_URL, {
+    const res = await fetch(quotaUrl, {
       headers: {
         Authorization: buildBearerAuthorization(token),
         "Accept-Language": "en-US,en",
