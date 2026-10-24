@@ -16,11 +16,12 @@ vi.mock("next-intl", () => ({
 
 import ConnectionRow, {
   type ConnectionRowConnection,
+  type ConnectionRowProps,
 } from "@/app/(dashboard)/dashboard/providers/[id]/components/ConnectionRow";
 
 const VERIFY_URL = "https://accounts.google.com/signin/continue?sarp=1&id=ag-1";
 
-const rowProps = {
+const rowProps: Omit<ConnectionRowProps, "connection"> = {
   isOAuth: true,
   isFirst: true,
   isLast: true,
@@ -65,7 +66,7 @@ describe("ConnectionRow Verify account link", () => {
 
   async function render(connection: ConnectionRowConnection) {
     await act(async () => {
-      root.render(<ConnectionRow {...(rowProps as never)} connection={connection} />);
+      root.render(<ConnectionRow {...rowProps} connection={connection} />);
     });
     return container.querySelector<HTMLAnchorElement>("a[data-testid='connection-verify-account']");
   }
