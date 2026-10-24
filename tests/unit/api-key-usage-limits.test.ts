@@ -607,6 +607,87 @@ test("buildApiKeyUsageLimitRejection returns structured reset timing to non-Anth
   assert.equal(response.headers.get("Retry-After"), String(body.error.retry_after));
 });
 
+// Fork: the Codex CLI treats any HTTP 429 as retryable and ends in "exceeded retry limit" without
+// showing the cap message, so the Responses API (what Codex speaks) gets a 400 with the same body.
+function exceededDailyStatus() {
+  const resetAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  return {
+    resetAt,
+    status: {
+      enabled: true,
+      dailyLimitUsd: 10,
+      weeklyLimitUsd: null,
+      dailySpentUsd: 12,
+      weeklySpentUsd: 12,
+      dailyWindowStartIso: new Date(Date.now() - 60_000).toISOString(),
+      dailyResetAtIso: resetAt,
+      weeklyWindowStartIso: null,
+      weeklyResetAtIso: null,
+      dailyExceeded: true,
+      weeklyExceeded: false,
+    },
+  };
+}
+
+type RejectionBody = {
+  error: { message: string; code?: string; retry_after?: number; reset_at?: string };
+};
+
+test("buildApiKeyUsageLimitRejection: Anthropic 400, Responses API 400, chat/completions 429", async () => {
+  const { status, resetAt } = exceededDailyStatus();
+  const anthropic = usageLimits.buildApiKeyUsageLimitRejection(
+    new Request("http://localhost/v1/messages", { headers: { "anthropic-version": "2023-06-01" } }),
+    status
+  );
+  const responses = usageLimits.buildApiKeyUsageLimitRejection(
+    new Request("http://localhost/v1/responses", { method: "POST" }),
+    status
+  );
+  const chat = usageLimits.buildApiKeyUsageLimitRejection(
+    new Request("http://localhost/v1/chat/completions", { method: "POST" }),
+    status
+  );
+
+  assert.equal(anthropic.status, 400);
+  assert.equal(responses.status, 400, "Codex CLI retries any 429 and never shows the cap message");
+  assert.equal(chat.status, 429);
+
+  const responsesBody = (await responses.json()) as RejectionBody;
+  const chatBody = (await chat.json()) as RejectionBody;
+  assert.equal(responsesBody.error.message, chatBody.error.message);
+  assert.match(responsesBody.error.message, /daily USD usage quota/);
+  assert.equal(responsesBody.error.code, "usage_limit_exceeded");
+  assert.equal(responsesBody.error.reset_at, resetAt);
+  assert.ok(responsesBody.error.retry_after! >= 299 && responsesBody.error.retry_after! <= 300);
+  assert.equal(responsesBody.error.reset_at, chatBody.error.reset_at);
+  assert.equal(responses.headers.get("Retry-After"), String(responsesBody.error.retry_after));
+});
+
+test("buildApiKeyUsageLimitRejection: every spelling of the Responses route gets the 400", async () => {
+  const { status } = exceededDailyStatus();
+  for (const pathname of [
+    "/responses",
+    "/v1/responses",
+    "/api/v1/responses",
+    "/v1/v1/responses",
+    "/codex/responses",
+  ]) {
+    const response = usageLimits.buildApiKeyUsageLimitRejection(
+      new Request(`http://localhost${pathname}`, { method: "POST" }),
+      status
+    );
+    assert.equal(response.status, 400, pathname);
+  }
+  // Other OpenAI-compatible routes keep the semantically correct 429.
+  for (const pathname of ["/v1/completions", "/chat/completions", "/v1/embeddings"]) {
+    const response = usageLimits.buildApiKeyUsageLimitRejection(
+      new Request(`http://localhost${pathname}`, { method: "POST" }),
+      status
+    );
+    assert.equal(response.status, 429, pathname);
+  }
+});
+
 test("buildApiKeyUsageLimitRejection uses 400 so Claude Code does not trigger login", async () => {
   const response = usageLimits.buildApiKeyUsageLimitRejection(
     new Request("http://localhost/v1/messages", {

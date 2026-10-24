@@ -195,15 +195,21 @@ test("GET /api/usage/analytics resolves Codex GPT-5.5 pricing through provider a
   assertClose(body.byModel[0].cost, 0.02);
 });
 
+// Fork: the Claude Code plan (`claude`/`cc`) is NOT classed flat-rate here — its cost is tracked on
+// purpose (per-key USD budgets, budget routing and family multipliers are in API-price dollars),
+// so these two tests use the GLM Coding plan as the flat-rate sample.
+const FLAT_RATE_PRICING = { glm: { "glm-5.3": { input: 5, output: 25 } } };
+
 test("GET /api/usage/analytics can include flat-rate provider estimates for the costs page", async () => {
+  await localDb.updatePricing(FLAT_RATE_PRICING);
   const db = core.getDbInstance();
   db.prepare(
     `INSERT INTO usage_history (provider, model, connection_id, tokens_input, tokens_output, success, latency_ms, timestamp)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    "claude",
-    "claude-opus-5",
-    "claude-code-conn",
+    "glm",
+    "glm-5.3",
+    "glm-coding-conn",
     1_000_000,
     1_000_000,
     1,
@@ -232,7 +238,7 @@ test("GET /api/usage/analytics can include flat-rate provider estimates for the 
   assert.equal(estimatedResponse.status, 200);
   assert.equal(estimatedBody.includesFlatRateEstimates, true);
   assertClose(estimatedBody.summary.totalCost, 30);
-  assert.equal(estimatedBody.byProvider[0].provider, "Claude Code");
+  assert.equal(estimatedBody.byProvider[0].provider, "GLM Coding");
   assertClose(estimatedBody.byProvider[0].cost, 30);
   assertClose(estimatedBody.byModel[0].cost, 30);
   assertClose(estimatedBody.byAccount[0].cost, 30);
@@ -244,13 +250,42 @@ test("GET /api/usage/analytics can include flat-rate provider estimates for the 
   );
 });
 
+test("Fork: GET /api/usage/analytics keeps the Claude Code plan's cost instead of zeroing it", async () => {
+  const db = core.getDbInstance();
+  db.prepare(
+    `INSERT INTO usage_history (provider, model, connection_id, tokens_input, tokens_output, success, latency_ms, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "claude",
+    "claude-opus-5",
+    "claude-code-conn",
+    1_000_000,
+    1_000_000,
+    1,
+    250,
+    new Date().toISOString()
+  );
+
+  const response = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics?presets=1d")
+  );
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.includesFlatRateEstimates, false);
+  assertClose(body.summary.totalCost, 30);
+  assert.equal(body.byProvider[0].provider, "Claude Code");
+  assertClose(body.byProvider[0].cost, 30);
+  assertClose(body.byModel[0].cost, 30);
+  assertClose(body.presetSummaries["1d"].totalCost, 30);
+});
+
 test("GET /api/usage/analytics preserves archived flat-rate estimates without changing billed cost", async () => {
   const db = core.getDbInstance();
   db.prepare(
     `INSERT INTO daily_usage_summary
       (provider, model, date, total_requests, total_input_tokens, total_output_tokens, total_cost)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run("claude", "claude-opus-5", "2024-01-01", 2, 1_000_000, 1_000_000, 42.5);
+  ).run("glm", "glm-5.3", "2024-01-01", 2, 1_000_000, 1_000_000, 42.5);
 
   const billedResponse = await analyticsRoute.GET(
     makeRequest("http://localhost/api/usage/analytics?range=all")

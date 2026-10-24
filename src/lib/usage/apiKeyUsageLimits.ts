@@ -15,6 +15,7 @@ import {
   type FamilyMultiplierRule,
 } from "./modelFamilyMultiplier";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import { resolveEndpointSelectors } from "@/shared/constants/endpointCategories";
 import {
   calendarWeekWindowMs,
   isValidIanaTimeZone,
@@ -158,11 +159,6 @@ function getUsagePercent(spentUsd: number, limitUsd: number | null): number | nu
 function formatUsagePercent(percent: number | null): string {
   if (percent === null || !Number.isFinite(percent)) return "Unavailable";
   return `${Math.round(percent)}%`;
-}
-
-function formatLeftPercent(percent: number | null): string {
-  if (percent === null || !Number.isFinite(percent)) return "Unavailable";
-  return `${Math.round(100 - clampPercent(percent))}% left`;
 }
 
 function formatResetIn(resetAt: string | null, now = Date.now()): string {
@@ -1124,6 +1120,21 @@ function isAnthropicMessagesRequest(request: Request): boolean {
   }
 }
 
+/**
+ * The OpenAI Responses API (`/v1/responses`, its `/responses` and `/codex` aliases) — the wire
+ * protocol the Codex CLI speaks. Classified through the endpoint-category table so every
+ * accepted spelling of the route resolves the same way.
+ */
+function isResponsesApiRequest(request: Request): boolean {
+  try {
+    return (
+      resolveEndpointSelectors(new URL(request.url).pathname).subcategoryId === "chat:responses"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function buildApiKeyUsageLimitRejection(
   request: Request,
   status: ApiKeyUsageLimitStatus,
@@ -1160,9 +1171,13 @@ export function buildApiKeyUsageLimitRejection(
     );
   }
 
-  // Non-Anthropic clients: 429 is the semantically correct status for a quota/rate
+  // Fork: the Codex CLI (Responses API) treats ANY HTTP 429 as retryable and ends in
+  // "exceeded retry limit" without ever showing this message, so a Responses request gets a
+  // 400 — same body, same reset fields — which it surfaces as-is (the same reason the
+  // Anthropic branch above stays 400).
+  // Other non-Anthropic clients: 429 is the semantically correct status for a quota/rate
   // condition (every sibling budget/token/rate-limit check already uses it).
-  return errorResponse(429, message, {
+  return errorResponse(isResponsesApiRequest(request) ? 400 : 429, message, {
     code: "usage_limit_exceeded",
     retryAfter: trippedResetAtIso,
   });

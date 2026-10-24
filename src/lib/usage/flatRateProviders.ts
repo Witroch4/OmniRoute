@@ -31,12 +31,15 @@ import { WEB_COOKIE_PROVIDERS } from "@/shared/constants/providers/web-cookie";
  * Deliberately EXCLUDED even though token-priced and sometimes grouped with the
  * above: `codex`/`cx` (OmniRoute actively tracks Codex token cost — Fast-tier
  * multipliers and GPT-5.x pricing — and Codex can be a metered API account, so
- * its analytics cost is intentional, not an artifact), `byteplus` (BytePlus
- * ModelArk is a metered inference host, billed per token — zeroing it would hide
- * real cost), `minimax-cn` (the metered Minimax China API, distinct from the
- * `minimax` "Minimax Coding" plan), `glm-thinking` (metered tier, distinct
- * from the `glm` Coding plan), and `anthropic` (the metered Anthropic API,
- * distinct from the `claude`/`cc` Claude Code plan below).
+ * its analytics cost is intentional, not an artifact), `claude`/`cc` (Fork: same
+ * reason as Codex — the per-key USD budget, budget routing and the family
+ * multipliers are all denominated in API-price dollars, so the Claude Code plan's
+ * cost must stay visible in the usage overview instead of reading $0), `byteplus`
+ * (BytePlus ModelArk is a metered inference host, billed per token — zeroing it
+ * would hide real cost), `minimax-cn` (the metered Minimax China API, distinct
+ * from the `minimax` "Minimax Coding" plan), `glm-thinking` (metered tier,
+ * distinct from the `glm` Coding plan), and `anthropic` (the metered Anthropic
+ * API).
  */
 const FLAT_RATE_SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "minimax", // "Minimax Coding" plan
@@ -48,8 +51,6 @@ const FLAT_RATE_SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "qwen-cloud-token-plan", // Qwen Cloud Token Plan
   "glm", // GLM Coding plan
   "glm-cn", // GLM Coding (China) plan
-  "claude", // Claude Code plan (OAuth-only — a Claude Pro/Max subscription)
-  "cc", // Claude Code plan (alias id — same connection, shares the `cc` pricing rows)
   // OpenCode Go subscription (https://opencode.ai/go) — a flat monthly fee. It is an
   // aggregator reselling GLM, Kimi, Grok, DeepSeek, MiniMax, Qwen and GPT-5.x, so
   // per-token rows price each call at the UNDERLYING model's metered rate and the
