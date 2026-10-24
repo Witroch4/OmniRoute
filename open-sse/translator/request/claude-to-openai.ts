@@ -172,10 +172,21 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
       const msg = body.messages[i];
       const converted = convertClaudeMessage(msg, preserveCacheControl);
       if (converted) {
+        // Claude Code sends context (environment, reminders, hook output) as
+        // role:"system" turns in the MIDDLE of messages[] (beta
+        // mid-conversation-system). Valid for the Anthropic API, but OpenAI-style
+        // and Gemini upstreams have no mid-history system turn. Demote every
+        // system turn after the first message to "user", content untouched
+        // (upstream #12908); the leading system message stays.
+        const demoteMidSystem = (out: Record<string, unknown>) => {
+          if (out.role === "system" && result.messages.length > 0) out.role = "user";
+        };
         // Handle array of messages (multiple tool results)
         if (Array.isArray(converted)) {
+          converted.forEach(demoteMidSystem);
           result.messages.push(...converted);
         } else {
+          demoteMidSystem(converted);
           result.messages.push(converted);
         }
       }
@@ -349,7 +360,15 @@ function fixMissingToolResponses(messages) {
 
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg, preserveCacheControl = false) {
-  const role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
+  // A system turn stays "system" here (upstream #6954) — it used to fall into
+  // "assistant", so Gemini/OpenAI upstreams saw Claude Code's context as the
+  // model's own words. The caller demotes non-leading system turns to "user".
+  const role =
+    msg.role === "user" || msg.role === "tool"
+      ? "user"
+      : msg.role === "system"
+        ? "system"
+        : "assistant";
 
   // Simple string content
   if (typeof msg.content === "string") {
@@ -411,9 +430,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
             function: {
               name: block.name,
               arguments:
-                typeof block.input === "string"
-                  ? block.input
-                  : JSON.stringify(block.input || {}),
+                typeof block.input === "string" ? block.input : JSON.stringify(block.input || {}),
             },
           });
           break;
