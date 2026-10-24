@@ -155,3 +155,33 @@ test(
     assert.equal(update.rateLimitedUntil, input.connection.rateLimitedUntil);
   }
 );
+
+test(
+  "a failing probe keeps a Gemini Web session the keeper declared dead expired (fork)",
+  { timeout: 2000 },
+  async () => {
+    const input = options();
+    const updates: Array<Record<string, unknown>> = [];
+    await persistConnectionTestHealth({
+      ...input,
+      connectionId: "gweb-dead",
+      provider: "gemini-web",
+      connection: {
+        testStatus: "expired",
+        lastError: "Gemini Web session rejected by Google (RotateCookies 401).",
+        lastErrorAt: "2026-10-23T19:01:50.759Z",
+        lastErrorType: "session_expired",
+        lastErrorSource: "gemini_web_session_keeper",
+        errorCode: 401,
+        rateLimitedUntil: null,
+      },
+      result: { valid: false, error: "Not signed in" },
+      diagnosis: { type: "auth", source: "upstream", code: 401 },
+      persist: async (_id, fields) => {
+        updates.push(fields);
+      },
+    });
+    // Only the probe timestamp is written: no "error" status for connection recovery to clear.
+    assert.deepEqual(updates, [{ lastTested: input.now }]);
+  }
+);

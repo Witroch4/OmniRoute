@@ -236,6 +236,19 @@ describe("connectionRecovery — expired reprobe", () => {
     );
   });
 
+  it("never reprobes a Gemini Web session the keeper marked expired (fork)", () => {
+    // geminiWebSessionKeeper marks a refused session expired ONCE with this type; only a
+    // fresh cookie paste revives it, so reopening it would just reuse the dead cookie.
+    const deadSession = {
+      id: "gweb-1",
+      testStatus: "expired",
+      lastErrorAt: new Date(nowMs - 24 * 60 * 60 * 1000).toISOString(),
+      lastErrorType: "session_expired",
+    };
+    assert.equal(isExpiredReprobeCandidate(deadSession, nowMs), false);
+    assert.deepEqual(selectRecoverableConnections([deadSession], nowMs), []);
+  });
+
   it("selectRecoverableConnections includes stale expired rows", () => {
     const selected = selectRecoverableConnections(
       [
@@ -247,6 +260,9 @@ describe("connectionRecovery — expired reprobe", () => {
       ],
       nowMs
     );
-    assert.deepEqual(selected.map((c) => c.id), ["e-1"]);
+    assert.deepEqual(
+      selected.map((c) => c.id),
+      ["e-1"]
+    );
   });
 });

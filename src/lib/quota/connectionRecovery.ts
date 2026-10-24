@@ -166,6 +166,11 @@ export const EXPIRED_REPROBE_BLOCKLIST = new Set([
   "unrecoverable_refresh_error",
   "provider_deprecated",
   "no_refresh_token",
+  // Fork: a Gemini Web session Google refused (RotateCookies 401, written once by
+  // geminiWebSessionKeeper) only comes back when the operator pastes a fresh Cookie
+  // header — which the keeper heals on its own. Re-probing it would put the dead cookie
+  // back in rotation and drive Chromium at gemini.google.com with it every 30 minutes.
+  "session_expired",
 ]);
 
 /**

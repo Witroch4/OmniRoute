@@ -55,6 +55,18 @@ export async function persistConnectionTestHealth({
   const isTerminalFailure =
     !result.valid &&
     terminalTestStatuses.has(String(diagnosis.code ?? diagnosis.type ?? "").toLowerCase());
+  // Fork: a Gemini Web session the keeper already declared dead (expired/session_expired)
+  // is not downgraded to a transient "error" by a failing probe — connection recovery
+  // clears "error" within a minute and would put the dead cookie back in rotation. It
+  // stays expired until a fresh Cookie header is pasted (the keeper heals that itself).
+  if (
+    !result.valid &&
+    String(connection.testStatus ?? "") === "expired" &&
+    String(connection.lastErrorType ?? "") === "session_expired"
+  ) {
+    await persist(connectionId, { lastTested: now });
+    return;
+  }
   const updateData: Record<string, unknown> = {
     testStatus: clearErrorState ? "active" : result.valid ? connection.testStatus : "error",
     ...(result.valid && !operatorDisabled ? { isActive: true } : {}),
