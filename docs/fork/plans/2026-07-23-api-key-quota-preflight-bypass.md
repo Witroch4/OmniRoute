@@ -19,10 +19,12 @@
 ### Task 1: Credential-selection regression
 
 **Files:**
+
 - Modify: `tests/unit/sse-auth.test.ts`
 - Modify: `src/sse/services/auth.ts`
 
 **Interfaces:**
+
 - Consumes: `getProviderCredentials(provider, excludeConnectionId, allowedConnections, requestedModel, { bypassQuotaPolicy })`
 - Produces: request-scoped eligibility for `lastErrorSource === "quota_preflight"`
 
@@ -81,9 +83,11 @@ commands in the commit body, then push the current branch to the fork.
 ### Task 2: Production deployment and live verification
 
 **Files:**
+
 - Modify on production: `/opt/omniroute/docker-compose.yml`
 
 **Interfaces:**
+
 - Consumes: pushed fork commit and ARM64 image built from that exact tree
 - Produces: healthy OmniRoute production deployment at `100.64.0.1:20128`
 

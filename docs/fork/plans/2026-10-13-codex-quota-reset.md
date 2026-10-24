@@ -8,7 +8,7 @@ title: Codex quota reset implementation plan
 **Architecture:** One persisted provider reference, shared by report, quota enforcement
 and model budget readers; recorded reset events plus snapshots define the start.
 **Tech Stack:** TypeScript, SQLite, Zod, node:test, Next.js, Docker ARM64.
-**Spec:** `docs/superpowers/specs/2026-10-13-codex-quota-reset-design.md`.
+**Spec:** `docs/fork/specs/2026-10-13-codex-quota-reset-design.md`.
 
 ## Constraints and review focus
 
@@ -21,18 +21,18 @@ and model budget readers; recorded reset events plus snapshots define the start.
 ## Tasks
 
 - [x] Add SQLite regression tests for principal selection, every key resetting,
-  cross-account USD aggregation, stale caches and subsequent reset events; run red.
+      cross-account USD aggregation, stale caches and subsequent reset events; run red.
 - [x] Add a typed, validated `providerQuotaResetReferences` setting and persistence
-  reader. Generalize existing reset event queries to an explicit quota window.
+      reader. Generalize existing reset event queries to an explicit quota window.
 - [x] Resolve the reference in `apiKeyUsageLimits.ts` and `internalUsageCommand.ts`;
-  infer single-provider key scope and prevent unrelated-provider reset fallback.
+      infer single-provider key scope and prevent unrelated-provider reset fallback.
 - [x] Run focused quota/budget tests, core typecheck, scoped ESLint/Prettier and
-  monorepo `pnpm lint:all`; obtain independent review and fix material findings.
+      monorepo `pnpm lint:all`; obtain independent review and fix material findings.
 - [x] Commit and push to the fork; require production feature retention gate exit 0.
 - [x] Build the exact commit on ryzenwit, back up SQLite/compose/env, configure the
-  Codex reference, deploy and verify unchanged command plus production key windows.
+      Codex reference, deploy and verify unchanged command plus production key windows.
 - [x] Update deployment records and leave repositories clean; power off ryzenwit
-  after its artifact leaves and verify it is offline.
+      after its artifact leaves and verify it is offline.
 
 ## Deployment evidence
 
