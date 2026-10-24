@@ -915,11 +915,54 @@ const locateCommandCandidate = async (
   return { command: commands[0], installed: false, commandPath: null, reason: "not_found" };
 };
 
+type WslContext = { isWsl: boolean; mountRoot: string };
+
+const detectWslContext = (): WslContext => ({
+  isWsl:
+    process.platform === "linux" &&
+    (Boolean(process.env.WSL_DISTRO_NAME) || /microsoft/i.test(os.release())),
+  mountRoot: "/mnt",
+});
+
+let wslContextOverride: WslContext | null = null;
+
+/** Test seam: pin the WSL context (`null` restores detection). */
+export const __setWslContextForTests = (context: WslContext | null) => {
+  wslContextOverride = context;
+};
+
+/**
+ * True for a launcher script that lives on a Windows drive mounted into WSL
+ * (`/mnt/<letter>/...`, anything but a real `.exe`).
+ *
+ * The VS Code family (`code`, `cursor`, `windsurf`) ships `sh` shims there that start the
+ * Windows GUI. They rely on `WSL_DISTRO_NAME`/`WSLENV`, which the healthcheck's minimal
+ * environment drops, so the shim falls through to `Cursor.exe <cli.js> -v` without
+ * `ELECTRON_RUN_AS_NODE` crossing the interop boundary and opens the editor window instead
+ * of printing a version. Probing such a launcher can never tell us whether the CLI is
+ * runnable from this Linux process, so it is not executed.
+ */
+export const isWindowsLauncherUnderWsl = (
+  commandPath: string,
+  context: WslContext = wslContextOverride ?? detectWslContext()
+) => {
+  if (!context.isWsl) return false;
+  const root = context.mountRoot.replace(/\/+$/, "");
+  if (!commandPath.startsWith(`${root}/`)) return false;
+  const [drive] = commandPath.slice(root.length + 1).split("/");
+  if (!/^[a-z]$/i.test(drive)) return false; // /mnt/wsl, /mnt/wslg are Linux-side
+  return !/\.exe$/i.test(commandPath);
+};
+
 const checkRunnable = async (
   commandPath: string,
   env: Record<string, string | undefined>,
   timeoutMs = 4000
 ) => {
+  if (isWindowsLauncherUnderWsl(commandPath)) {
+    return { runnable: false, reason: "windows_launcher_skipped" };
+  }
+
   // Minimal environment to prevent credential leakage to potentially malicious binaries
   const minimalEnv: Record<string, string | undefined> = {
     PATH: env.PATH || env.Path,
