@@ -6,9 +6,9 @@ import { normalizeAntigravityClientProfile } from "../../src/shared/constants/an
 import {
   applyAntigravityClientProfileHeaders,
   getAntigravityBootstrapHeaders,
-  antigravityHarnessUserAgent,
   getAntigravityClientProfile,
 } from "../../open-sse/services/antigravityClientProfile.ts";
+import { antigravityCliUserAgent } from "../../open-sse/config/antigravityCliClient.ts";
 import { antigravityUserAgent } from "../../open-sse/services/antigravityHeaders.ts";
 import { deriveAntigravityMachineId } from "../../open-sse/services/antigravityIdentity.ts";
 import {
@@ -25,25 +25,58 @@ test.afterEach(() => {
   clearAntigravityVersionCache();
 });
 
-test("normalizeAntigravityClientProfile maps cli/sdk aliases to harness", () => {
-  assert.equal(normalizeAntigravityClientProfile("cli"), "harness");
-  assert.equal(normalizeAntigravityClientProfile("SDK"), "harness");
+test("normalizeAntigravityClientProfile defaults to cli and reads legacy harness/sdk as cli", () => {
+  assert.equal(normalizeAntigravityClientProfile("cli"), "cli");
+  assert.equal(normalizeAntigravityClientProfile("harness"), "cli");
+  assert.equal(normalizeAntigravityClientProfile("SDK"), "cli");
   assert.equal(normalizeAntigravityClientProfile("ide"), "ide");
-  assert.equal(normalizeAntigravityClientProfile(undefined), "ide");
+  assert.equal(normalizeAntigravityClientProfile(undefined), "cli");
+  assert.equal(normalizeAntigravityClientProfile("bogus"), "cli");
 });
 
 test("getAntigravityClientProfile reads providerSpecificData.clientProfile per connection", () => {
   assert.equal(
-    getAntigravityClientProfile({
-      providerSpecificData: { clientProfile: "harness" },
-    }),
-    "harness"
+    getAntigravityClientProfile({ providerSpecificData: { clientProfile: "ide" } }),
+    "ide"
   );
-  assert.equal(getAntigravityClientProfile({ providerSpecificData: {} }), "ide");
+  assert.equal(
+    getAntigravityClientProfile({ providerSpecificData: { clientProfile: "harness" } }),
+    "cli"
+  );
+  assert.equal(getAntigravityClientProfile({ providerSpecificData: {} }), "cli");
 });
 
-test("applyAntigravityClientProfileHeaders uses IDE fingerprint by default", () => {
-  seedAntigravityVersionCache("4.2.0");
+test("applyAntigravityClientProfileHeaders replaces everything with the official CLI headers by default", () => {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+    "x-client-name": "antigravity",
+    "x-machine-id": "m",
+    "x-vscode-sessionid": "s",
+    "X-Goog-Api-Client": "gl-node/22.21.1",
+    "x-goog-user-project": "project-1",
+    "Accept-Encoding": "gzip, deflate, br",
+    Authorization: "Bearer token",
+  };
+
+  const profile = applyAntigravityClientProfileHeaders(
+    headers,
+    { connectionId: "conn-1", providerSpecificData: {} },
+    { project: "project-1" }
+  );
+
+  assert.equal(profile, "cli");
+  // Exact set AND order of the captured agy 1.4.7 wire headers.
+  assert.deepEqual(Object.entries(headers), [
+    ["User-Agent", antigravityCliUserAgent()],
+    ["Authorization", "Bearer token"],
+    ["Content-Type", "application/json"],
+    ["Accept-Encoding", "gzip"],
+  ]);
+});
+
+test("applyAntigravityClientProfileHeaders keeps the legacy IDE fingerprint only when opted in", () => {
+  seedAntigravityVersionCache("2.5.5");
   const headers: Record<string, string> = {
     Authorization: "Bearer token",
     "Content-Type": "application/json",
@@ -51,20 +84,17 @@ test("applyAntigravityClientProfileHeaders uses IDE fingerprint by default", () 
 
   applyAntigravityClientProfileHeaders(
     headers,
-    { connectionId: "conn-1", providerSpecificData: {} },
+    { connectionId: "conn-1", providerSpecificData: { clientProfile: "ide" } },
     { project: "project-1" }
   );
 
-  assert.match(headers["User-Agent"], /^Antigravity\/4\.2\.0 /);
+  assert.match(headers["User-Agent"], /^Antigravity\/2\.5\.5 /);
   assert.equal(headers["x-client-name"], "antigravity");
-  assert.equal(headers["x-client-version"], "4.2.0");
-  assert.equal(typeof headers["x-machine-id"], "string");
-  assert.equal(typeof headers["x-vscode-sessionid"], "string");
+  assert.equal(headers["x-client-version"], "2.5.5");
   assert.equal(headers["x-goog-user-project"], "project-1");
-  assert.equal(headers["X-Goog-Api-Client"], undefined);
 });
 
-test("antigravityUserAgent matches Antigravity Manager platform fingerprints", () => {
+test("antigravityUserAgent (legacy ide profile) keeps its platform tokens", () => {
   assert.equal(
     antigravityUserAgent("4.2.0", "darwin"),
     "Antigravity/4.2.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/142.0.7444.175 Electron/39.2.3"
@@ -91,53 +121,19 @@ test("deriveAntigravityMachineId uses the raw system machine id like Antigravity
   assert.equal(deriveAntigravityMachineId(), systemMachineId);
 });
 
-test("antigravityHarnessUserAgent uses Go harness platform and arch names", () => {
-  assert.equal(
-    antigravityHarnessUserAgent("2.1.1", "darwin", "arm64"),
-    "antigravity/2.1.1 darwin/arm64"
-  );
-  assert.equal(
-    antigravityHarnessUserAgent("2.1.1", "win32", "x64"),
-    "antigravity/2.1.1 windows/amd64"
-  );
-  assert.equal(
-    antigravityHarnessUserAgent("2.1.1", "linux", "x64"),
-    "antigravity/2.1.1 linux/amd64"
-  );
+test("getAntigravityBootstrapHeaders uses the official CLI headers for the default profile", () => {
+  assert.deepEqual(Object.entries(getAntigravityBootstrapHeaders("cli", "token")), [
+    ["User-Agent", antigravityCliUserAgent()],
+    ["Authorization", "Bearer token"],
+    ["Content-Type", "application/json"],
+    ["Accept-Encoding", "gzip"],
+  ]);
 });
 
-test("getAntigravityBootstrapHeaders uses SDK loadCodeAssist harness fingerprint", () => {
-  seedAntigravityVersionCache("2.1.1");
-
-  const headers = getAntigravityBootstrapHeaders("harness", "token");
-
+test("getAntigravityBootstrapHeaders keeps the legacy IDE bootstrap headers for ide", () => {
+  seedAntigravityVersionCache("2.5.5");
+  const headers = getAntigravityBootstrapHeaders("ide", "token");
   assert.equal(headers.Authorization, "Bearer token");
-  assert.equal(
-    headers["User-Agent"],
-    `${antigravityHarnessUserAgent("2.1.1")} google-api-nodejs-client/10.3.0`
-  );
-  assert.equal(headers["X-Goog-Api-Client"], "gl-node/22.21.1");
-  assert.equal(headers["Client-Metadata"], undefined);
-});
-
-test("applyAntigravityClientProfileHeaders uses harness fingerprint when configured", () => {
-  seedAntigravityVersionCache("4.2.0");
-  const headers: Record<string, string> = {
-    Authorization: "Bearer token",
-    "Content-Type": "application/json",
-    "x-client-name": "antigravity",
-    "x-vscode-sessionid": "old-session",
-  };
-
-  applyAntigravityClientProfileHeaders(
-    headers,
-    { connectionId: "conn-2", providerSpecificData: { clientProfile: "harness" } },
-    { project: "project-2" }
-  );
-
-  assert.equal(headers["User-Agent"], antigravityHarnessUserAgent("4.2.0"));
-  assert.equal(headers["X-Goog-Api-Client"], undefined);
-  assert.equal(headers["x-client-name"], undefined);
-  assert.equal(headers["x-vscode-sessionid"], undefined);
-  assert.equal(headers["x-goog-user-project"], "project-2");
+  assert.match(headers["User-Agent"], /^Antigravity\/2\.5\.5 /);
+  assert.equal(headers["Client-Metadata"], JSON.stringify({ ideType: "ANTIGRAVITY" }));
 });

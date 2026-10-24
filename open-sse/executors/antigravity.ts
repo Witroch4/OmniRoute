@@ -18,6 +18,10 @@ import {
 } from "../config/constants.ts";
 import { scrubProxyAndFingerprintHeaders } from "../services/antigravityHeaderScrub.ts";
 import {
+  getAntigravityCliCloudCodeHeaders,
+  getAntigravityCliOAuthTokenHeaders,
+} from "../config/antigravityCliClient.ts";
+import {
   antigravityNativeOAuthUserAgent,
   antigravityUserAgent,
 } from "../services/antigravityHeaders.ts";
@@ -59,6 +63,7 @@ import {
 export { processAntigravitySSEPayload } from "./antigravity/sseCollect.ts";
 import {
   applyAntigravityClientProfileHeaders,
+  getAntigravityClientProfile,
   removeHeaderCaseInsensitive,
 } from "../services/antigravityClientProfile.ts";
 import {
@@ -551,6 +556,10 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   buildHeaders(credentials: AntigravityCredentials, _stream = true): Record<string, string> {
+    if (getAntigravityClientProfile(credentials) === "cli") {
+      // Official CLI replica: nothing but its own wire headers (see antigravityCliClient.ts).
+      return getAntigravityCliCloudCodeHeaders(credentials.accessToken);
+    }
     const raw = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${credentials.accessToken}`,
@@ -599,7 +608,11 @@ export class AntigravityExecutor extends BaseExecutor {
     // returned empty/transiently failed). Mirror the Cloud Code bootstrap to recover it
     // here — the helper memoizes per access-token, so this is a one-time round-trip.
     if (!projectId && credentials?.accessToken) {
-      const discovered = await ensureAntigravityProjectAssigned(credentials.accessToken);
+      const discovered = await ensureAntigravityProjectAssigned(
+        credentials.accessToken,
+        fetch,
+        getAntigravityClientProfile(credentials)
+      );
       if (discovered) projectId = discovered;
     }
 
@@ -796,11 +809,14 @@ export class AntigravityExecutor extends BaseExecutor {
 
       const response = await fetch(OAUTH_ENDPOINTS.google.token, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": antigravityNativeOAuthUserAgent(),
-        },
+        headers:
+          getAntigravityClientProfile(credentials) === "cli"
+            ? getAntigravityCliOAuthTokenHeaders()
+            : {
+                "Content-Type": "application/x-www-form-urlencoded",
+                Accept: "application/json",
+                "User-Agent": antigravityNativeOAuthUserAgent(),
+              },
         body: new URLSearchParams(bodyParams),
       });
 

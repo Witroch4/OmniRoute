@@ -346,7 +346,7 @@ export function validateProviderSpecificData(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "providerSpecificData.clientProfile must be ide, harness, cli, or sdk (cli/sdk map to harness)",
+          "providerSpecificData.clientProfile must be cli or ide (legacy harness/sdk map to cli)",
         path: ["clientProfile"],
       });
     }

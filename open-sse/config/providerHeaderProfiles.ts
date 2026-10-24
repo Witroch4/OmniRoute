@@ -1,4 +1,4 @@
-import { antigravityUserAgent } from "../services/antigravityHeaders.ts";
+import { antigravityCliUserAgent } from "./antigravityCliClient.ts";
 
 export const GITHUB_COPILOT_API_VERSION = "2026-06-01";
 export const GITHUB_COPILOT_EDITOR_VERSION = "vscode/1.126.0";
@@ -150,8 +150,9 @@ export function getQoderDashscopeCompatHeaders(): Record<string, string> {
   };
 }
 
+// Default Antigravity identity = the official CLI (open-sse/config/antigravityCliClient.ts).
 export function getAntigravityUserAgent(): string {
-  return antigravityUserAgent();
+  return antigravityCliUserAgent();
 }
 
 export function getAntigravityProviderHeaders(): Record<string, string> {

@@ -2,6 +2,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
 import { getGitHubCopilotRefreshHeaders } from "../config/providerHeaderProfiles.ts";
+import { getAntigravityCliOAuthTokenHeaders } from "../config/antigravityCliClient.ts";
+import { normalizeAntigravityClientProfile } from "@/shared/constants/antigravityClientProfile";
 import { pbkdf2Sync } from "node:crypto";
 import { runWithProxyContext } from "../utils/proxyFetch.ts";
 import { serializeRefresh, wasRefreshTokenRotated } from "./refreshSerializer.ts";
@@ -955,15 +957,16 @@ export async function refreshGoogleToken(
   clientId,
   clientSecret,
   log,
-  proxyConfig: unknown = null
+  proxyConfig: unknown = null,
+  headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    Accept: "application/json",
+  }
 ) {
   const response = await runWithProxyContext(proxyConfig, () =>
     fetch(OAUTH_ENDPOINTS.google.token, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
+      headers,
       body: buildFormParams({
         grant_type: "refresh_token",
         refresh_token: refreshToken,
@@ -1631,14 +1634,28 @@ export async function refreshCopilotToken(githubAccessToken, log, proxyConfig: u
 async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: unknown = null) {
   switch (provider) {
     case "gemini":
-    case "antigravity":
-    case "agy":
       return await refreshGoogleToken(
         credentials.refreshToken,
         PROVIDERS[provider].clientId,
         PROVIDERS[provider].clientSecret,
         log,
         proxyConfig
+      );
+
+    case "antigravity":
+    case "agy":
+      // Same Google token endpoint, presented as the official CLI's Go oauth2 client
+      // unless the connection opted into the legacy IDE profile.
+      return await refreshGoogleToken(
+        credentials.refreshToken,
+        PROVIDERS[provider].clientId,
+        PROVIDERS[provider].clientSecret,
+        log,
+        proxyConfig,
+        normalizeAntigravityClientProfile(credentials?.providerSpecificData?.clientProfile) ===
+          "cli"
+          ? getAntigravityCliOAuthTokenHeaders()
+          : undefined
       );
 
     case "claude":

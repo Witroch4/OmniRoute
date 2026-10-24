@@ -215,8 +215,15 @@ test("usage service covers Antigravity quota parsing, exclusions and forbidden a
   assert.equal(usage.quotas["gemini-2.5-pro"].remainingPercentage, 100);
   assert.equal(usage.quotas["claude-sonnet-4-6"].remainingPercentage, 40);
   const loadCodeAssistCall = calls.find((call) => call.url.includes("loadCodeAssist"));
-  assert.match(loadCodeAssistCall?.url, /daily-cloudcode-pa\.sandbox\.googleapis\.com/);
-  assert.match(loadCodeAssistCall?.init.headers["User-Agent"], /^vscode\/1\.X\.X \(Antigravity\//);
+  // The official CLI bootstraps against the daily host, with its own User-Agent.
+  assert.equal(
+    loadCodeAssistCall?.url,
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+  );
+  assert.match(
+    loadCodeAssistCall?.init.headers["User-Agent"],
+    /^antigravity\/cli\/\d+\.\d+\.\d+ \(aidev_client; /
+  );
   assert.equal(loadCodeAssistCall?.init.headers["X-Goog-Api-Client"], undefined);
   assert.equal(loadCodeAssistCall?.init.headers["Client-Metadata"], undefined);
   assert.deepEqual(
@@ -414,7 +421,7 @@ test("usage service retries Antigravity fetchAvailableModels across the shared f
     quotaCalls.map((call) => call.url),
     expectedQuotaUrls
   );
-  assert.match(quotaCalls[2].init.headers["User-Agent"], /^Antigravity\//);
+  assert.match(quotaCalls[2].init.headers["User-Agent"], /^antigravity\/cli\//);
   assert.equal(usage.plan, "Business");
   assert.ok(usage.quotas["gemini-2.5-pro"] !== undefined);
 });

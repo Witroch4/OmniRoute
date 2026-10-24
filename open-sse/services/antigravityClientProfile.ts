@@ -3,7 +3,7 @@ import {
   normalizeAntigravityClientProfile,
   type AntigravityClientProfile,
 } from "@/shared/constants/antigravityClientProfile";
-import { getRuntimeArch, getRuntimePlatform } from "./cloudCodeHeaders.ts";
+import { getAntigravityCliCloudCodeHeaders } from "../config/antigravityCliClient.ts";
 import {
   deriveAntigravityMachineId,
   getAntigravityVscodeSessionId,
@@ -11,8 +11,6 @@ import {
 } from "./antigravityIdentity.ts";
 import {
   antigravityUserAgent,
-  ANTIGRAVITY_CREDIT_PROBE_API_CLIENT,
-  ANTIGRAVITY_NODE_API_CLIENT,
   getAntigravityLoadCodeAssistMetadata,
 } from "./antigravityHeaders.ts";
 import { getCachedAntigravityVersion } from "./antigravityVersion.ts";
@@ -41,48 +39,6 @@ export function getAntigravityClientProfile(
   return normalizeAntigravityClientProfile(fromProviderData);
 }
 
-function normalizeHarnessPlatform(
-  platform: NodeJS.Platform | string = getRuntimePlatform()
-): string {
-  return platform === "win32" ? "windows" : platform || "unknown";
-}
-
-function normalizeHarnessArch(arch: NodeJS.Architecture | string = getRuntimeArch()): string {
-  switch (arch) {
-    case "x64":
-      return "amd64";
-    case "ia32":
-      return "386";
-    default:
-      return arch || "unknown";
-  }
-}
-
-function getHarnessPlatformArch(
-  platform: NodeJS.Platform | string = getRuntimePlatform(),
-  arch: NodeJS.Architecture | string = getRuntimeArch()
-): string {
-  return `${normalizeHarnessPlatform(platform)}/${normalizeHarnessArch(arch)}`;
-}
-
-export function antigravityHarnessUserAgent(
-  version = getCachedAntigravityVersion(),
-  platform: NodeJS.Platform | string = getRuntimePlatform(),
-  arch: NodeJS.Architecture | string = getRuntimeArch()
-): string {
-  return `antigravity/${version} ${getHarnessPlatformArch(platform, arch)}`;
-}
-
-export function antigravityHarnessLoadCodeAssistUserAgent(
-  version = getCachedAntigravityVersion()
-): string {
-  return `${antigravityHarnessUserAgent(version)} ${ANTIGRAVITY_NODE_API_CLIENT}`;
-}
-
-export function antigravityHarnessApiClientHeader(): string {
-  return ANTIGRAVITY_CREDIT_PROBE_API_CLIENT;
-}
-
 export function removeHeaderCaseInsensitive(headers: Record<string, string>, name: string): void {
   const lowerName = name.toLowerCase();
   for (const key of Object.keys(headers)) {
@@ -100,25 +56,21 @@ function getProjectHeaderValue(body: unknown): string | null {
   return project;
 }
 
-/** Headers used by OAuth/bootstrap calls (loadCodeAssist, token refresh). */
+/** Headers used by OAuth/bootstrap calls (loadCodeAssist, onboardUser). */
 export function getAntigravityBootstrapHeaders(
   profile: AntigravityClientProfile,
   accessToken?: string | null
 ): Record<string, string> {
+  if (profile === "cli") {
+    return getAntigravityCliCloudCodeHeaders(accessToken);
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-
-  if (profile === "harness") {
-    headers["User-Agent"] = antigravityHarnessLoadCodeAssistUserAgent();
-    headers["X-Goog-Api-Client"] = antigravityHarnessApiClientHeader();
-    return headers;
-  }
-
   headers["User-Agent"] = antigravityUserAgent();
   headers["Client-Metadata"] = JSON.stringify(getAntigravityLoadCodeAssistMetadata());
   return headers;
@@ -133,28 +85,32 @@ export function applyAntigravityClientProfileHeaders(
   const profile = getAntigravityClientProfile(credentials);
   const version = getCachedAntigravityVersion();
 
-  if (profile === "harness") {
-    headers["User-Agent"] = antigravityHarnessUserAgent(version);
-    removeHeaderCaseInsensitive(headers, "X-Goog-Api-Client");
-    removeHeaderCaseInsensitive(headers, "x-client-name");
-    removeHeaderCaseInsensitive(headers, "x-client-version");
-    removeHeaderCaseInsensitive(headers, "x-machine-id");
-    removeHeaderCaseInsensitive(headers, "x-vscode-sessionid");
-    removeHeaderCaseInsensitive(headers, "Client-Metadata");
-  } else {
-    headers["User-Agent"] = antigravityUserAgent();
-    headers["x-client-name"] = "antigravity";
-    headers["x-client-version"] = version;
-    const machineId = deriveAntigravityMachineId(credentials);
-    if (machineId) {
-      headers["x-machine-id"] = machineId;
-    } else {
-      removeHeaderCaseInsensitive(headers, "x-machine-id");
-    }
-    headers["x-vscode-sessionid"] = getAntigravityVscodeSessionId();
-    removeHeaderCaseInsensitive(headers, "X-Goog-Api-Client");
-    removeHeaderCaseInsensitive(headers, "Client-Metadata");
+  if (profile === "cli") {
+    // Exact replica of the official CLI: rebuild the object so only its headers
+    // remain, in its wire order (insertion order is the serialization order).
+    const authorization = Object.entries(headers).find(
+      ([key]) => key.toLowerCase() === "authorization"
+    )?.[1];
+    for (const key of Object.keys(headers)) delete headers[key];
+    const token = authorization?.replace(/^Bearer\s+/i, "") || null;
+    Object.assign(headers, getAntigravityCliCloudCodeHeaders(token));
+    return profile;
   }
+
+  // Legacy "ide" profile (opt-in). Not verified against the official IDE, which
+  // sends none of the x-client-*/x-machine-id/x-vscode-sessionid headers.
+  headers["User-Agent"] = antigravityUserAgent();
+  headers["x-client-name"] = "antigravity";
+  headers["x-client-version"] = version;
+  const machineId = deriveAntigravityMachineId(credentials);
+  if (machineId) {
+    headers["x-machine-id"] = machineId;
+  } else {
+    removeHeaderCaseInsensitive(headers, "x-machine-id");
+  }
+  headers["x-vscode-sessionid"] = getAntigravityVscodeSessionId();
+  removeHeaderCaseInsensitive(headers, "X-Goog-Api-Client");
+  removeHeaderCaseInsensitive(headers, "Client-Metadata");
 
   const project = getProjectHeaderValue(body);
   if (project) {

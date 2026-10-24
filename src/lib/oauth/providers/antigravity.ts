@@ -1,9 +1,13 @@
 import { ANTIGRAVITY_CONFIG } from "../constants/oauth";
 import {
-  antigravityNativeOAuthUserAgent,
   getAntigravityHeaders,
   getAntigravityLoadCodeAssistMetadata,
 } from "@omniroute/open-sse/services/antigravityHeaders.ts";
+import {
+  ANTIGRAVITY_CLI_ACCEPT_ENCODING,
+  ANTIGRAVITY_CLI_OAUTH_USER_AGENT,
+  getAntigravityCliOAuthTokenHeaders,
+} from "@omniroute/open-sse/config/antigravityCliClient.ts";
 import { extractCodeAssistOnboardTierId } from "@omniroute/open-sse/services/codeAssistSubscription.ts";
 
 // Bound every Antigravity post-exchange call. Without this an unreachable/slow
@@ -73,13 +77,11 @@ export const antigravity = {
       bodyParams.client_secret = config.clientSecret;
     }
 
+    // Default identity is the official CLI: its Go oauth2 client talks to the token
+    // endpoint (see open-sse/config/antigravityCliClient.ts).
     const response = await fetch(config.tokenUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "User-Agent": antigravityNativeOAuthUserAgent(),
-      },
+      headers: getAntigravityCliOAuthTokenHeaders(),
       body: new URLSearchParams(bodyParams),
     });
 
@@ -96,7 +98,11 @@ export const antigravity = {
 
     // Best-effort + bounded: a slow userinfo endpoint must never hang the login.
     const userInfoRes = await fetch(`${ANTIGRAVITY_CONFIG.userInfoUrl}?alt=json`, {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
+      headers: {
+        "User-Agent": ANTIGRAVITY_CLI_OAUTH_USER_AGENT,
+        Authorization: `Bearer ${tokens.access_token}`,
+        "Accept-Encoding": ANTIGRAVITY_CLI_ACCEPT_ENCODING,
+      },
       signal: AbortSignal.timeout(POSTEXCHANGE_TIMEOUT_MS),
     }).catch(() => null);
     const userInfo = userInfoRes?.ok ? await userInfoRes.json() : {};

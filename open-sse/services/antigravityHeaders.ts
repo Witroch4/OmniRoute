@@ -3,6 +3,10 @@ import {
   getCachedAntigravityVersion,
   resolveAntigravityVersion,
 } from "./antigravityVersion.ts";
+import {
+  getAntigravityCliCloudCodeHeaders,
+  getAntigravityCliLoadCodeAssistMetadata,
+} from "../config/antigravityCliClient.ts";
 
 /**
  * Antigravity header utilities.
@@ -70,42 +74,26 @@ export function antigravityNativeOAuthUserAgent(): string {
   return `vscode/1.X.X (Antigravity/${getCachedAntigravityVersion()})`;
 }
 
-/** Matches Antigravity-Manager quota.rs: only ideType (no platform — LINUX is rejected). */
+/** loadCodeAssist/onboardUser body metadata, as the official CLI sends it. */
 export function getAntigravityLoadCodeAssistMetadata(): Record<string, string> {
-  return {
-    ideType: "ANTIGRAVITY",
-  };
+  return getAntigravityCliLoadCodeAssistMetadata();
 }
 
 export function getAntigravityLoadCodeAssistClientMetadata(): string {
   return JSON.stringify(getAntigravityLoadCodeAssistMetadata());
 }
 
+/**
+ * Headers for Cloud Code calls made without a connection-specific profile (OAuth
+ * connect, agy import, model discovery, quota probes). They carry the default
+ * identity — the official CLI replica — whatever the call kind.
+ */
 export function getAntigravityHeaders(
   profile: AntigravityHeaderProfile,
   accessToken?: string | null
 ): Record<string, string> {
-  switch (profile) {
-    case "loadCodeAssist":
-      return withOptionalBearerAuth(
-        {
-          "Content-Type": "application/json",
-          "User-Agent": antigravityNativeOAuthUserAgent(),
-        },
-        accessToken
-      );
-    case "fetchAvailableModels":
-    case "models":
-      return withOptionalBearerAuth(
-        {
-          "Content-Type": "application/json",
-          "User-Agent": antigravityUserAgent(),
-        },
-        accessToken
-      );
-    default:
-      return withOptionalBearerAuth({ "Content-Type": "application/json" }, accessToken);
-  }
+  void profile;
+  return getAntigravityCliCloudCodeHeaders(accessToken);
 }
 
 /** X-Goog-Api-Client used by Antigravity's credit probe path. */

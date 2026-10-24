@@ -71,6 +71,8 @@ function sanitize(headers: Record<string, unknown>): Record<string, unknown> {
         /Macintosh; Intel Mac OS X 10_15_7|Windows NT 10\.0; Win64; x64|X11; Linux x86_64/g,
         "<PLATFORM>"
       )
+      // The official Antigravity CLI User-Agent carries the host's os/arch.
+      .replace(/os_type=[a-z0-9]+; arch=[a-z0-9]+;/g, "os_type=<OS>; arch=<ARCH>;")
       .replace(/kimi-\d{10,}/g, "kimi-<TS>")
       .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "<UUID>");
     if (NODE_VERSION) s = s.split(NODE_VERSION).join("<NODE>");

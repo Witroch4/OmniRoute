@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 import { AntigravityExecutor } from "../../open-sse/executors/antigravity.ts";
 import { setCliCompatProviders } from "../../open-sse/config/cliFingerprints.ts";
+import { antigravityCliUserAgent } from "../../open-sse/config/antigravityCliClient.ts";
 import { scrubProxyAndFingerprintHeaders } from "../../open-sse/services/antigravityHeaderScrub.ts";
-import { antigravityUserAgent } from "../../open-sse/services/antigravityHeaders.ts";
 import {
   clearAntigravityVersionCache,
   seedAntigravityVersionCache,
@@ -77,13 +77,28 @@ test("AntigravityExecutor.buildUrl always targets the streaming endpoint", () =>
   );
 });
 
-test("AntigravityExecutor.buildHeaders includes native headers without OmniRoute internals", () => {
+test("AntigravityExecutor.buildHeaders sends only the official CLI headers by default", () => {
   const executor = new AntigravityExecutor();
   const headers = executor.buildHeaders({ accessToken: "ag-token" }, false);
 
+  assert.deepEqual(Object.entries(headers), [
+    ["User-Agent", antigravityCliUserAgent()],
+    ["Authorization", "Bearer ag-token"],
+    ["Content-Type", "application/json"],
+    ["Accept-Encoding", "gzip"],
+  ]);
+});
+
+test("AntigravityExecutor.buildHeaders keeps the legacy IDE headers without OmniRoute internals", () => {
+  const executor = new AntigravityExecutor();
+  const headers = executor.buildHeaders(
+    { accessToken: "ag-token", providerSpecificData: { clientProfile: "ide" } },
+    false
+  );
+
   assert.equal(headers.Authorization, "Bearer ag-token");
   assert.equal(headers.Accept, "text/event-stream");
-  assert.match(headers["User-Agent"], /^Antigravity\/4\.2\.0 /);
+  assert.match(headers["User-Agent"], /^Antigravity\/2\.5\.5 /);
   assert.equal(headers["X-OmniRoute-Source"], undefined);
 });
 
@@ -832,10 +847,14 @@ test("AntigravityExecutor.execute applies CLI fingerprint when enabled", async (
     const parsedBody = JSON.parse(String(init?.body));
     fetchBody = parsedBody;
 
-    assert.equal(headers["User-Agent"], antigravityUserAgent("2026.04.17-test"));
-    assert.equal(headers["x-client-name"], "antigravity");
-    assert.equal(headers["x-client-version"], "2026.04.17-test");
-    assert.equal(headers["x-goog-user-project"], "project-1");
+    // The default (cli) profile rebuilds the headers after the compat fingerprint.
+    assert.deepEqual(Object.keys(headers), [
+      "User-Agent",
+      "Authorization",
+      "Content-Type",
+      "Accept-Encoding",
+    ]);
+    assert.equal(headers["User-Agent"], antigravityCliUserAgent());
     assert.deepEqual(Object.keys(parsedBody), [
       "project",
       "requestId",

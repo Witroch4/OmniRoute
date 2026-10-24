@@ -561,7 +561,7 @@ test("Antigravity runs mocked browser OAuth exchanges and post-exchange enrichme
     (_url, init: any = {}) => {
       assert.equal(init.method, "POST");
       assert.equal(init.headers.Authorization, "Bearer anti-access");
-      assert.match(init.headers["User-Agent"], /^vscode\/1\.X\.X \(Antigravity\//);
+      assert.match(init.headers["User-Agent"], /^antigravity\/cli\/\d+\.\d+\.\d+ \(aidev_client; /);
       assert.equal(init.headers["X-Goog-Api-Client"], undefined);
       assert.deepEqual(
         JSON.parse(String(init.body)).metadata,
@@ -576,7 +576,7 @@ test("Antigravity runs mocked browser OAuth exchanges and post-exchange enrichme
     (_url, init: any = {}) => {
       assert.equal(init.method, "POST");
       assert.equal(init.headers.Authorization, "Bearer anti-access");
-      assert.match(init.headers["User-Agent"], /^vscode\/1\.X\.X \(Antigravity\//);
+      assert.match(init.headers["User-Agent"], /^antigravity\/cli\/\d+\.\d+\.\d+ \(aidev_client; /);
       assert.equal(init.headers["X-Goog-Api-Client"], undefined);
       assert.deepEqual(
         JSON.parse(String(init.body)).metadata,

@@ -763,11 +763,18 @@ test("handleImageGeneration sends Antigravity image requests with native image_g
       captured.url,
       "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
     );
+    // Default (cli) profile: exactly the official CLI's headers.
+    assert.deepEqual(Object.keys(captured.headers), [
+      "User-Agent",
+      "Authorization",
+      "Content-Type",
+      "Accept-Encoding",
+    ]);
     assert.equal(captured.headers.Authorization, "Bearer ag-token");
-    assert.equal(captured.headers["x-client-name"], "antigravity");
-    assert.equal(captured.headers["x-goog-user-project"], undefined);
-    assert.match(captured.headers["User-Agent"], /^Antigravity\//);
-    assert.equal(captured.headers["x-goog-api-client"], undefined);
+    assert.match(
+      captured.headers["User-Agent"],
+      /^antigravity\/cli\/\d+\.\d+\.\d+ \(aidev_client; /
+    );
     assert.equal(captured.body.project, "project-123");
     assert.match(captured.body.requestId, /^image_gen\//);
     assert.equal(captured.body.model, "gemini-3.1-flash-image");

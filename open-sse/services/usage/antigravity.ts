@@ -53,7 +53,8 @@ type SubscriptionCacheEntry = {
 
 const ANTIGRAVITY_CONFIG = {
   quotaApiUrls: getAntigravityFetchAvailableModelsUrls(),
-  loadProjectApiUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+  // The official CLI bootstraps against the daily host (captured 2026-10-24), not the sandbox.
+  loadProjectApiUrl: `${ANTIGRAVITY_BASE_URLS[0]}/v1internal:loadCodeAssist`,
   tokenUrl: "https://oauth2.googleapis.com/token",
   get clientId() {
     return PROVIDERS.antigravity.clientId;
@@ -780,10 +781,7 @@ async function getAntigravitySubscriptionInfo(
     const profile = getAntigravityClientProfile({ providerSpecificData });
     const response = await fetch(ANTIGRAVITY_CONFIG.loadProjectApiUrl, {
       method: "POST",
-      headers:
-        profile === "harness"
-          ? getAntigravityBootstrapHeaders(profile, accessToken)
-          : getAntigravityHeaders("loadCodeAssist", accessToken),
+      headers: getAntigravityBootstrapHeaders(profile, accessToken),
       body: JSON.stringify({ metadata: getAntigravityLoadCodeAssistMetadata() }),
     });
 

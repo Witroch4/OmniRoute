@@ -14,12 +14,11 @@
  * implementation in internal/runtime/executor/antigravity_executor.go.
  */
 
+import { getAntigravityLoadCodeAssistMetadata } from "./antigravityHeaders.ts";
 import {
-  getAntigravityHeaders,
-  getAntigravityLoadCodeAssistMetadata,
-} from "./antigravityHeaders.ts";
-import {
+  DEFAULT_ANTIGRAVITY_CLIENT_PROFILE,
   getAntigravityBootstrapHeaders,
+  normalizeAntigravityClientProfile,
   type AntigravityClientProfile,
 } from "./antigravityClientProfile.ts";
 import { ANTIGRAVITY_BASE_URLS } from "../config/antigravityUpstream.ts";
@@ -51,10 +50,7 @@ async function tryLoadCodeAssist(
   clientProfile: AntigravityClientProfile
 ): Promise<string | null> {
   const urls = getAntigravityLoadCodeAssistUrls();
-  const headers =
-    clientProfile === "harness"
-      ? getAntigravityBootstrapHeaders(clientProfile, accessToken)
-      : getAntigravityHeaders("loadCodeAssist", accessToken);
+  const headers = getAntigravityBootstrapHeaders(clientProfile, accessToken);
 
   for (const url of urls) {
     try {
@@ -114,8 +110,9 @@ async function tryLoadCodeAssist(
 export async function ensureAntigravityProjectAssigned(
   accessToken: string,
   fetchImpl: FetchLike = fetch,
-  clientProfile: AntigravityClientProfile = "ide"
+  requestedProfile: AntigravityClientProfile | string = DEFAULT_ANTIGRAVITY_CLIENT_PROFILE
 ): Promise<string | undefined> {
+  const clientProfile = normalizeAntigravityClientProfile(requestedProfile);
   const cacheKey = getProjectCacheKey(accessToken, clientProfile);
   if (projectCache.has(cacheKey)) {
     return projectCache.get(cacheKey); // already bootstrapped for this token
@@ -139,7 +136,9 @@ export function clearAntigravityProjectCache(): void {
 /** Exported for tests — inspect cache state. */
 export function getAntigravityProjectFromCache(
   accessToken: string,
-  clientProfile: AntigravityClientProfile = "ide"
+  clientProfile: AntigravityClientProfile | string = DEFAULT_ANTIGRAVITY_CLIENT_PROFILE
 ): string | undefined {
-  return projectCache.get(getProjectCacheKey(accessToken, clientProfile));
+  return projectCache.get(
+    getProjectCacheKey(accessToken, normalizeAntigravityClientProfile(clientProfile))
+  );
 }

@@ -520,7 +520,9 @@ process.env[`${PROVIDER_ID}_USER_AGENT`]
 | `CODEX_USER_AGENT`               | `codex-cli/0.153.0 (Windows 10.0.26200; x64)` | When OpenAI updates the Codex CLI                                                                |
 | `CODEX_CLIENT_VERSION`           | `0.153.0`                                     | Override Codex client version independently of full UA string                                    |
 | `GITHUB_USER_AGENT`              | `GitHubCopilotChat/0.54.0`                    | When GitHub Copilot Chat updates                                                                 |
-| `ANTIGRAVITY_USER_AGENT`         | `antigravity/2.0.1 darwin/arm64`              | When Antigravity IDE updates                                                                     |
+| `ANTIGRAVITY_USER_AGENT`         | _(unset)_                                     | Not applied by the Antigravity executor: `agy`/`antigravity` connections send the official CLI identity (`ANTIGRAVITY_CLI_VERSION`). |
+| `ANTIGRAVITY_CLI_VERSION`        | `1.4.7`                                       | Version of the impersonated official `agy` CLI (`antigravity/cli/<version> (aidev_client; os_type=…; arch=…; cl=<changelist>; auth_method=consumer)`). Must be set together with `ANTIGRAVITY_CLI_CHANGELIST` from a capture of that CLI build; a lone or malformed override is ignored. Source: `open-sse/config/antigravityCliClient.ts`. |
+| `ANTIGRAVITY_CLI_CHANGELIST`     | `1006008713`                                  | Build changelist (`cl=`) that pairs with `ANTIGRAVITY_CLI_VERSION`. |
 | `KIRO_USER_AGENT`                | `AWS-SDK-JS/3.0.0 kiro-ide/1.0.0`             | When Kiro IDE updates                                                                            |
 | `KIRO_OAUTH_CLIENT_ID`           | `kiro-cli`                                    | Override the Kiro social device-code `clientId` (public id)                                      |
 | `KIRO_VERIFY_FULL_CRC`           | `false`                                       | Opt-in: full per-frame message CRC validation on the Kiro event stream (debug corrupted streams) |

@@ -5,8 +5,11 @@ const ANTIGRAVITY_GITHUB_RELEASE_URL =
 
 export const ANTIGRAVITY_VERSION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const ANTIGRAVITY_VERSION_FETCH_TIMEOUT_MS = 5_000;
-// Floor version synced with Antigravity-Manager v4.2.0 KNOWN_STABLE_VERSION.
-export const ANTIGRAVITY_FALLBACK_VERSION = "4.2.0";
+// Floor for the legacy "ide" profile = the official Antigravity IDE's `ideVersion`
+// (product.json of the installed IDE, 2.5.5 on 2026-10-24; upstream #16512 uses the
+// same floor). The previous 4.2.0 came from a third-party tool (Antigravity-Manager)
+// and is a version the IDE never shipped. The default "cli" profile does not use it.
+export const ANTIGRAVITY_FALLBACK_VERSION = "2.5.5";
 
 type VersionCache = {
   fetchedAt: number;
