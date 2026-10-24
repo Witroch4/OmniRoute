@@ -1,35 +1,26 @@
 /**
- * #3786 — Antigravity (`agy` / `antigravity`) `gemini-3.1-pro-high` returns HTTP 400
- * ("Antigravity upstream error (400)") on recent upstream versions; `gemini-3.1-pro-low`
- * still works. OmniRoute sends the requested id VERBATIM (per #3696 wire capture). The
- * upstream changed the accepted model-id format for the Pro-high tier and the two
- * actively-maintained competitor proxies DISAGREE on the live id:
- *   - AntigravityManager  → `gemini-3.1-pro-high`
- *   - CLIProxyAPI         → `gemini-pro-agent` (display: "Gemini 3.1 Pro (High)")
- *   - older form          → `gemini-3-pro-high`
+ * #3786 — per-request upstream-id FALLBACK CHAINS for Antigravity (`agy` / `antigravity`).
  *
- * Because the live id cannot be known from static analysis, we mirror AntigravityManager's
- * ROBUST approach: a per-request FALLBACK CHAIN that retries alternative upstream ids on a
- * 400, until one succeeds (2xx) or the chain is exhausted (then the original 400 surfaces,
- * sanitized — hard rule #12).
+ * The executor can retry alternative upstream ids on a 400 until one succeeds (2xx) or the
+ * chain is exhausted (then the original 400 surfaces, sanitized — hard rule #12). The chains
+ * existed for Gemini 3.1 Pro (-high/-low) and Gemini 3.5 Flash Low. Google retired both
+ * families (2026-10-23: Pro answers 404, 3.5 answers a fixed "no longer available" notice),
+ * so BOTH chain tables are empty and these tests pin the new truth: no chain for a retired or
+ * a live id, exactly one upstream call per request, and a 400 surfaces directly.
  *
- * The fallback chain lives at EXECUTOR REQUEST-TIME (retry on 400). It is NOT a change to
- * the static `resolveAntigravityModelId` map, so the #3696 invariant test stays green.
+ * The chain lives at EXECUTOR REQUEST-TIME (retry on 400). It is NOT a change to the static
+ * `resolveAntigravityModelId` map, so the #3696 pass-through invariant is unaffected.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ANTIGRAVITY_FLASH_FALLBACK_CHAINS,
   ANTIGRAVITY_PRO_FALLBACK_CHAINS,
   getAntigravityModelFallbacks,
 } from "../../open-sse/config/antigravityModelAliases.ts";
 import { AntigravityExecutor } from "../../open-sse/executors/antigravity.ts";
 import { seedAntigravityVersionCache } from "../../open-sse/services/antigravityVersion.ts";
-
-type ChatCompletionPayload = {
-  object?: string;
-  choices: Array<{ message: { content: string }; finish_reason: string }>;
-};
 
 type ErrorPayload = {
   error: { code?: string; message: string };
@@ -39,37 +30,36 @@ type ErrorPayload = {
 // Pure helper: getAntigravityModelFallbacks
 // ---------------------------------------------------------------------------
 
-test("(#3786) getAntigravityModelFallbacks returns the ordered pro-high chain", () => {
-  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.1-pro-high"), [
-    "gemini-3.1-pro-high",
-    "gemini-pro-agent",
-    "gemini-3-pro-high",
-  ]);
+test("(#3786) both fallback chain tables are empty now that their models are retired", () => {
+  assert.deepEqual(ANTIGRAVITY_PRO_FALLBACK_CHAINS, {});
+  assert.deepEqual(ANTIGRAVITY_FLASH_FALLBACK_CHAINS, {});
 });
 
-test("(#3786) getAntigravityModelFallbacks returns the ordered pro-low chain", () => {
-  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.1-pro-low"), [
-    "gemini-3.1-pro-low",
-    "gemini-3-pro-low",
-  ]);
-});
-
-test("(#3786) getAntigravityModelFallbacks returns [] for unrelated models", () => {
+test("(#3786) getAntigravityModelFallbacks returns [] for retired and live models alike", () => {
+  // Retired families: the chains that used to exist must be gone, not just shortened.
+  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.1-pro-high"), []);
+  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.1-pro-low"), []);
+  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.5-flash-extra-low"), []);
+  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.5-flash-low"), []);
+  // Live models and the empty id.
+  assert.deepEqual(getAntigravityModelFallbacks("gemini-3.8-flash-high"), []);
   assert.deepEqual(getAntigravityModelFallbacks("gemini-2.5-flash"), []);
   assert.deepEqual(getAntigravityModelFallbacks("claude-sonnet-4-6"), []);
-  assert.deepEqual(getAntigravityModelFallbacks("gemini-3-pro-preview"), []);
   assert.deepEqual(getAntigravityModelFallbacks(""), []);
 });
 
 test("(#3786) every chain starts with its own key (each candidate listed once)", () => {
-  for (const [key, chain] of Object.entries(ANTIGRAVITY_PRO_FALLBACK_CHAINS)) {
-    assert.equal(chain[0], key, `chain for ${key} must start with itself`);
-    assert.equal(new Set(chain).size, chain.length, `chain for ${key} must have no duplicates`);
+  // Vacuous while both tables are empty; guards any chain added later for a LIVE model.
+  for (const chains of [ANTIGRAVITY_PRO_FALLBACK_CHAINS, ANTIGRAVITY_FLASH_FALLBACK_CHAINS]) {
+    for (const [key, chain] of Object.entries(chains)) {
+      assert.equal(chain[0], key, `chain for ${key} must start with itself`);
+      assert.equal(new Set(chain).size, chain.length, `chain for ${key} must have no duplicates`);
+    }
   }
 });
 
 // ---------------------------------------------------------------------------
-// Behavioral: executor retries the next candidate on a 400
+// Behavioral: the executor makes exactly one upstream call per request
 // ---------------------------------------------------------------------------
 
 function makeSuccessSSE(): Response {
@@ -95,59 +85,57 @@ function envelopeModel(init: RequestInit | undefined): string {
   }
 }
 
-test("(#3786) execute retries pro-high with the next candidate when the first id 400s", async () => {
+async function runExecutor(model: string, respond: (modelId: string) => Response) {
   const executor = new AntigravityExecutor();
   const originalFetch = globalThis.fetch;
   seedAntigravityVersionCache("2026.04.17-test");
   const modelsTried: string[] = [];
 
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    const m = envelopeModel(init);
-    modelsTried.push(m);
-    // First candidate (gemini-3.1-pro-high) → 400, second (gemini-pro-agent) → 200
-    if (m === "gemini-3.1-pro-high") return make400(m);
-    return makeSuccessSSE();
+    const modelId = envelopeModel(init);
+    modelsTried.push(modelId);
+    return respond(modelId);
   }) as typeof fetch;
 
   try {
     const result = await executor.execute({
-      model: "antigravity/gemini-3.1-pro-high",
+      model,
       body: { request: { contents: [] } },
       stream: false,
       credentials: { accessToken: "token", projectId: "project-1" },
       log: { debug() {}, warn() {}, info() {} },
     });
-    const payload = (await result.response.json()) as ChatCompletionPayload;
-
-    assert.equal(result.response.status, 200, "second candidate should succeed");
-    assert.equal(payload.choices[0].message.content, "OK");
-    // Exactly two upstream calls: the 400 then the 200 on the next id.
-    assert.deepEqual(modelsTried, ["gemini-3.1-pro-high", "gemini-pro-agent"]);
+    return { result, modelsTried };
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+test("(#3786) happy path on a live tier: first id 200 makes exactly ONE upstream call", async () => {
+  const { result, modelsTried } = await runExecutor("antigravity/gemini-3.8-flash-high", () =>
+    makeSuccessSSE()
+  );
+
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(modelsTried, ["gemini-3.8-flash-high"], "exactly one call on the happy path");
 });
 
-test("(#3786) execute exhausts the chain on all-400 and surfaces a sanitized 400 (each candidate tried once)", async () => {
-  const executor = new AntigravityExecutor();
-  const originalFetch = globalThis.fetch;
-  seedAntigravityVersionCache("2026.04.17-test");
-  const modelsTried: string[] = [];
+test("(#3786) a 400 on a live model surfaces directly — only the requested id is tried", async () => {
+  const { result, modelsTried } = await runExecutor("antigravity/gemini-2.5-flash", make400);
 
-  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    const m = envelopeModel(init);
-    modelsTried.push(m);
-    return make400(m); // every candidate fails with 400
-  }) as typeof fetch;
+  assert.equal(result.response.status, 400);
+  assert.deepEqual(modelsTried, ["gemini-2.5-flash"]);
+});
 
-  try {
-    const result = await executor.execute({
-      model: "antigravity/gemini-3.1-pro-high",
-      body: { request: { contents: [] } },
-      stream: false,
-      credentials: { accessToken: "token", projectId: "project-1" },
-      log: { debug() {}, warn() {}, info() {} },
-    });
+for (const retired of [
+  { requested: "antigravity/gemini-3.1-pro-high", upstream: "gemini-3.1-pro-high" },
+  { requested: "antigravity/gemini-3.1-pro-low", upstream: "gemini-3.1-pro-low" },
+  // 3.5 Flash Low used to be rewritten to the legacy `gemini-3.5-flash-extra-low` and retried
+  // on 400; with the alias and the chain gone the id goes upstream verbatim, once.
+  { requested: "antigravity/gemini-3.5-flash-low", upstream: "gemini-3.5-flash-low" },
+]) {
+  test(`(#3786) retired ${retired.upstream} has no chain: one verbatim call, sanitized 400`, async () => {
+    const { result, modelsTried } = await runExecutor(retired.requested, make400);
     const payload = (await result.response.json()) as ErrorPayload;
 
     // Surfaces a real, sanitized 400 — not a masked empty chat.completion.
@@ -156,64 +144,7 @@ test("(#3786) execute exhausts the chain on all-400 and surfaces a sanitized 400
     assert.equal(typeof payload.error.message, "string");
     assert.ok(!payload.error.message.includes("at /"), "no raw stack trace (hard rule #12)");
 
-    // Each candidate tried EXACTLY once (bounded — no infinite loop).
-    assert.deepEqual(modelsTried, ["gemini-3.1-pro-high", "gemini-pro-agent", "gemini-3-pro-high"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("(#3786) happy path: first id 200 makes exactly ONE upstream call (zero extra)", async () => {
-  const executor = new AntigravityExecutor();
-  const originalFetch = globalThis.fetch;
-  seedAntigravityVersionCache("2026.04.17-test");
-  const modelsTried: string[] = [];
-
-  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    modelsTried.push(envelopeModel(init));
-    return makeSuccessSSE();
-  }) as typeof fetch;
-
-  try {
-    const result = await executor.execute({
-      model: "antigravity/gemini-3.1-pro-high",
-      body: { request: { contents: [] } },
-      stream: false,
-      credentials: { accessToken: "token", projectId: "project-1" },
-      log: { debug() {}, warn() {}, info() {} },
-    });
-
-    assert.equal(result.response.status, 200);
-    assert.deepEqual(modelsTried, ["gemini-3.1-pro-high"], "exactly one call on the happy path");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("(#3786) a non-pro model that 400s does NOT trigger the fallback chain", async () => {
-  const executor = new AntigravityExecutor();
-  const originalFetch = globalThis.fetch;
-  seedAntigravityVersionCache("2026.04.17-test");
-  const modelsTried: string[] = [];
-
-  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    modelsTried.push(envelopeModel(init));
-    return make400(envelopeModel(init));
-  }) as typeof fetch;
-
-  try {
-    const result = await executor.execute({
-      model: "antigravity/gemini-2.5-flash",
-      body: { request: { contents: [] } },
-      stream: false,
-      credentials: { accessToken: "token", projectId: "project-1" },
-      log: { debug() {}, warn() {}, info() {} },
-    });
-
-    // flash 400 surfaces directly — only the requested id is tried, no chain.
-    assert.equal(result.response.status, 400);
-    assert.deepEqual(modelsTried, ["gemini-2.5-flash"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
+    // No alias rewrite and no retry: the requested id is the only one tried, once.
+    assert.deepEqual(modelsTried, [retired.upstream]);
+  });
+}

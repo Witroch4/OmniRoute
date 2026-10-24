@@ -22,12 +22,24 @@ test("T28: gemini AI Studio catalog includes current preview models", () => {
 test("T28: antigravity static catalog exposes client-visible Gemini tier IDs", () => {
   const staticIds = (getStaticModelsForProvider("antigravity") || []).map((m) => m.id);
 
-  assert.ok(staticIds.includes("gemini-3-pro-preview"));
-  assert.ok(staticIds.includes("gemini-3.5-flash-low"));
-  assert.ok(staticIds.includes("gemini-3.5-flash-medium"));
-  assert.ok(staticIds.includes("gemini-3.5-flash-high"));
-  assert.ok(staticIds.includes("gemini-3.1-pro-low"));
-  assert.ok(staticIds.includes("gemini-3.1-pro-high"));
+  assert.ok(staticIds.includes("gemini-3.8-flash-low"));
+  assert.ok(staticIds.includes("gemini-3.8-flash-medium"));
+  assert.ok(staticIds.includes("gemini-3.8-flash-high"));
+  assert.ok(staticIds.includes("gemini-3.1-flash-lite"));
+  // 2026-10-23: Google retired these (3.5 answers a fixed notice, the rest answer 404).
+  for (const retired of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro-low",
+    "gemini-3.1-pro-high",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-high",
+  ]) {
+    assert.ok(!staticIds.includes(retired), `${retired} must not be listed`);
+  }
   // Legacy aliases that were never client-visible stay absent.
   assert.ok(!staticIds.includes("gemini-3-pro-high"));
   assert.ok(!staticIds.includes("gemini-3-flash-preview"));

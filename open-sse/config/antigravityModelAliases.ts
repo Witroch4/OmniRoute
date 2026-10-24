@@ -67,53 +67,12 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     supportsVision: true,
     toolCalling: true,
   },
-  // Gemini 3.5 Flash tiers exposed by Antigravity 2.0.4's model selector.
-  // The user-facing names are Low / Medium / High, but fetchAvailableModels reports
-  // legacy upstream IDs for two of them:
-  //   Low    -> gemini-3.5-flash-extra-low (displayName: Gemini 3.5 Flash (Low))
-  //   Medium -> gemini-3.5-flash-low       (displayName: Gemini 3.5 Flash (Medium))
-  //   High   -> gemini-3-flash-agent       (displayName: Gemini 3.5 Flash (High))
-  // Keep the clean public IDs here and map them below for routing/quota.
-  {
-    id: "gemini-3.5-flash-low",
-    name: "Gemini 3.5 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.5-flash-medium",
-    name: "Gemini 3.5 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.5-flash-high",
-    name: "Gemini 3.5 Flash (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.6 Flash tiers — live-probed via includeUnmapped discovery (2026-07-24):
-  // raw ids come back clean/unprefixed (gemini-3.6-flash-low/medium/high), same
-  // no-alias-needed pattern as gemini-3.1-pro-high below (#3696). A "Flash Lite" tier
-  // for this generation was NOT confirmed in the same probe — several distinct raw ids
-  // (gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-thinking) all echoed the
-  // same "Gemini 3.1 Flash Lite" displayName, too ambiguous to add an entry from.
-  // Gemini 3.8 Flash tiers (Low/Medium/High). Live-verified against production
-  // BEFORE being written here: `agy/gemini-3.8-flash-{high,medium,low}` each
-  // returned 200 through `agy` passthrough, while the bare `gemini-3.8-flash`
-  // returned 404 "Requested entity was not found" — so the tiers are the real
-  // upstream ids and there is no bare id to alias. Same shape as 3.7/3.6.
-  // Not advertised by :fetchAvailableModels for this account (it stops at 3.6),
-  // which is why they must be pinned here.
+  // Gemini 3.8 Flash tiers (Low/Medium/High) — the current Flash line; `agy models` (CLI
+  // 1.4.6, 2026-10-23) lists exactly these three. There is no bare id: `gemini-3.8-flash`
+  // returned 404, so the tiers ARE the real upstream ids and nothing is aliased.
+  // 2026-10-23 — Gemini 3.5, 3.6 and 3.7 Flash and Gemini 3.1 Pro (-high/-low, -agent)
+  // were removed: Google retired them (3.5 answers 200 with a fixed "no longer
+  // available" notice, the others answer 404) and `agy models` no longer lists them.
   {
     id: "gemini-3.8-flash-high",
     name: "Gemini 3.8 Flash (High)",
@@ -137,97 +96,6 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     name: "Gemini 3.8 Flash (Low)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.7 Flash tiers (Low/Medium/High), mirroring the 3.6 shape exactly — the
-  // Antigravity model selector offers the same three tiers for both, and it now warns
-  // that 3.5 Flash is being retired in favour of 3.7. NOT advertised by
-  // :fetchAvailableModels for this account (it stops at 3.6), yet live-callable: they
-  // reached the provider through `agy` passthrough until the family fell out of the
-  // catalog. Deliberately NOT aliased — upstream rewrites all tiers to one `-tiered`
-  // id, which would collapse a real tier choice AND change what is dispatched. Each id resolving to itself also keeps the #3696 invariant intact.
-  {
-    id: "gemini-3.7-flash-high",
-    name: "Gemini 3.7 Flash (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.7-flash-medium",
-    name: "Gemini 3.7 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.7-flash-low",
-    name: "Gemini 3.7 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.6-flash-low",
-    name: "Gemini 3.6 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.6-flash-medium",
-    name: "Gemini 3.6 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.6-flash-high",
-    name: "Gemini 3.6 Flash (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3.1 Pro",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.1 Pro budget tiers — agy ships these and they route directly via the
-  // antigravity OAuth provider. The upstream ACCEPTS the suffixed ids verbatim (wire-
-  // confirmed via `agy --model gemini-3.1-pro-high`: 200 OK on /v1internal:streamGenerateContent).
-  // No alias needed; see #3696 (supersedes the #3229 premise).
-  {
-    id: "gemini-3.1-pro-high",
-    name: "Gemini 3.1 Pro (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.1-pro-low",
-    name: "Gemini 3.1 Pro (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
     supportsReasoning: true,
     supportsVision: true,
     toolCalling: true,
@@ -270,15 +138,6 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   {
-    id: "gemini-pro-agent",
-    name: "Gemini 3.1 Pro (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
     id: "gpt-oss-120b-medium",
     name: "GPT-OSS 120B (Medium)",
     contextLength: 131072,
@@ -295,19 +154,8 @@ export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
 ]);
 
 export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
-  "gemini-3.5-flash-low": "gemini-3.5-flash-extra-low",
-  "gemini-3.5-flash-medium": "gemini-3.5-flash-low",
-  "gemini-3.5-flash-high": "gemini-3-flash-agent",
-  // Backward-compat: the retired flagship public id `gemini-3.5-flash-preview`
-  // (Antigravity 2.0's "Gemini 3.5 Flash") is kept as a HIDDEN alias so saved
-  // combos/configs keep routing — it maps to the reasoning-capable High tier
-  // (upstream `gemini-3-flash-agent`). It is NOT re-added to the public catalog.
-  "gemini-3.5-flash-preview": "gemini-3-flash-agent",
-  "gemini-3-pro-preview": "gemini-3.1-pro",
-  // gemini-3.1-pro-high and gemini-3.1-pro-low are NOT aliased here: wire capture
-  // (#3696) confirmed the upstream accepts the suffixed ids verbatim → pass through.
-  // (The earlier #3229 assumption — "upstream rejects -high/-low for gemini-3.x" —
-  // was refuted by the agy --log-file 200 OK evidence.)
+  // Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro were removed on 2026-10-23 (retired by Google),
+  // so they have NO alias: nothing forwards a retired id to a live one (see the catalog notes).
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
   "gemini-2.5-computer-use-preview-10-2025": "rev19-uic3-1p",
   // Retired Claude ids → the live Claude 5.5 tiers (HIDDEN aliases, not advertised).
@@ -329,51 +177,17 @@ export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
 type AntigravityModelAliasMap = Record<string, string>;
 
 /**
- * #3786 — Per-request upstream-id FALLBACK CHAINS for the Gemini 3.1 Pro family.
- *
- * On recent Antigravity versions `gemini-3.1-pro-high` started returning HTTP 400
- * ("Antigravity upstream error (400)") while `gemini-3.1-pro-low` still works. The upstream
- * changed the accepted id format for the Pro-high tier and the live id cannot be determined
- * from static analysis — the two actively-maintained competitor proxies DISAGREE:
- *   - AntigravityManager → `gemini-3.1-pro-high`
- *   - CLIProxyAPI        → `gemini-pro-agent` (display: "Gemini 3.1 Pro (High)")
- *   - older form         → `gemini-3-pro-high`
- *
- * Mirroring AntigravityManager's robust approach, the executor retries the next candidate id
- * on a 400 until one succeeds (2xx) or the chain is exhausted. This is a REQUEST-TIME retry,
- * NOT a change to the static `resolveAntigravityModelId` map — the #3696 pass-through
- * invariant (suffixed ids reach the upstream verbatim on the FIRST attempt) is preserved.
- *
- * Each chain starts with its own key so the happy path (first id 200) incurs zero extra
- * calls, and every candidate is listed at most once so the retry loop is bounded.
+ * Per-request upstream-id FALLBACK CHAINS (the executor retries the next id on a 400).
+ * Both chains covered models Google has since retired (Gemini 3.1 Pro -high/-low and Gemini
+ * 3.5 Flash Low), so a retry could only land on another dead id; they were emptied on
+ * 2026-10-23. The exports stay because the executor resolves chains by id through
+ * `getAntigravityModelFallbacks` — add an entry only for a LIVE model that needs one.
  */
 export const ANTIGRAVITY_PRO_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
-  Object.freeze({
-    "gemini-3.1-pro-high": Object.freeze([
-      "gemini-3.1-pro-high",
-      "gemini-pro-agent",
-      "gemini-3-pro-high",
-    ]),
-    // pro-low currently works but is given a trivially-symmetric chain for resilience if the
-    // upstream renames it the same way it renamed pro-high.
-    "gemini-3.1-pro-low": Object.freeze(["gemini-3.1-pro-low", "gemini-3-pro-low"]),
-  });
+  Object.freeze({});
 
-/**
- * Gemini 3.5 Flash Low is exposed as `gemini-3.5-flash-low`, but its first upstream id is
- * the legacy `gemini-3.5-flash-extra-low`. That legacy id intermittently returns HTTP 400
- * while the adjacent Flash ids remain healthy. Retry the live Medium upstream id first and
- * Flash Lite only if both 3.5 ids reject the request. The public model id and static alias stay
- * unchanged, so the normal successful request still makes exactly one upstream call.
- */
 export const ANTIGRAVITY_FLASH_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
-  Object.freeze({
-    "gemini-3.5-flash-extra-low": Object.freeze([
-      "gemini-3.5-flash-extra-low",
-      "gemini-3.5-flash-low",
-      "gemini-3.1-flash-lite",
-    ]),
-  });
+  Object.freeze({});
 
 export const ANTIGRAVITY_MODEL_FALLBACK_CHAINS: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
@@ -392,9 +206,6 @@ export function getAntigravityModelFallbacks(modelId: string): readonly string[]
 }
 
 export const ANTIGRAVITY_REVERSE_MODEL_ALIASES: AntigravityModelAliasMap = Object.freeze({
-  "gemini-3.5-flash-extra-low": "gemini-3.5-flash-low",
-  "gemini-3-flash-agent": "gemini-3.5-flash-high",
-  "gemini-3.1-pro": "gemini-3-pro-preview",
   "gemini-3-pro-image": "gemini-3-pro-image-preview",
   "rev19-uic3-1p": "gemini-2.5-computer-use-preview-10-2025",
 });

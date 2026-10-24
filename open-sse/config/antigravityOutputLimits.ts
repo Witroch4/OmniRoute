@@ -80,8 +80,8 @@ const CATALOG_OUTPUT_LIMITS = collectLimits();
 /**
  * Resolve the output ceiling for a model on the Antigravity Cloud Code backend.
  *
- * Accepts a public id (`gemini-3.6-flash-low`), an upstream id, or a
- * provider-prefixed one (`agy/gemini-3.6-flash-low`). Returns
+ * Accepts a public id (`gemini-3.8-flash-low`), an upstream id, or a
+ * provider-prefixed one (`agy/gemini-3.8-flash-low`). Returns
  * DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS when the model is not pinned in either
  * catalog.
  */

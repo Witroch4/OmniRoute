@@ -7,7 +7,8 @@
  *      was believed to reject the suffix). SUPERSEDED BY #3696: wire capture via
  *      `agy --model gemini-3.1-pro-high --log-file` confirmed upstream returns 200 OK
  *      with the suffixed id; the collapse aliases are now removed so the tier-specific
- *      id passes through verbatim.
+ *      id passes through verbatim. Gemini 3.1 Pro itself was retired on 2026-10-23, so the
+ *      pass-through invariant is asserted on the live tiered ids (Gemini 3.8 Flash).
  *  (b) the non-stream branch fed the 4xx response into the SSE collector, producing a
  *      synthetic `{"object":"chat.completion","content":""}` instead of a real error →
  *      build a proper sanitized error body for non-ok upstream responses. (Still valid.)
@@ -18,20 +19,20 @@ import assert from "node:assert/strict";
 import { resolveAntigravityModelId } from "../../open-sse/config/antigravityModelAliases.ts";
 import { buildAntigravityUpstreamError } from "../../open-sse/executors/antigravityUpstreamError.ts";
 
-test("(a) agy gemini-3.1-pro -high/-low budget suffixes pass through to upstream unchanged (#3696)", () => {
+test("(a) agy gemini-3.8-flash -high/-low tier suffixes pass through to upstream unchanged (#3696)", () => {
   // #3696: wire capture confirmed upstream accepts the suffixed ids verbatim.
-  // The old #3229 collapse aliases ("gemini-3.1-pro-high" → "gemini-3.1-pro") were removed.
-  assert.equal(resolveAntigravityModelId("gemini-3.1-pro-high"), "gemini-3.1-pro-high");
-  assert.equal(resolveAntigravityModelId("gemini-3.1-pro-low"), "gemini-3.1-pro-low");
+  // The old #3229 collapse aliases (tier id → bare id) were removed.
+  assert.equal(resolveAntigravityModelId("gemini-3.8-flash-high"), "gemini-3.8-flash-high");
+  assert.equal(resolveAntigravityModelId("gemini-3.8-flash-low"), "gemini-3.8-flash-low");
   // plain id stays plain
-  assert.equal(resolveAntigravityModelId("gemini-3.1-pro"), "gemini-3.1-pro");
+  assert.equal(resolveAntigravityModelId("gemini-3.1-flash-lite"), "gemini-3.1-flash-lite");
 });
 
 test("(b) a non-ok upstream response becomes a real error body, not an empty chat.completion", () => {
   const body = buildAntigravityUpstreamError(
     400,
     "Bad Request",
-    JSON.stringify({ error: { code: 400, message: "Model not found: gemini-3.1-pro-high" } })
+    JSON.stringify({ error: { code: 400, message: "Model not found: gemini-3.8-flash-high" } })
   );
   assert.notEqual((body as { object?: string }).object, "chat.completion");
   assert.ok(body.error, "must carry an error object");

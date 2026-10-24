@@ -2,9 +2,7 @@
 //
 // These models are pinned from the live `:fetchAvailableModels` endpoint
 // (https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels) using a
-// real `agy` consumer-OAuth token. The public catalog exposes the same clean Gemini
-// 3.5 Flash tier names as the Antigravity IDE provider; the shared Antigravity executor
-// maps those names to the legacy upstream IDs immediately before dispatch.
+// real `agy` consumer-OAuth token.
 //
 // The `agy` provider reuses the `antigravity` executor/translator (identical backend),
 // but ships its OWN catalog so it can expose models the `antigravity` provider's static
@@ -78,90 +76,12 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
     toolCalling: true,
   },
   // Gemini 3.x
-  {
-    id: "gemini-3.1-pro-high",
-    name: "Gemini 3.1 Pro (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.1-pro-low",
-    name: "Gemini 3.1 Pro (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-pro-agent",
-    name: "Gemini 3.1 Pro (Agent)",
-    contextLength: 1048576,
-    maxOutputTokens: 65535,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.5-flash-low",
-    name: "Gemini 3.5 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.5-flash-medium",
-    name: "Gemini 3.5 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.5-flash-high",
-    name: "Gemini 3.5 Flash (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.6 Flash tiers — live-probed via includeUnmapped discovery (2026-07-24):
-  // raw ids come back clean/unprefixed (gemini-3.6-flash-low/medium/high), no legacy
-  // alias needed, same pattern as gemini-3.1-flash-lite below. A "Flash Lite" tier for
-  // this generation was NOT confirmed in the same probe — several distinct raw ids
-  // (gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-flash-thinking) all echoed
-  // the same "Gemini 3.1 Flash Lite" displayName, too ambiguous to add a 3.5/3.6 Flash
-  // Lite entry from. Re-probe if/when Google ships an unambiguous raw id for it.
-  {
-    id: "gemini-3.6-flash-low",
-    name: "Gemini 3.6 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.6-flash-medium",
-    name: "Gemini 3.6 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.8 Flash tiers (Low/Medium/High). Live-verified against production
-  // BEFORE being written here: `agy/gemini-3.8-flash-{high,medium,low}` each
-  // returned 200 through `agy` passthrough, while the bare `gemini-3.8-flash`
-  // returned 404 "Requested entity was not found" — so the tiers are the real
-  // upstream ids and there is no bare id to alias. Same shape as 3.7/3.6.
-  // Not advertised by :fetchAvailableModels for this account (it stops at 3.6),
-  // which is why they must be pinned here.
+  // Gemini 3.8 Flash tiers (Low/Medium/High) — the current Flash line; `agy models` (CLI
+  // 1.4.6, 2026-10-23) lists exactly these three. There is no bare id: `gemini-3.8-flash`
+  // returned 404, so the tiers ARE the real upstream ids and nothing is aliased.
+  // 2026-10-23 — Gemini 3.5, 3.6 and 3.7 Flash and Gemini 3.1 Pro (-high/-low, -agent)
+  // were removed: Google retired them (3.5 answers 200 with a fixed "no longer
+  // available" notice, the others answer 404) and `agy models` no longer lists them.
   {
     id: "gemini-3.8-flash-high",
     name: "Gemini 3.8 Flash (High)",
@@ -183,49 +103,6 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
   {
     id: "gemini-3.8-flash-low",
     name: "Gemini 3.8 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  // Gemini 3.7 Flash tiers (Low/Medium/High), mirroring the 3.6 shape exactly — the
-  // Antigravity model selector offers the same three tiers for both, and it now warns
-  // that 3.5 Flash is being retired in favour of 3.7. NOT advertised by
-  // :fetchAvailableModels for this account (it stops at 3.6), yet live-callable: they
-  // reached the provider through `agy` passthrough until the family fell out of the
-  // catalog. Deliberately NOT aliased — upstream rewrites all tiers to one `-tiered`
-  // id, which would collapse a real tier choice AND change what is dispatched. Each id resolving to itself also keeps the #3696 invariant intact.
-  {
-    id: "gemini-3.7-flash-high",
-    name: "Gemini 3.7 Flash (High)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.7-flash-medium",
-    name: "Gemini 3.7 Flash (Medium)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.7-flash-low",
-    name: "Gemini 3.7 Flash (Low)",
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-  },
-  {
-    id: "gemini-3.6-flash-high",
-    name: "Gemini 3.6 Flash (High)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,

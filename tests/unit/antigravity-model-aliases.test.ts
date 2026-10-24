@@ -19,6 +19,8 @@ function getPublicModel(id: string) {
 // #3821-review LEDGER-5 — the upstream quota-bucket → client-tier remap is now the single
 // source of truth here (was duplicated as an inline if-ladder in usage.ts). It operates on
 // the UPSTREAM quota namespace, where `gemini-3.5-flash-low` is the Medium tier's bucket.
+// The 3.5 tier bucket remap table was deliberately left unchanged by the 2026-10-23 catalog
+// drop (the 3.5 models left the public catalog, the bucket remap did not), so it is pinned as-is.
 test("toClientAntigravityQuotaModelId maps upstream quota buckets to client tiers", () => {
   assert.equal(
     toClientAntigravityQuotaModelId("gemini-3.5-flash-extra-low"),
@@ -28,7 +30,14 @@ test("toClientAntigravityQuotaModelId maps upstream quota buckets to client tier
   assert.equal(toClientAntigravityQuotaModelId("gemini-3.5-flash-low"), "gemini-3.5-flash-medium");
   assert.equal(toClientAntigravityQuotaModelId("gemini-3-flash-agent"), "gemini-3.5-flash-high");
   // Non-tier ids fall back to the standard reverse alias map.
-  assert.equal(toClientAntigravityQuotaModelId("gemini-3.1-pro"), "gemini-3-pro-preview");
+  assert.equal(toClientAntigravityQuotaModelId("gemini-3-pro-image"), "gemini-3-pro-image-preview");
+  assert.equal(
+    toClientAntigravityQuotaModelId("rev19-uic3-1p"),
+    "gemini-2.5-computer-use-preview-10-2025"
+  );
+  // 2026-10-23: Gemini 3.1 Pro was retired and its reverse alias dropped, so its bucket id is
+  // no longer rewritten to a client id (it just passes through the standard fallback).
+  assert.equal(toClientAntigravityQuotaModelId("gemini-3.1-pro"), "gemini-3.1-pro");
   // Always-allowed bucket passes through unchanged.
   assert.equal(toClientAntigravityQuotaModelId("credits"), "credits");
   // Retired preview buckets are dropped (hidden from clients).
@@ -38,17 +47,39 @@ test("toClientAntigravityQuotaModelId maps upstream quota buckets to client tier
 });
 
 test("resolveAntigravityModelId maps the documented Antigravity aliases to upstream IDs", () => {
-  assert.equal(resolveAntigravityModelId("gemini-3-pro-preview"), "gemini-3.1-pro");
   assert.equal(resolveAntigravityModelId("gemini-3-pro-image-preview"), "gemini-3-pro-image");
   assert.equal(
     resolveAntigravityModelId("gemini-2.5-computer-use-preview-10-2025"),
     "rev19-uic3-1p"
   );
-  assert.equal(resolveAntigravityModelId("gemini-3.5-flash-low"), "gemini-3.5-flash-extra-low");
-  assert.equal(resolveAntigravityModelId("gemini-3.5-flash-medium"), "gemini-3.5-flash-low");
-  assert.equal(resolveAntigravityModelId("gemini-3.5-flash-high"), "gemini-3-flash-agent");
-  // Backward-compat: retired flagship public id routes to the High tier upstream.
-  assert.equal(resolveAntigravityModelId("gemini-3.5-flash-preview"), "gemini-3-flash-agent");
+  // The live Gemini 3.8 Flash tiers are the real upstream ids (no bare id exists): they pass
+  // through untouched, so a tier choice is never collapsed (#3696).
+  for (const tier of ["low", "medium", "high"]) {
+    assert.equal(resolveAntigravityModelId(`gemini-3.8-flash-${tier}`), `gemini-3.8-flash-${tier}`);
+  }
+  // 2026-10-23: Google retired Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro. Their aliases were
+  // dropped, so nothing forwards a retired id (or its old upstream id) to a different model.
+  for (const retiredId of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.5-flash-preview",
+    "gemini-3.5-flash-extra-low",
+    "gemini-3-flash-agent",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-high",
+  ]) {
+    assert.equal(
+      resolveAntigravityModelId(retiredId),
+      retiredId,
+      `${retiredId} must not be aliased`
+    );
+  }
   // Claude 4.6 was retired upstream on 2026-10-10; every legacy Claude id now resolves
   // (single step) to a LIVE Claude 5.5 tier.
   assert.equal(resolveAntigravityModelId("gemini-claude-sonnet-4-5"), "claude-sonnet-5-5-high");
@@ -70,27 +101,46 @@ test("resolveAntigravityModelId maps the documented Antigravity aliases to upstr
 });
 
 test("toClientAntigravityModelId exposes client-visible aliases for known upstream IDs", () => {
-  assert.equal(toClientAntigravityModelId("gemini-3.1-pro"), "gemini-3-pro-preview");
-  assert.equal(toClientAntigravityModelId("gemini-3.5-flash-extra-low"), "gemini-3.5-flash-low");
-  assert.equal(toClientAntigravityModelId("gemini-3-flash-agent"), "gemini-3.5-flash-high");
+  assert.equal(toClientAntigravityModelId("gemini-3-pro-image"), "gemini-3-pro-image-preview");
+  assert.equal(
+    toClientAntigravityModelId("rev19-uic3-1p"),
+    "gemini-2.5-computer-use-preview-10-2025"
+  );
+  // 2026-10-23: the reverse aliases of the retired upstream ids were dropped with the models.
+  for (const retiredUpstreamId of [
+    "gemini-3.1-pro",
+    "gemini-3.5-flash-extra-low",
+    "gemini-3-flash-agent",
+  ]) {
+    assert.equal(
+      toClientAntigravityModelId(retiredUpstreamId),
+      retiredUpstreamId,
+      `${retiredUpstreamId} must not be reverse-aliased`
+    );
+  }
+  assert.equal(toClientAntigravityModelId("gemini-3.8-flash-high"), "gemini-3.8-flash-high");
   assert.equal(toClientAntigravityModelId("gpt-oss-120b-medium"), "gpt-oss-120b-medium");
   assert.equal(toClientAntigravityModelId("claude-sonnet-4-6"), "claude-sonnet-4-6");
   assert.equal(toClientAntigravityModelId("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
 });
 
 test("isUserCallableAntigravityModelId only allows public chat-capable model IDs", () => {
-  assert.equal(isUserCallableAntigravityModelId("gemini-3-pro-preview"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.1-pro"), true);
-  // Retired flagship id stays callable as a hidden backward-compat alias (routes to High),
-  // even though it is no longer exposed in the public catalog.
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.5-flash-preview"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3-flash-agent"), true);
+  // Gemini 3.8 Flash is the live Flash line; the tiers are the real upstream ids.
+  for (const tier of ["low", "medium", "high"]) {
+    assert.equal(isUserCallableAntigravityModelId(`gemini-3.8-flash-${tier}`), true);
+  }
   assert.equal(isUserCallableAntigravityModelId("gemini-3.1-flash-lite"), true);
+  assert.equal(isUserCallableAntigravityModelId("gemini-3.1-flash-image"), true);
+  // Image / computer-use models are callable by both their client id and their upstream id.
+  assert.equal(isUserCallableAntigravityModelId("gemini-3-pro-image-preview"), true);
+  assert.equal(isUserCallableAntigravityModelId("gemini-3-pro-image"), true);
+  assert.equal(isUserCallableAntigravityModelId("gemini-2.5-computer-use-preview-10-2025"), true);
+  assert.equal(isUserCallableAntigravityModelId("rev19-uic3-1p"), true);
+  assert.equal(isUserCallableAntigravityModelId("gpt-oss-120b-medium"), true);
   assert.equal(isUserCallableAntigravityModelId("gemini-2.5-pro"), true);
   assert.equal(isUserCallableAntigravityModelId("gemini-2.5-flash"), true);
   assert.equal(isUserCallableAntigravityModelId("gemini-2.5-flash-lite"), true);
   assert.equal(isUserCallableAntigravityModelId("gemini-2.5-flash-thinking"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-pro-agent"), true);
   // #3184: Claude IS user-callable through the Antigravity OAuth provider (same backend as
   // `agy`, verified empirically). 2026-10-10: the live ids are the 5.5 tiers; the retired
   // 4.6 ids and the `claude-sonnet-5` placeholder stay callable as HIDDEN aliases.
@@ -102,13 +152,34 @@ test("isUserCallableAntigravityModelId only allows public chat-capable model IDs
   assert.equal(isUserCallableAntigravityModelId("claude-opus-4-6-thinking"), true);
   assert.equal(isUserCallableAntigravityModelId("claude-sonnet-4-6"), true);
   assert.equal(isUserCallableAntigravityModelId("claude-sonnet-5"), true);
-  // Antigravity 2.0.4 exposes Gemini 3.5 Flash as separate UI tiers.
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.1-pro-high"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.1-pro-low"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.5-flash-low"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.5-flash-medium"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.5-flash-high"), true);
-  assert.equal(isUserCallableAntigravityModelId("gemini-3.5-flash-extra-low"), true);
+  // 2026-10-23: Google retired Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro. They left the
+  // public catalog and have no alias, so none of them (nor their old upstream ids) is
+  // user-callable any more — requests for them must not be routed upstream as chat models.
+  for (const retiredId of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.5-flash-preview",
+    "gemini-3.5-flash-extra-low",
+    "gemini-3-flash-agent",
+    "gemini-3.6-flash-low",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-low",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-high",
+  ]) {
+    assert.equal(
+      isUserCallableAntigravityModelId(retiredId),
+      false,
+      `${retiredId} is retired and must not be user-callable`
+    );
+  }
   assert.equal(isUserCallableAntigravityModelId("tab_flash_lite_preview"), false);
   assert.equal(isUserCallableAntigravityModelId("unknown-model"), false);
 });
@@ -136,18 +207,49 @@ test("ANTIGRAVITY_PUBLIC_MODELS exposes captured Antigravity 2.0.1 names and cap
   assert.equal(getPublicModel("claude-opus-4-6-thinking"), undefined);
   assert.equal(getPublicModel("claude-sonnet-4-6"), undefined);
   assert.equal(getPublicModel("claude-sonnet-5"), undefined);
-  assert.deepEqual(getPublicModel("gemini-3.5-flash-high"), {
-    id: "gemini-3.5-flash-high",
-    name: "Gemini 3.5 Flash (High)",
+  assert.deepEqual(getPublicModel("gemini-3.8-flash-high"), {
+    id: "gemini-3.8-flash-high",
+    name: "Gemini 3.8 Flash (High)",
     contextLength: 1048576,
     maxOutputTokens: 65536,
     supportsReasoning: true,
     supportsVision: true,
     toolCalling: true,
   });
+  assert.equal(getPublicModel("gemini-3.8-flash-medium").name, "Gemini 3.8 Flash (Medium)");
+  assert.equal(getPublicModel("gemini-3.8-flash-low").name, "Gemini 3.8 Flash (Low)");
+  assert.equal(getPublicModel("gemini-3.1-flash-lite").name, "Gemini 3.1 Flash Lite");
+  assert.equal(getPublicModel("gemini-3.1-flash-image").name, "Gemini 3.1 Flash Image");
+  assert.equal(getPublicModel("gemini-2.5-pro").name, "Gemini 2.5 Pro");
+  // 2026-10-23: Google retired Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro — none of them
+  // (including the old `gemini-3-pro-preview` / `gemini-pro-agent` ids) is advertised.
+  for (const retiredId of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.5-flash-preview",
+    "gemini-3.6-flash-low",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-low",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-high",
+  ]) {
+    assert.equal(getPublicModel(retiredId), undefined, `${retiredId} must not be in the catalog`);
+  }
+  assert.equal(
+    getClientVisibleAntigravityModelName("gemini-3.8-flash-medium"),
+    "Gemini 3.8 Flash (Medium)"
+  );
+  // A retired id has no display name any more: the helper falls back to the id itself.
   assert.equal(
     getClientVisibleAntigravityModelName("gemini-3.5-flash-medium"),
-    "Gemini 3.5 Flash (Medium)"
+    "gemini-3.5-flash-medium"
   );
   assert.equal(getClientVisibleAntigravityModelName("gemini-2.5-flash"), "Gemini 2.5 Flash");
   assert.equal(
@@ -187,7 +289,7 @@ test("ANTIGRAVITY_PUBLIC_MODELS has no duplicate model IDs", () => {
 test("AntigravityExecutor.transformRequest resolves alias models before dispatching upstream", async () => {
   const executor = new AntigravityExecutor();
   const result = await executor.transformRequest(
-    "antigravity/gemini-3-pro-preview",
+    "antigravity/gemini-3-pro-image-preview",
     {
       request: {
         contents: [{ role: "user", parts: [{ text: "Hello" }] }],
@@ -198,10 +300,39 @@ test("AntigravityExecutor.transformRequest resolves alias models before dispatch
   );
 
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
-  assert.equal(result.model, "gemini-3.1-pro");
+  assert.equal(result.model, "gemini-3-pro-image");
 });
 
-test("AntigravityExecutor.transformRequest maps Gemini 3.5 Flash tiers to live upstream IDs", async () => {
+test("AntigravityExecutor.transformRequest dispatches every Gemini 3.8 Flash tier under its own upstream id", async () => {
+  const executor = new AntigravityExecutor();
+  for (const tier of ["low", "medium", "high"]) {
+    const tierId = `gemini-3.8-flash-${tier}`;
+    const result = await executor.transformRequest(
+      `antigravity/${tierId}`,
+      {
+        request: {
+          contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+        },
+      },
+      true,
+      { projectId: "project-1" }
+    );
+
+    if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
+    // The tier ids are the real upstream ids (there is no bare `gemini-3.8-flash`), so the
+    // request body is forwarded under the SAME id — the tier choice is never collapsed.
+    // (Dropped four assertions on modelConfigId/model_config_id — the executor never sets
+    // those fields, so they were vacuously true and gave false confidence.
+    // #3821-review LEDGER-10.)
+    assert.equal(result.model, tierId);
+    assert.deepEqual(result.request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+  }
+});
+
+test("AntigravityExecutor.transformRequest no longer rewrites retired Gemini 3.5 Flash ids", async () => {
+  // 2026-10-23: Gemini 3.5 Flash was retired; the legacy-id aliases that used to forward it
+  // (gemini-3.5-flash-high -> gemini-3-flash-agent, ...) are gone, so a stale client id is sent
+  // as-is instead of being silently rerouted to another upstream model.
   const executor = new AntigravityExecutor();
   const result = await executor.transformRequest(
     "antigravity/gemini-3.5-flash-high",
@@ -215,12 +346,7 @@ test("AntigravityExecutor.transformRequest maps Gemini 3.5 Flash tiers to live u
   );
 
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
-  // The "High" tier resolves to the live upstream id; the request body is forwarded
-  // under that id. (Dropped four assertions on modelConfigId/model_config_id — the
-  // executor never sets those fields, so they were vacuously true and gave false
-  // confidence. #3821-review LEDGER-10.)
-  assert.equal(result.model, "gemini-3-flash-agent");
-  assert.deepEqual(result.request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+  assert.equal(result.model, "gemini-3.5-flash-high");
 });
 
 test("AntigravityExecutor.transformRequest sends Claude through Gemini-compatible Cloud Code schema", async () => {

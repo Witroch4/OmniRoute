@@ -15,14 +15,26 @@ const {
   capThinkingBudget,
 } = await import("../../src/shared/constants/modelSpecs.ts");
 
-test("T31: antigravity static catalog exposes client-visible Gemini preview IDs", () => {
-  // Antigravity exposes preview aliases to clients even though the upstream
-  // still accepts its internal model identifiers.
+test("T31: antigravity static catalog exposes client-visible Gemini and Claude tier IDs", () => {
+  // Antigravity exposes the live tier ids to clients; retired models (2026-10-23: Gemini 3.5/3.6/3.7
+  // Flash, 3.1 Pro, pro-agent, 3-pro-preview) are not listed.
   const staticIds = (getStaticModelsForProvider("antigravity") || []).map((m) => m.id);
-  assert.ok(staticIds.includes("gemini-3-pro-preview"));
   // #3303 (agy parity, discussion #3184): the Gemini + Claude budget tiers ARE
   // client-visible on the Antigravity OAuth backend (Claude was never removed).
-  assert.ok(staticIds.includes("gemini-3.1-pro-low"));
+  assert.ok(staticIds.includes("gemini-3.8-flash-high"));
+  for (const retired of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro-low",
+    "gemini-3.1-pro-high",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-high",
+  ]) {
+    assert.ok(!staticIds.includes(retired), `${retired} must not be listed`);
+  }
   // 2026-10-10: Claude 4.6 was retired upstream; the live Claude ids are the 5.5 tiers.
   assert.ok(staticIds.includes("claude-sonnet-5-5-high"));
   assert.ok(staticIds.includes("claude-opus-5-5-high"));

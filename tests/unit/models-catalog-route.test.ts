@@ -694,15 +694,38 @@ test("v1 models catalog exposes Antigravity client-visible preview aliases inste
   const ids = new Set(body.data.map((item) => item.id));
 
   assert.equal(response.status, 200);
-  assert.ok(ids.has("antigravity/gemini-3-pro-preview"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-low"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-medium"));
-  assert.ok(ids.has("antigravity/gemini-3.5-flash-high"));
-  assert.equal(ids.has("antigravity/gemini-3-flash-preview"), false);
-  assert.equal(ids.has("antigravity/gemini-3-flash-agent"), false);
-  // Gemini 3.1 Pro budget tiers remain client-visible aliases for the plain
-  // `gemini-3.1-pro` upstream id — see ANTIGRAVITY_MODEL_ALIASES.
-  assert.ok(ids.has("antigravity/gemini-3.1-pro-high"));
+  // Client-visible preview ids are advertised; the upstream internal ids they alias to
+  // (see ANTIGRAVITY_MODEL_ALIASES) are not.
+  assert.ok(ids.has("antigravity/gemini-3-pro-image-preview"));
+  assert.ok(ids.has("antigravity/gemini-2.5-computer-use-preview-10-2025"));
+  assert.equal(ids.has("antigravity/gemini-3-pro-image"), false);
+  assert.equal(ids.has("antigravity/rev19-uic3-1p"), false);
+  // Gemini 3.8 Flash is the live Flash line: its three tiers are the real upstream ids.
+  assert.ok(ids.has("antigravity/gemini-3.8-flash-low"));
+  assert.ok(ids.has("antigravity/gemini-3.8-flash-medium"));
+  assert.ok(ids.has("antigravity/gemini-3.8-flash-high"));
+  assert.ok(ids.has("antigravity/gemini-3.1-flash-lite"));
+  // 2026-10-23: Google retired Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro, so none of them
+  // (nor their legacy upstream ids) is advertised any more.
+  for (const retiredId of [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-pro-agent",
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-high",
+    "gemini-3-flash-preview",
+    "gemini-3-flash-agent",
+  ]) {
+    assert.equal(
+      ids.has(`antigravity/${retiredId}`),
+      false,
+      `antigravity/${retiredId} is retired and must not be listed`
+    );
+  }
   // The legacy `gemini-claude-*` ids are alias KEYS (remapped to live upstream
   // ids), not public catalog entries, so they stay unexposed.
   assert.equal(ids.has("antigravity/gemini-claude-sonnet-4-5"), false);

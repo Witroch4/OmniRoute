@@ -994,7 +994,12 @@ test("provider models route falls back through all Antigravity discovery endpoin
     "https://cloudcode-pa.googleapis.com/v1internal:models",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:models",
   ]);
-  assert.ok(body.models.some((model) => model.id === "gemini-3-pro-preview"));
+  assert.ok(body.models.some((model) => model.id === "gemini-3.8-flash-high"));
+  // 2026-10-23: retired by Google, so the local catalog must not offer it.
+  assert.equal(
+    body.models.some((model) => model.id === "gemini-3-pro-preview"),
+    false
+  );
 });
 
 test("provider models route returns the local catalog for OAuth-backed Qwen connections", async () => {

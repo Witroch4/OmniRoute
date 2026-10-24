@@ -58,12 +58,35 @@ test("agy ships its own catalog including the Claude models antigravity omits", 
   // The retired 4.6 ids must NOT be advertised again (upstream: "no longer available").
   assert.ok(!ids.includes("claude-opus-4-6-thinking"));
   assert.ok(!ids.includes("claude-sonnet-4-6"));
-  assert.ok(ids.includes("gemini-3.5-flash-low"), "must expose clean Flash Low tier");
-  assert.ok(ids.includes("gemini-3.5-flash-medium"), "must expose clean Flash Medium tier");
-  assert.ok(ids.includes("gemini-3.5-flash-high"), "must expose clean Flash High tier");
-  assert.ok(!ids.includes("gemini-3-flash-agent"));
-  assert.ok(!ids.includes("gemini-3-flash"));
-  assert.ok(!ids.includes("gemini-3.5-flash-extra-low"));
+  // Gemini 3.8 Flash is the live Flash line: the three tiers are the real upstream ids.
+  assert.ok(ids.includes("gemini-3.8-flash-low"), "must expose clean Flash Low tier");
+  assert.ok(ids.includes("gemini-3.8-flash-medium"), "must expose clean Flash Medium tier");
+  assert.ok(ids.includes("gemini-3.8-flash-high"), "must expose clean Flash High tier");
+  assert.ok(ids.includes("gemini-3.1-flash-lite"));
+  assert.ok(ids.includes("gemini-3.1-flash-image"));
+  assert.ok(ids.includes("gemini-2.5-pro"));
+  assert.ok(ids.includes("gpt-oss-120b-medium"));
+  // 2026-10-23: Google retired Gemini 3.5/3.6/3.7 Flash and Gemini 3.1 Pro (-high/-low,
+  // -agent); they must not be advertised again, nor under their legacy upstream ids.
+  for (const retiredId of [
+    "gemini-3.5-flash-low",
+    "gemini-3.5-flash-medium",
+    "gemini-3.5-flash-high",
+    "gemini-3.5-flash-extra-low",
+    "gemini-3.6-flash-low",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-low",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-high",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-pro-agent",
+    "gemini-3-flash-agent",
+    "gemini-3-flash",
+  ]) {
+    assert.ok(!ids.includes(retiredId), `${retiredId} is retired and must not be advertised`);
+  }
   // Tab-completion models are not chat-callable and must be excluded.
   assert.ok(!ids.includes("tab_flash_lite_preview"));
   assert.ok(!ids.includes("tab_jump_flash_lite_preview"));
@@ -73,10 +96,14 @@ test("agy ships its own catalog including the Claude models antigravity omits", 
 test("agy model helpers resolve catalog ids and display names", () => {
   assert.equal(isUserCallableAgyModelId("claude-opus-5-5-high"), true);
   assert.equal(isUserCallableAgyModelId("claude-sonnet-5-5-low"), true);
+  assert.equal(isUserCallableAgyModelId("gemini-3.8-flash-high"), true);
+  assert.equal(isUserCallableAgyModelId("gemini-3.5-flash-high"), false);
+  assert.equal(isUserCallableAgyModelId("gemini-3.1-pro-high"), false);
   assert.equal(isUserCallableAgyModelId("tab_flash_lite_preview"), false);
   assert.equal(isUserCallableAgyModelId(""), false);
   assert.equal(getClientVisibleAgyModelName("claude-opus-5-5-high"), "Claude Opus 5.5 (High)");
   assert.equal(getClientVisibleAgyModelName("claude-sonnet-5-5-low"), "Claude Sonnet 5.5 (Low)");
+  assert.equal(getClientVisibleAgyModelName("gemini-3.8-flash-high"), "Gemini 3.8 Flash (High)");
   assert.equal(getClientVisibleAgyModelName("unknown-model", "Fallback"), "Fallback");
 });
 

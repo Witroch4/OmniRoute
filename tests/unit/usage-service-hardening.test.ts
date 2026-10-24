@@ -185,7 +185,7 @@ test("usage service covers Antigravity quota parsing, exclusions and forbidden a
             "gemini-unlimited": {
               quotaInfo: {},
             },
-            "gemini-pro-agent": {
+            "gemini-2.5-pro": {
               quotaInfo: { remainingFraction: 1 },
             },
             "internal-model": {
@@ -210,9 +210,9 @@ test("usage service covers Antigravity quota parsing, exclusions and forbidden a
   // #3184: claude-sonnet-4-6 is user-callable on the Antigravity backend, so its quota is
   // surfaced. tab_flash_lite_preview (not chat-callable), gemini-unlimited (no quota), and
   // internal-model (internal) are still filtered out by the hardening logic.
-  assert.deepEqual(Object.keys(usage.quotas).sort(), ["claude-sonnet-4-6", "gemini-pro-agent"]);
-  assert.equal(usage.quotas["gemini-pro-agent"].total, 0);
-  assert.equal(usage.quotas["gemini-pro-agent"].remainingPercentage, 100);
+  assert.deepEqual(Object.keys(usage.quotas).sort(), ["claude-sonnet-4-6", "gemini-2.5-pro"]);
+  assert.equal(usage.quotas["gemini-2.5-pro"].total, 0);
+  assert.equal(usage.quotas["gemini-2.5-pro"].remainingPercentage, 100);
   assert.equal(usage.quotas["claude-sonnet-4-6"].remainingPercentage, 40);
   const loadCodeAssistCall = calls.find((call) => call.url.includes("loadCodeAssist"));
   assert.match(loadCodeAssistCall?.url, /daily-cloudcode-pa\.sandbox\.googleapis\.com/);
@@ -256,7 +256,7 @@ test("usage service prefers Antigravity retrieveUserQuota over catalog quotaInfo
       return new Response(
         JSON.stringify({
           models: {
-            "gemini-3.5-flash-high": {
+            "gemini-3.8-flash-high": {
               quotaInfo: {
                 remainingFraction: 1,
                 resetTime: new Date(Date.now() + 60_000).toISOString(),
@@ -273,7 +273,7 @@ test("usage service prefers Antigravity retrieveUserQuota over catalog quotaInfo
         JSON.stringify({
           buckets: [
             {
-              modelId: "gemini-3.5-flash-high",
+              modelId: "gemini-3.8-flash-high",
               remainingFraction: 0.25,
               resetTime: new Date(Date.now() + 60_000).toISOString(),
             },
@@ -291,12 +291,12 @@ test("usage service prefers Antigravity retrieveUserQuota over catalog quotaInfo
     accessToken: `ag-token-live-quota-${Date.now()}`,
   });
 
-  assert.equal(usage.quotas["gemini-3.5-flash-high"].remainingPercentage, 25);
-  assert.equal(usage.quotas["gemini-3.5-flash-high"].used, 750);
-  assert.equal(usage.quotas["gemini-3.5-flash-high"].quotaSource, "retrieveUserQuota");
+  assert.equal(usage.quotas["gemini-3.8-flash-high"].remainingPercentage, 25);
+  assert.equal(usage.quotas["gemini-3.8-flash-high"].used, 750);
+  assert.equal(usage.quotas["gemini-3.8-flash-high"].quotaSource, "retrieveUserQuota");
 });
 
-test("usage service normalizes retired Antigravity quota bucket ids", async () => {
+test("usage service drops retired Antigravity quota bucket ids and keeps live tiers", async () => {
   globalThis.fetch = async (url) => {
     const urlString = String(url);
 
@@ -314,6 +314,12 @@ test("usage service normalizes retired Antigravity quota bucket ids", async () =
       return new Response(
         JSON.stringify({
           models: {
+            "gemini-3.8-flash-low": { quotaInfo: { remainingFraction: 1 } },
+            "gemini-3.8-flash-medium": { quotaInfo: { remainingFraction: 1 } },
+            "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 1 } },
+            // Retired Gemini 3.5 Flash buckets (Google removed the family): the legacy upstream
+            // ids still normalise to the old 3.5 client tiers, which are no longer in the public
+            // catalog, so none of them may be reported.
             "gemini-3.5-flash-low": { quotaInfo: { remainingFraction: 1 } },
             "gemini-3.5-flash-high": { quotaInfo: { remainingFraction: 1 } },
             "gemini-3-flash-agent": { quotaInfo: { remainingFraction: 1 } },
@@ -328,6 +334,8 @@ test("usage service normalizes retired Antigravity quota bucket ids", async () =
       return new Response(
         JSON.stringify({
           buckets: [
+            { modelId: "gemini-3.8-flash-high", remainingFraction: 0.5 },
+            { modelId: "gemini-3.8-flash-low", remainingFraction: 0.25 },
             { modelId: "gemini-3-flash-agent", remainingFraction: 0.5 },
             { modelId: "gemini-3.5-flash-extra-low", remainingFraction: 0.25 },
           ],
@@ -344,11 +352,17 @@ test("usage service normalizes retired Antigravity quota bucket ids", async () =
     accessToken: `ag-token-legacy-buckets-${Date.now()}`,
   });
 
+  // Retired buckets: neither the legacy upstream ids nor the 3.5 client tiers they used to
+  // normalise to are reported any more.
   assert.equal(usage.quotas["gemini-3-flash-agent"], undefined);
   assert.equal(usage.quotas["gemini-3.5-flash-extra-low"], undefined);
-  assert.equal(usage.quotas["gemini-3.5-flash-high"].remainingPercentage, 50);
-  assert.equal(usage.quotas["gemini-3.5-flash-medium"].remainingPercentage, 100);
-  assert.equal(usage.quotas["gemini-3.5-flash-low"].remainingPercentage, 25);
+  assert.equal(usage.quotas["gemini-3.5-flash-high"], undefined);
+  assert.equal(usage.quotas["gemini-3.5-flash-medium"], undefined);
+  assert.equal(usage.quotas["gemini-3.5-flash-low"], undefined);
+  // Live Gemini 3.8 Flash tiers keep their own ids and their own (live) quota fractions.
+  assert.equal(usage.quotas["gemini-3.8-flash-high"].remainingPercentage, 50);
+  assert.equal(usage.quotas["gemini-3.8-flash-medium"].remainingPercentage, 100);
+  assert.equal(usage.quotas["gemini-3.8-flash-low"].remainingPercentage, 25);
 });
 
 test("usage service retries Antigravity fetchAvailableModels across the shared fallback order", async () => {
@@ -377,7 +391,7 @@ test("usage service retries Antigravity fetchAvailableModels across the shared f
     return new Response(
       JSON.stringify({
         models: {
-          "gemini-pro-agent": {
+          "gemini-2.5-pro": {
             quotaInfo: {
               remainingFraction: 0.5,
               resetTime: new Date(Date.now() + 60_000).toISOString(),
@@ -402,7 +416,7 @@ test("usage service retries Antigravity fetchAvailableModels across the shared f
   );
   assert.match(quotaCalls[2].init.headers["User-Agent"], /^Antigravity\//);
   assert.equal(usage.plan, "Business");
-  assert.ok(usage.quotas["gemini-pro-agent"] !== undefined);
+  assert.ok(usage.quotas["gemini-2.5-pro"] !== undefined);
 });
 
 test("usage service manual Antigravity refresh bypasses usage TTL caches", async () => {
