@@ -522,6 +522,70 @@ export function getApiKeyUsageRows(
 }
 
 // ---------------------------------------------------------------------------
+// Per-device usage — /api/usage/devices (migration 171 client_ip)
+// ---------------------------------------------------------------------------
+
+export interface ApiKeyDeviceUsageRow {
+  apiKeyId: string;
+  apiKeyName: string | null;
+  clientIp: string | null;
+  provider: string | null;
+  model: string | null;
+  serviceTier: string;
+  requests: number;
+  succeeded: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+  lcPromptTokens: number;
+  lcCompletionTokens: number;
+  lcCacheReadTokens: number;
+  lcCacheCreationTokens: number;
+  lcReasoningTokens: number;
+  lastSeen: string;
+}
+
+export interface ApiKeyDeviceUsageParams {
+  since: string;
+  until: string;
+  apiKeyId: string | null;
+}
+
+/**
+ * Usage per API key x client tailnet IP x provider/model/tier in `[since, until)`.
+ * Rows without a client IP (history before migration 171) group under `clientIp: null`.
+ * Carries the long-context token split so callers can price each row per request tier.
+ */
+export function getApiKeyDeviceUsageRows(params: ApiKeyDeviceUsageParams): ApiKeyDeviceUsageRow[] {
+  return getDbInstance()
+    .prepare(
+      `SELECT api_key_id as apiKeyId, MAX(api_key_name) as apiKeyName, client_ip as clientIp,
+              LOWER(provider) as provider, LOWER(model) as model,
+              COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+              COUNT(*) as requests, SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as succeeded,
+              COALESCE(SUM(tokens_input), 0) as promptTokens,
+              COALESCE(SUM(tokens_output), 0) as completionTokens,
+              COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
+              COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
+              COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+              ${longContextSumColumns()},
+              MAX(timestamp) as lastSeen
+         FROM usage_history
+        WHERE timestamp >= @since AND timestamp < @until
+          AND api_key_id IS NOT NULL
+          AND (@apiKeyId IS NULL OR api_key_id = @apiKeyId)
+        GROUP BY api_key_id, client_ip, LOWER(provider), LOWER(model), serviceTier`
+    )
+    .all({
+      since: params.since,
+      until: params.until,
+      apiKeyId: params.apiKeyId,
+    }) as ApiKeyDeviceUsageRow[];
+}
+
+// ---------------------------------------------------------------------------
 
 export interface ServiceTierUsageRow {
   serviceTier: string;
