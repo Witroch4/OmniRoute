@@ -5,7 +5,7 @@ import {
   createMiddlewareHook,
   getMiddlewareHook,
   getHookLogs,
-} from "@/lib/localDb";
+} from "@/lib/db/middleware";
 import { registerHook, getAllHooks } from "@/lib/middleware/registry";
 import type { HookConfig, CreateHookRequest } from "@/lib/middleware/types";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";

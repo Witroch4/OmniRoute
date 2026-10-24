@@ -1,7 +1,10 @@
 "use client";
 
+import Icon from "@/shared/components/Icon";
+
 import { useState } from "react";
-import { Card } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import { Button, Card } from "@/shared/components";
 import { useServiceStatus } from "../hooks/useServiceStatus";
 
 const NAME = "9router";
@@ -11,6 +14,7 @@ const NAME = "9router";
  * CSP exception (`frame-ancestors 'self'`) is applied to this proxy path in next.config.mjs.
  */
 export function NinerouterEmbedFrame() {
+  const t = useTranslations("embeddedServices");
   const { data } = useServiceStatus(NAME);
   const [expanded, setExpanded] = useState(false);
 
@@ -20,33 +24,33 @@ export function NinerouterEmbedFrame() {
 
   return (
     <Card padding="none" className="overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover:bg-bg-subtle transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[16px] text-text-muted">web</span>
-          9Router Web UI
+      <div className="flex items-center justify-between gap-2 px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          <Icon name="web" size={16} className="text-text-muted" />
+          {t("webUi")}
           <a
             href="/dashboard/providers/services/9router/embed/"
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs font-normal text-primary hover:underline"
-            onClick={(e) => e.stopPropagation()}
           >
-            open in new tab
+            {t("openNewTab")}
           </a>
         </div>
-        <span className="material-symbols-outlined text-[16px] text-text-muted">
-          {expanded ? "expand_less" : "expand_more"}
-        </span>
-      </button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          icon={expanded ? "expand_less" : "expand_more"}
+          aria-label={t("webUi")}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+        />
+      </div>
 
       {expanded && (
         <iframe
           src="/dashboard/providers/services/9router/embed/"
-          title="9Router Web UI"
+          title={t("webUi")}
           className="h-[600px] w-full border-t border-border"
           sandbox="allow-scripts allow-same-origin allow-forms"
         />

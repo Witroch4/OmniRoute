@@ -1,19 +1,21 @@
+import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import {
   DEFAULT_ANTIGRAVITY_CLIENT_PROFILE,
   normalizeAntigravityClientProfile,
   type AntigravityClientProfile,
 } from "@/shared/constants/antigravityClientProfile";
 import { getAntigravityCliCloudCodeHeaders } from "../config/antigravityCliClient.ts";
-import {
-  deriveAntigravityMachineId,
-  getAntigravityVscodeSessionId,
-  type AntigravityCredentialsLike,
-} from "./antigravityIdentity.ts";
+import type { AntigravityCredentialsLike } from "./antigravityIdentity.ts";
 import {
   antigravityUserAgent,
   getAntigravityLoadCodeAssistMetadata,
 } from "./antigravityHeaders.ts";
-import { getCachedAntigravityVersion } from "./antigravityVersion.ts";
+import {
+  getCachedAntigravityVersion,
+  resolveAntigravityCliVersion,
+  resolveAntigravityIdeVersion,
+} from "./antigravityVersion.ts";
 
 export {
   ANTIGRAVITY_CLIENT_PROFILE_VALUES,
@@ -26,6 +28,41 @@ type AntigravityProfileCredentials = AntigravityCredentialsLike & {
   providerSpecificData?: Record<string, unknown> | null;
 };
 
+// Legacy "ide" profile identity helpers (x-machine-id / x-vscode-sessionid). The default
+// "cli" profile never sends them; they live here because the shared identity module
+// dropped them upstream.
+const PROCESS_SESSION_ID = crypto.randomUUID();
+const runtimeRequire = createRequire(import.meta.url);
+
+type NodeMachineIdModule = {
+  machineIdSync?: (original?: boolean) => string;
+  default?: {
+    machineIdSync?: (original?: boolean) => string;
+  };
+};
+
+let systemMachineIdSync: ((original?: boolean) => string) | null = null;
+try {
+  const machineIdModule = runtimeRequire("node-machine-id") as NodeMachineIdModule;
+  systemMachineIdSync =
+    machineIdModule.machineIdSync ?? machineIdModule.default?.machineIdSync ?? null;
+} catch {
+  systemMachineIdSync = null;
+}
+
+/** Raw OS machine id for the legacy "ide" profile (null when unreadable). */
+export function deriveAntigravityMachineId(): string | null {
+  try {
+    const systemMachineId = systemMachineIdSync?.(true);
+    if (typeof systemMachineId === "string" && systemMachineId.trim()) {
+      return systemMachineId.trim();
+    }
+  } catch {
+    // Antigravity Manager omits x-machine-id when machine_uid cannot read the OS id.
+  }
+  return null;
+}
+
 export function getAntigravityClientProfile(
   credentials?: AntigravityProfileCredentials | null
 ): AntigravityClientProfile {
@@ -37,6 +74,16 @@ export function getAntigravityClientProfile(
       : undefined;
 
   return normalizeAntigravityClientProfile(fromProviderData);
+}
+
+/**
+ * Version of the client a profile presents. `cli` is pinned with its changelist in
+ * antigravityCliClient.ts (no lookup); the legacy `ide` profile resolves the IDE version.
+ */
+export function resolveAntigravityClientVersion(
+  profile: AntigravityClientProfile = DEFAULT_ANTIGRAVITY_CLIENT_PROFILE
+): Promise<string> {
+  return profile === "ide" ? resolveAntigravityIdeVersion() : resolveAntigravityCliVersion();
 }
 
 export function removeHeaderCaseInsensitive(headers: Record<string, string>, name: string): void {
@@ -102,13 +149,13 @@ export function applyAntigravityClientProfileHeaders(
   headers["User-Agent"] = antigravityUserAgent();
   headers["x-client-name"] = "antigravity";
   headers["x-client-version"] = version;
-  const machineId = deriveAntigravityMachineId(credentials);
+  const machineId = deriveAntigravityMachineId();
   if (machineId) {
     headers["x-machine-id"] = machineId;
   } else {
     removeHeaderCaseInsensitive(headers, "x-machine-id");
   }
-  headers["x-vscode-sessionid"] = getAntigravityVscodeSessionId();
+  headers["x-vscode-sessionid"] = PROCESS_SESSION_ID;
   removeHeaderCaseInsensitive(headers, "X-Goog-Api-Client");
   removeHeaderCaseInsensitive(headers, "Client-Metadata");
 

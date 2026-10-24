@@ -849,6 +849,31 @@ test("lookupEnrichment: short-alias (e.g. dg/nova-3) → bare-id fallback hits",
   assert.equal(hit?.name, "Nova 3 (Transcription)");
 });
 
+test("lookupEnrichment: bare-id fallback drops a foreign provider's metadata [#14966]", () => {
+  // `ih/kimi-k3` comes from a generic adapter (owned_by `ih`). The bare `kimi-k3` key
+  // belongs to ollama-cloud: its label, free budget and pricing must not be carried over.
+  const map: OmniRouteEnrichmentMap = new Map([
+    [
+      "kimi-k3",
+      {
+        name: "kimi-k3",
+        providerAlias: "ollama-cloud",
+        providerCanonical: "ollama-cloud",
+        providerDisplayName: "Ollama-cloud",
+        freeType: "recurring-credit",
+        creditTokens: 1_000_000,
+      },
+    ],
+  ]);
+  const c2a = buildCanonicalToAliasMap(map);
+  assert.deepEqual(lookupEnrichment("ih/kimi-k3", map, c2a, "ih"), { name: "kimi-k3" });
+  assert.deepEqual(lookupEnrichment("ih/kimi-k3", map, c2a), { name: "kimi-k3" });
+  // The entry's own provider keeps the whole entry.
+  const own = lookupEnrichment("ollama/kimi-k3", map, c2a, "ollama-cloud");
+  assert.equal(own?.providerDisplayName, "Ollama-cloud");
+  assert.equal(own?.creditTokens, 1_000_000);
+});
+
 test("lookupEnrichment: nothing matches → undefined", () => {
   const map = makeEnrichmentMap([{ key: "cc/claude-opus-4-7", name: "Claude Opus 4.7" }]);
   const c2a = buildCanonicalToAliasMap(map);

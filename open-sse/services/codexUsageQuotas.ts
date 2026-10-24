@@ -1,9 +1,15 @@
 import {
+  CODEX_RESERVE_DISPLAY_NAME,
+  CODEX_RESERVE_QUOTA_SESSION,
+  CODEX_RESERVE_QUOTA_WEEKLY,
   CODEX_SPARK_DISPLAY_NAME,
   CODEX_SPARK_QUOTA_SESSION,
   CODEX_SPARK_QUOTA_WEEKLY,
+  isCodexReserveLimitDescriptor,
   isCodexSparkLimitDescriptor,
 } from "../config/codexQuotaScopes.ts";
+import { inferWindowFamilyLabel } from "./quotaWindowLabel.ts";
+import { parseCodexPaidCredits, type CodexPaidCredits } from "@/lib/providers/codexPaidCredits";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -13,6 +19,7 @@ export type CodexUsageQuota = {
   remaining?: number;
   resetAt: string | null;
   unlimited: boolean;
+  windowSeconds: number | null;
   displayName?: string;
 };
 
@@ -36,6 +43,15 @@ function toNumber(value: unknown, fallback = 0): number {
     return Number.isFinite(parsed) ? parsed : fallback;
   }
   return fallback;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function parseResetTime(resetValue: unknown): string | null {
@@ -81,17 +97,74 @@ function buildPercentageQuota(window: JsonRecord, displayName?: string): CodexUs
     remaining: 100 - usedPercent,
     resetAt: parseWindowReset(window),
     unlimited: false,
+    windowSeconds: toNullableNumber(
+      getFieldValue(
+        window,
+        "limit_window_seconds",
+        "limitWindowSeconds",
+        "window_seconds",
+        "windowSeconds"
+      )
+    ),
     ...(displayName ? { displayName } : {}),
   };
 }
 
-function findCodexSparkRateLimit(data: JsonRecord): JsonRecord {
+// A window whose duration is >= this is a weekly (or longer) window; <= the
+// session threshold is a short rolling ("session") window. ChatGPT reports the
+// window length in `limit_window_seconds`, so labels can follow the real
+// duration instead of assuming primary=session / secondary=weekly by position.
+const WEEKLY_MIN_WINDOW_SECONDS = 6 * 24 * 3600; // >= ~6d
+const SESSION_MAX_WINDOW_SECONDS = 6 * 3600; // <= ~6h
+const MONTHLY_MIN_WINDOW_SECONDS = 20 * 24 * 3600; // >= ~20d (ChatGPT 30d plans)
+
+/**
+ * A never-started window: `used_percent === 0` and the reset still spans the
+ * entire window (`reset_after_seconds >= limit_window_seconds`). ChatGPT
+ * advertises latent per-feature ceilings (e.g. the spark bucket) to accounts
+ * that have never used them; such a window recomputes its reset as
+ * `now + full_window` on every fetch and is not actionable, so callers skip it.
+ */
+function isLatentWindow(window: JsonRecord): boolean {
+  const usedPercent = toNumber(getFieldValue(window, "used_percent", "usedPercent"), NaN);
+  const limitWindow = toNumber(
+    getFieldValue(window, "limit_window_seconds", "limitWindowSeconds"),
+    0
+  );
+  const resetAfter = toNumber(getFieldValue(window, "reset_after_seconds", "resetAfterSeconds"), 0);
+  return usedPercent === 0 && limitWindow > 0 && resetAfter >= limitWindow;
+}
+
+/**
+ * Derive a duration-accurate label from the window's `limit_window_seconds`, so
+ * e.g. a 7-day `primary_window` is labeled "Weekly" rather than "Session".
+ * Returns undefined for durations that don't clearly map to either bucket.
+ */
+function windowDurationLabel(window: JsonRecord): "Session" | "Weekly" | "Monthly" | undefined {
+  const limitWindow = toNumber(
+    getFieldValue(window, "limit_window_seconds", "limitWindowSeconds"),
+    0
+  );
+  if (limitWindow <= 0) return undefined;
+  const inferred = inferWindowFamilyLabel(limitWindow);
+  if (inferred === "Monthly" || inferred === "Weekly" || inferred === "Session") return inferred;
+  if (limitWindow >= MONTHLY_MIN_WINDOW_SECONDS) return "Monthly";
+  if (limitWindow >= WEEKLY_MIN_WINDOW_SECONDS) return "Weekly";
+  if (limitWindow <= SESSION_MAX_WINDOW_SECONDS) return "Session";
+  return undefined;
+}
+
+function findCodexSparkRateLimit(data: JsonRecord): {
+  rateLimit: JsonRecord;
+  /** The spark limit's own `limit_name` from the payload, when present. */
+  limitName?: string;
+} {
   const additionalRateLimits = getFieldValue(
     data,
     "additional_rate_limits",
     "additionalRateLimits"
   );
-  if (!Array.isArray(additionalRateLimits)) return {};
+  if (!Array.isArray(additionalRateLimits)) return { rateLimit: {} };
 
   for (const entryValue of additionalRateLimits) {
     const entry = toRecord(entryValue);
@@ -107,10 +180,102 @@ function findCodexSparkRateLimit(data: JsonRecord): JsonRecord {
         getFieldValue(entry, "model_id", "modelId")
       )
     ) {
-      return toRecord(getFieldValue(entry, "rate_limit", "rateLimit"));
+      const rawLimitName = getFieldValue(entry, "limit_name", "limitName");
+      const limitName =
+        typeof rawLimitName === "string" && rawLimitName.trim().length > 0
+          ? rawLimitName.trim()
+          : undefined;
+      return {
+        rateLimit: toRecord(getFieldValue(entry, "rate_limit", "rateLimit")),
+        ...(limitName ? { limitName } : {}),
+      };
     }
   }
-  return {};
+  return { rateLimit: {} };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/** The reserve entry's own rate limit, whether nested under `rate_limit` or inlined. */
+function reserveRateLimitOf(entry: JsonRecord): JsonRecord {
+  const nested = toRecord(getFieldValue(entry, "rate_limit", "rateLimit"));
+  return Object.keys(nested).length > 0 ? nested : entry;
+}
+
+/**
+ * Locate the reserve pool (e.g. `limit_name: "gpt-reserve"`, normal model
+ * `gpt-5.6-luna`): first `rate_limits_by_limit_id["gpt-reserve"|"gpt_reserve"|"reserve"]`,
+ * else an `additional_rate_limits` entry whose descriptor mentions "reserve".
+ * Tolerant and fail-soft: an unexpected shape just yields no reserve rows.
+ */
+function findCodexReserveEntry(data: JsonRecord): JsonRecord | null {
+  const byLimitId = toRecord(getFieldValue(data, "rate_limits_by_limit_id", "rateLimitsByLimitId"));
+  for (const key of ["gpt-reserve", "gpt_reserve", "reserve"]) {
+    const direct = toRecord(byLimitId[key]);
+    if (Object.keys(direct).length > 0) return direct;
+  }
+
+  const additionalRateLimits = getFieldValue(
+    data,
+    "additional_rate_limits",
+    "additionalRateLimits"
+  );
+  if (!Array.isArray(additionalRateLimits)) return null;
+  for (const entryValue of additionalRateLimits) {
+    const entry = toRecord(entryValue);
+    if (
+      isCodexReserveLimitDescriptor(
+        getFieldValue(entry, "limit_name", "limitName"),
+        getFieldValue(entry, "metered_feature", "meteredFeature"),
+        getFieldValue(entry, "limit_id", "limitId"),
+        entry["id"]
+      )
+    ) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/** "gpt-5.6-luna" -> "GPT-5.6 Luna Reserve"; falls back to CODEX_RESERVE_DISPLAY_NAME. */
+function codexReserveDisplayName(entry: JsonRecord): string {
+  const slug = nonEmptyString(getFieldValue(entry, "normal_model_slug", "normalModelSlug"));
+  const match = slug?.match(/^gpt[-_]?(\d+(?:\.\d+)*)[-_\s]+([a-z][\w.-]*)$/i);
+  if (!match) return CODEX_RESERVE_DISPLAY_NAME;
+  const family = match[2]
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+  return `GPT-${match[1]} ${family} Reserve`;
+}
+
+/**
+ * Add the reserve pool's rows (display-only — see omitCodexDisplayOnlyQuotas).
+ * Keys follow the window position like the spark rows; the display label
+ * follows the real window duration, and latent never-used windows are skipped.
+ */
+function appendCodexReserveQuotas(data: JsonRecord, quotas: Record<string, CodexUsageQuota>) {
+  const entry = findCodexReserveEntry(data);
+  if (!entry) return;
+  const rateLimit = reserveRateLimitOf(entry);
+  const displayName = codexReserveDisplayName(entry);
+  const windows: Array<[string, unknown, string]> = [
+    [CODEX_RESERVE_QUOTA_SESSION, getFieldValue(rateLimit, "primary_window", "primaryWindow"), ""],
+    [
+      CODEX_RESERVE_QUOTA_WEEKLY,
+      getFieldValue(rateLimit, "secondary_window", "secondaryWindow"),
+      "Weekly",
+    ],
+  ];
+  for (const [key, windowValue, fallbackLabel] of windows) {
+    const window = toRecord(windowValue);
+    if (Object.keys(window).length === 0 || isLatentWindow(window)) continue;
+    const label = windowDurationLabel(window) || fallbackLabel;
+    quotas[key] = buildPercentageQuota(window, label ? `${displayName} ${label}` : displayName);
+  }
 }
 
 /**
@@ -170,7 +335,9 @@ function findCodexReviewRateLimit(data: JsonRecord): JsonRecord {
  * (issue #5199).
  */
 function parseBankedResetCredits(data: JsonRecord): number | undefined {
-  const resetCredits = toRecord(getFieldValue(data, "rate_limit_reset_credits", "rateLimitResetCredits"));
+  const resetCredits = toRecord(
+    getFieldValue(data, "rate_limit_reset_credits", "rateLimitResetCredits")
+  );
   const availableCount = getFieldValue(resetCredits, "available_count", "availableCount");
   const count = toNumber(availableCount, NaN);
   return Number.isFinite(count) ? count : undefined;
@@ -185,6 +352,7 @@ function parseRateLimitReachedType(data: JsonRecord): string | undefined {
 }
 
 export function buildCodexUsageQuotas(dataValue: unknown): {
+  paidCredits?: CodexPaidCredits;
   rateLimit: JsonRecord;
   quotas: Record<string, CodexUsageQuota>;
   /** Banked reset credits available on the account (undefined when absent/not eligible). */
@@ -193,17 +361,33 @@ export function buildCodexUsageQuotas(dataValue: unknown): {
   rateLimitReachedType?: string;
 } {
   const data = toRecord(dataValue);
+  const paidCredits = parseCodexPaidCredits(data.credits);
   const rateLimit = toRecord(getFieldValue(data, "rate_limit", "rateLimit"));
   const quotas: Record<string, CodexUsageQuota> = {};
   const bankedResetCredits = parseBankedResetCredits(data);
   const rateLimitReachedType = parseRateLimitReachedType(data);
 
+  // The `session`/`weekly` keys carry routing semantics (combo quota scoring,
+  // preflight, cooldowns) and stay position-based. Only the display label is
+  // corrected from the real window duration, so a `primary_window` that is
+  // actually a 7-day window shows "Weekly" instead of "Session".
   const primaryWindow = toRecord(getFieldValue(rateLimit, "primary_window", "primaryWindow"));
-  if (Object.keys(primaryWindow).length > 0) quotas.session = buildPercentageQuota(primaryWindow);
+  if (Object.keys(primaryWindow).length > 0) {
+    const primaryLabel = windowDurationLabel(primaryWindow);
+    quotas.session = buildPercentageQuota(
+      primaryWindow,
+      primaryLabel === "Weekly" || primaryLabel === "Monthly" ? primaryLabel : undefined
+    );
+  }
 
   const secondaryWindow = toRecord(getFieldValue(rateLimit, "secondary_window", "secondaryWindow"));
-  if (Object.keys(secondaryWindow).length > 0)
-    quotas.weekly = buildPercentageQuota(secondaryWindow);
+  if (Object.keys(secondaryWindow).length > 0) {
+    const secondaryLabel = windowDurationLabel(secondaryWindow);
+    quotas.weekly = buildPercentageQuota(
+      secondaryWindow,
+      secondaryLabel === "Session" ? secondaryLabel : undefined
+    );
+  }
 
   // Resolve the code-review rate limit block. ChatGPT Codex exposes the same
   // information under two different shapes depending on the plan tier
@@ -240,31 +424,62 @@ export function buildCodexUsageQuotas(dataValue: unknown): {
     quotas.code_review_weekly = buildPercentageQuota(codeReviewSecondaryWindow);
   }
 
-  const sparkRateLimit = findCodexSparkRateLimit(data);
+  const spark = findCodexSparkRateLimit(data);
+  const sparkRateLimit = spark.rateLimit;
+  // Prefer the payload's own `limit_name` so the label tracks whatever OpenAI
+  // reports (e.g. as the spark model version bumps) rather than a hardcoded
+  // constant; fall back to the constant when the field is absent.
+  const sparkDisplayName = spark.limitName || CODEX_SPARK_DISPLAY_NAME;
   const sparkPrimaryWindow = toRecord(
     getFieldValue(sparkRateLimit, "primary_window", "primaryWindow")
   );
-  if (Object.keys(sparkPrimaryWindow).length > 0) {
-    quotas[CODEX_SPARK_QUOTA_SESSION] = buildPercentageQuota(
-      sparkPrimaryWindow,
-      CODEX_SPARK_DISPLAY_NAME
-    );
+  // Skip latent (never-used, full-window) spark ceilings so they don't render as
+  // a permanent 100% row with a meaningless always-full reset. Once the account
+  // actually uses the spark model the window is no longer latent and appears.
+  if (Object.keys(sparkPrimaryWindow).length > 0 && !isLatentWindow(sparkPrimaryWindow)) {
+    quotas[CODEX_SPARK_QUOTA_SESSION] = buildPercentageQuota(sparkPrimaryWindow, sparkDisplayName);
   }
 
   const sparkSecondaryWindow = toRecord(
     getFieldValue(sparkRateLimit, "secondary_window", "secondaryWindow")
   );
-  if (Object.keys(sparkSecondaryWindow).length > 0) {
+  if (Object.keys(sparkSecondaryWindow).length > 0 && !isLatentWindow(sparkSecondaryWindow)) {
     quotas[CODEX_SPARK_QUOTA_WEEKLY] = buildPercentageQuota(
       sparkSecondaryWindow,
-      `${CODEX_SPARK_DISPLAY_NAME} Weekly`
+      `${sparkDisplayName} Weekly`
     );
   }
+
+  appendCodexReserveQuotas(data, quotas);
 
   return {
     rateLimit,
     quotas,
-    ...(bankedResetCredits !== undefined ? { bankedResetCredits } : {}),
-    ...(rateLimitReachedType !== undefined ? { rateLimitReachedType } : {}),
+    ...buildOptionalUsageFields({ bankedResetCredits, paidCredits, rateLimitReachedType }),
+  };
+}
+
+/**
+ * Merges the optional top-level fields of buildCodexUsageQuotas' return value,
+ * isolated so the presence-check ternaries don't count against the parent
+ * function's cyclomatic/cognitive complexity ratchet.
+ */
+function buildOptionalUsageFields(fields: {
+  bankedResetCredits: number | undefined;
+  paidCredits: CodexPaidCredits | undefined;
+  rateLimitReachedType: string | undefined;
+}): {
+  bankedResetCredits?: number;
+  paidCredits?: CodexPaidCredits;
+  rateLimitReachedType?: string;
+} {
+  return {
+    ...(fields.bankedResetCredits !== undefined
+      ? { bankedResetCredits: fields.bankedResetCredits }
+      : {}),
+    ...(fields.paidCredits ? { paidCredits: fields.paidCredits } : {}),
+    ...(fields.rateLimitReachedType !== undefined
+      ? { rateLimitReachedType: fields.rateLimitReachedType }
+      : {}),
   };
 }

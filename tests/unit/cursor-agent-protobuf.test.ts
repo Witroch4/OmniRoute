@@ -7,6 +7,7 @@ import {
   buildAgentRequestBody,
   iterateConnectFrames,
   decodeAgentServerMessage,
+  decodeKvServerEvent,
   flattenMessages,
   wrapConnectFrame,
   encodeExecReadRejected,
@@ -28,16 +29,40 @@ import {
   encodeRequestContextResponse,
   openAIToolsToMcpDefs,
 } from "../../open-sse/utils/cursorAgentProtobuf";
+import {
+  WT_LEN,
+  WT_VARINT,
+  encodeBytes,
+  encodeMessage,
+  encodeUInt32Field,
+  decodeFields,
+  findField,
+} from "../../open-sse/utils/cursorAgentProtobuf/wire";
 
 test("resolveRequestedModel maps cursor-agent's client-side aliases", () => {
   assert.deepEqual(resolveRequestedModel("auto"), { modelId: "default", parameters: [] });
+  assert.deepEqual(resolveRequestedModel("auto-cost"), {
+    modelId: "default",
+    parameters: [{ id: "optimization", value: "cost" }],
+  });
+  assert.deepEqual(resolveRequestedModel("auto-balance"), {
+    modelId: "default",
+    parameters: [{ id: "optimization", value: "balance" }],
+  });
+  assert.deepEqual(resolveRequestedModel("auto-intelligence"), {
+    modelId: "default",
+    parameters: [{ id: "optimization", value: "intelligence" }],
+  });
   assert.deepEqual(resolveRequestedModel("composer-2-fast"), {
     modelId: "composer-2",
     parameters: [{ id: "fast", value: "true" }],
   });
+  // #7289: pinned Claude ids with an effort suffix split into the base id +
+  // an "effort" ModelParameter — cursor's server has no route for the
+  // suffixed id verbatim (see cursor-model-effort-suffix-7289.test.ts).
   assert.deepEqual(resolveRequestedModel("claude-4.6-sonnet-medium"), {
-    modelId: "claude-4.6-sonnet-medium",
-    parameters: [],
+    modelId: "claude-4.6-sonnet",
+    parameters: [{ id: "effort", value: "medium" }],
   });
   assert.deepEqual(resolveRequestedModel("composer-2"), { modelId: "composer-2", parameters: [] });
 });
@@ -119,6 +144,146 @@ test("decode bounds hardening does not affect well-formed frames", () => {
   assert.deepEqual(decodeAgentServerMessage(asm), [{ kind: "text", text: "ok" }]);
 });
 
+test("decodeAgentServerMessage preserves a native TodoWrite completion", () => {
+  function v(n: number): Buffer {
+    const out: number[] = [];
+    while (n > 0x7f) {
+      out.push((n & 0x7f) | 0x80);
+      n >>>= 7;
+    }
+    out.push(n);
+    return Buffer.from(out);
+  }
+  function tag(field: number, wireType: number): Buffer {
+    return v((field << 3) | wireType);
+  }
+  function lp(field: number, payload: Buffer): Buffer {
+    return Buffer.concat([tag(field, 2), v(payload.length), payload]);
+  }
+  function s(field: number, value: string): Buffer {
+    return lp(field, Buffer.from(value, "utf8"));
+  }
+  function vi(field: number, value: number): Buffer {
+    return Buffer.concat([tag(field, 0), v(value)]);
+  }
+  function todo(content: string, status: number): Buffer {
+    // TodoItem { content (2), status (3) }
+    return lp(1, Buffer.concat([s(2, content), vi(3, status)]));
+  }
+
+  // ToolCallCompletedUpdate {
+  //   tool_call_id (1),
+  //   tool_call (2): ToolCall {
+  //     todo_write (9): TodoWriteDetails {
+  //       args (1): TodoWriteArgs { todos (1 repeated), merge (2) }
+  //     }
+  //   }
+  // }
+  const todoArgs = Buffer.concat([todo("Inspect files", 3), todo("Write report", 2), vi(2, 0)]);
+  const todoDetails = lp(1, todoArgs);
+  const toolCall = lp(9, todoDetails);
+  const completed = Buffer.concat([s(1, "toolu_todo_1"), lp(2, toolCall)]);
+  const interactionUpdate = lp(3, completed);
+  const asm = lp(1, interactionUpdate);
+
+  assert.deepEqual(decodeAgentServerMessage(asm), [
+    {
+      kind: "native_todo_write",
+      toolCallId: "toolu_todo_1",
+      merge: false,
+      todos: [
+        { content: "Inspect files", status: "completed" },
+        { content: "Write report", status: "in_progress" },
+      ],
+    },
+    { kind: "tool_call_completed" },
+  ]);
+});
+
+test("native TodoWrite decoding rejects duplicate singular fields and malformed IDs", () => {
+  function v(n: number): Buffer {
+    const out: number[] = [];
+    while (n > 0x7f) {
+      out.push((n & 0x7f) | 0x80);
+      n >>>= 7;
+    }
+    out.push(n);
+    return Buffer.from(out);
+  }
+  function tag(field: number, wireType: number): Buffer {
+    return v((field << 3) | wireType);
+  }
+  function lp(field: number, payload: Buffer): Buffer {
+    return Buffer.concat([tag(field, 2), v(payload.length), payload]);
+  }
+  function s(field: number, value: string): Buffer {
+    return lp(field, Buffer.from(value, "utf8"));
+  }
+  function vi(field: number, value: number): Buffer {
+    return Buffer.concat([tag(field, 0), v(value)]);
+  }
+  function todoItem(parts: Buffer[]): Buffer {
+    return lp(1, Buffer.concat(parts));
+  }
+  function completed(idFields: Buffer[], todoWriteDetails: Buffer): Buffer {
+    const toolCall = lp(9, todoWriteDetails);
+    return lp(1, lp(3, Buffer.concat([...idFields, lp(2, toolCall)])));
+  }
+  const genericOnly = [{ kind: "tool_call_completed" }];
+
+  const completeArgs = Buffer.concat([todoItem([s(2, "Keep me"), vi(3, 3)]), vi(2, 1)]);
+  const duplicateArgsExploit = completed(
+    [s(1, "todo-1")],
+    Buffer.concat([lp(1, Buffer.alloc(0)), lp(1, completeArgs)])
+  );
+  assert.deepEqual(decodeAgentServerMessage(duplicateArgsExploit), genericOnly);
+
+  const duplicateStatus = completed(
+    [s(1, "todo-2")],
+    lp(1, todoItem([s(2, "Keep me"), vi(3, 1), vi(3, 99)]))
+  );
+  assert.deepEqual(decodeAgentServerMessage(duplicateStatus), genericOnly);
+
+  const duplicateMerge = completed(
+    [s(1, "todo-3")],
+    lp(1, Buffer.concat([todoItem([s(2, "Keep me"), vi(3, 3)]), vi(2, 0), vi(2, 1)]))
+  );
+  assert.deepEqual(decodeAgentServerMessage(duplicateMerge), genericOnly);
+
+  const duplicateContent = completed(
+    [s(1, "todo-4")],
+    lp(1, todoItem([s(2, "First"), s(2, "Second"), vi(3, 3)]))
+  );
+  assert.deepEqual(decodeAgentServerMessage(duplicateContent), genericOnly);
+
+  const emptyId = completed([s(1, "")], lp(1, completeArgs));
+  assert.deepEqual(decodeAgentServerMessage(emptyId), genericOnly);
+
+  const duplicateId = completed([s(1, "todo-5"), s(1, "todo-6")], lp(1, completeArgs));
+  assert.deepEqual(decodeAgentServerMessage(duplicateId), genericOnly);
+
+  const invalidUtf8Id = completed([lp(1, Buffer.from([0xff]))], lp(1, completeArgs));
+  assert.deepEqual(decodeAgentServerMessage(invalidUtf8Id), genericOnly);
+
+  const unknownStatus = completed([s(1, "todo-7")], lp(1, todoItem([s(2, "Keep me"), vi(3, 99)])));
+  assert.deepEqual(decodeAgentServerMessage(unknownStatus), genericOnly);
+
+  const missingStatus = completed([s(1, "todo-8")], lp(1, todoItem([s(2, "Keep me")])));
+  assert.deepEqual(decodeAgentServerMessage(missingStatus), genericOnly);
+
+  const wrongWireStatus = completed(
+    [s(1, "todo-9")],
+    lp(1, todoItem([s(2, "Keep me"), s(3, "completed")]))
+  );
+  assert.deepEqual(decodeAgentServerMessage(wrongWireStatus), genericOnly);
+
+  const invalidUtf8Content = completed(
+    [s(1, "todo-10")],
+    lp(1, todoItem([lp(2, Buffer.from([0xff])), vi(3, 3)]))
+  );
+  assert.deepEqual(decodeAgentServerMessage(invalidUtf8Content), genericOnly);
+});
+
 test("encodeAgentRunRequest embeds user text and resolves the model id", () => {
   const buf = encodeAgentRunRequest({
     modelId: "auto",
@@ -148,15 +313,21 @@ test("encodeAgentRunRequest sends ModelDetails for pinned thinking models (#3714
   // #3714: pinned Claude/GPT thinking variants returned an empty turn when sent only via
   // RequestedModel (field 9, bare model_id). cursor-agent's working wire format also
   // carries a ModelDetails envelope with model_id + display_model_id + display_name.
+  // #7289: the trailing effort suffix ("-xhigh") is now split off into a separate
+  // ModelParameter — the BASE id is what's shared across RequestedModel + ModelDetails.
   const modelId = "claude-opus-4-7-thinking-xhigh";
+  const baseModelId = "claude-opus-4-7-thinking";
   const buf = encodeAgentRunRequest({ modelId, userText: "hi" });
-  const occurrences = buf.toString("latin1").split(modelId).length - 1;
+  const text = buf.toString("latin1");
+  const occurrences = text.split(baseModelId).length - 1;
   // RequestedModel.model_id (1) + ModelDetails {model_id, display_model_id, display_name}
-  // (3) → the id must now appear at least 4 times (it appeared once before the fix).
+  // (3) → the base id must appear at least 4 times.
   assert.ok(
     occurrences >= 4,
-    `pinned model id must be encoded in both RequestedModel and ModelDetails (got ${occurrences})`
+    `base model id must be encoded in both RequestedModel and ModelDetails (got ${occurrences})`
   );
+  assert.ok(text.includes("effort"), "effort parameter id present (#7289)");
+  assert.ok(text.includes("xhigh"), "effort parameter value present (#7289)");
 });
 
 test("encodeAgentRunRequest keeps RequestedModel + parameters alongside ModelDetails (#3714)", () => {
@@ -166,7 +337,10 @@ test("encodeAgentRunRequest keeps RequestedModel + parameters alongside ModelDet
   const composerText = composer.toString("latin1");
   assert.ok(composerText.includes("composer-2"), "split model id still present");
   assert.ok(composerText.includes("fast"), "'-fast' parameter id still present (RequestedModel)");
-  assert.ok(composerText.includes("true"), "'-fast' parameter value still present (RequestedModel)");
+  assert.ok(
+    composerText.includes("true"),
+    "'-fast' parameter value still present (RequestedModel)"
+  );
 
   // auto → default, now appearing in both RequestedModel and ModelDetails.
   const auto = encodeAgentRunRequest({ modelId: "auto", userText: "hi" });
@@ -391,6 +565,125 @@ test("encodeKvSetBlobResult is an empty ack", () => {
   const framed = encodeKvSetBlobResult(7);
   const payload = unwrapFrame(framed);
   assert.equal(payload[0], 26); // (3<<3)|2 = kv_client_message
+});
+
+// ─── KV ack request_metadata round-trip ─────────────────────────────────────
+// KvServerMessage { id (1), get_blob_args (2) | set_blob_args (3), request_metadata (4) }
+// carries opaque bytes the KvClientMessage ack MUST echo verbatim as its own field 4 —
+// dropping them desyncs the AgentService session (empty turns / hangs). These tests drive
+// the real decode → encode path so a refactor that loses the echo turns red.
+
+const KV_BLOB_ID = Buffer.from("ab".repeat(32), "hex");
+
+function buildKvServerFrame(kvId: number, variant: "get" | "set", metadata: Buffer | null): Buffer {
+  const parts: Buffer[] = [];
+  if (kvId !== 0) parts.push(encodeUInt32Field(1, kvId));
+  if (variant === "get") {
+    parts.push(encodeMessage(2, [encodeBytes(1, KV_BLOB_ID)]));
+  } else {
+    parts.push(encodeMessage(3, [encodeBytes(1, KV_BLOB_ID), encodeBytes(2, Buffer.from("turn"))]));
+  }
+  if (metadata) parts.push(encodeBytes(4, metadata));
+  return encodeMessage(4, parts); // AgentServerMessage.kv_server_message
+}
+
+function decodeKvAck(framed: Buffer) {
+  const top = decodeFields(unwrapFrame(framed));
+  assert.equal(top.length, 1);
+  const kvClient = top[0];
+  assert.equal(kvClient.fieldNumber, 3); // AgentClientMessage.kv_client_message
+  if (kvClient.wireType !== WT_LEN) throw new Error("kv_client_message must be length-delimited");
+  return { raw: kvClient.bytes, fields: decodeFields(kvClient.bytes) };
+}
+
+function metadataOf(fields: ReturnType<typeof decodeFields>): Buffer | null {
+  const f = findField(fields, 4);
+  if (!f) return null;
+  if (f.wireType !== WT_LEN) throw new Error("request_metadata must be length-delimited");
+  return f.bytes;
+}
+
+function ackFor(serverFrame: Buffer, blob = Buffer.from("conversation-state", "utf8")): Buffer {
+  const event = decodeKvServerEvent(serverFrame);
+  if (!event) throw new Error("expected a kv server event");
+  return event.kind === "kv_get_blob"
+    ? encodeKvGetBlobResult(event.kvId, blob, event.requestMetadata)
+    : encodeKvSetBlobResult(event.kvId, event.requestMetadata);
+}
+
+test("KV get ack echoes server request_metadata as field 4", () => {
+  const metadata = Buffer.from("checkpoint-turn-42", "utf8");
+  const { fields } = decodeKvAck(ackFor(buildKvServerFrame(7, "get", metadata)));
+  const id = findField(fields, 1);
+  assert.equal(id?.wireType, WT_VARINT);
+  assert.equal(id?.wireType === WT_VARINT ? Number(id.varint) : -1, 7);
+  const getResult = findField(fields, 2);
+  if (getResult?.wireType !== WT_LEN) throw new Error("get_blob_result missing");
+  const blob = findField(decodeFields(getResult.bytes), 1);
+  assert.equal(blob?.wireType === WT_LEN ? blob.bytes.toString("utf8") : "", "conversation-state");
+  assert.equal(metadataOf(fields)?.toString("utf8"), "checkpoint-turn-42");
+});
+
+test("KV set ack echoes server request_metadata as field 4", () => {
+  const metadata = Buffer.from("blob-lineage-v1", "utf8");
+  const { fields } = decodeKvAck(ackFor(buildKvServerFrame(3, "set", metadata)));
+  const id = findField(fields, 1);
+  assert.equal(id?.wireType === WT_VARINT ? Number(id.varint) : -1, 3);
+  assert.ok(findField(fields, 3), "set_blob_result present");
+  assert.equal(metadataOf(fields)?.toString("utf8"), "blob-lineage-v1");
+});
+
+test("KV acks omit field 4 when the server sent no or empty request_metadata", () => {
+  for (const variant of ["get", "set"] as const) {
+    for (const metadata of [null, Buffer.alloc(0)]) {
+      const { fields } = decodeKvAck(ackFor(buildKvServerFrame(9, variant, metadata)));
+      assert.equal(findField(fields, 4), undefined, `${variant} ack, metadata=${metadata}`);
+    }
+  }
+});
+
+test("KV acks preserve arbitrary binary request_metadata byte-for-byte", () => {
+  const metadata = Buffer.from([0, 255, 1, 0, 128, 127, 255, 254]);
+  for (const variant of ["get", "set"] as const) {
+    const { fields } = decodeKvAck(ackFor(buildKvServerFrame(11, variant, metadata)));
+    assert.deepEqual(metadataOf(fields), metadata);
+  }
+});
+
+test("KV ack field order is id (1) → result (2|3) → request_metadata (4)", () => {
+  const metadata = Buffer.from("order", "utf8");
+  for (const [variant, resultField] of [
+    ["get", 2],
+    ["set", 3],
+  ] as const) {
+    const { raw, fields } = decodeKvAck(ackFor(buildKvServerFrame(5, variant, metadata)));
+    assert.deepEqual(
+      fields.map((f) => f.fieldNumber),
+      [1, resultField, 4]
+    );
+    assert.equal(raw[0], (1 << 3) | WT_VARINT);
+    assert.equal(raw[1], 5);
+    assert.equal(raw[2], (resultField << 3) | WT_LEN);
+    // Metadata is the trailing field: tag 0x22, length, then the payload.
+    assert.equal(raw[raw.length - metadata.length - 2], (4 << 3) | WT_LEN);
+    assert.ok(raw.subarray(raw.length - metadata.length).equals(metadata));
+  }
+});
+
+test("KV ack omits the id field when kvId is 0 but still echoes request_metadata", () => {
+  const metadata = Buffer.from("zero-id", "utf8");
+  for (const [variant, resultField] of [
+    ["get", 2],
+    ["set", 3],
+  ] as const) {
+    const { fields } = decodeKvAck(ackFor(buildKvServerFrame(0, variant, metadata)));
+    assert.equal(findField(fields, 1), undefined);
+    assert.deepEqual(
+      fields.map((f) => f.fieldNumber),
+      [resultField, 4]
+    );
+    assert.equal(metadataOf(fields)?.toString("utf8"), "zero-id");
+  }
 });
 
 // ─── Phase 1: MCP tool definition body ──────────────────────────────────────

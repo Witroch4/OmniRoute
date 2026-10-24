@@ -1,6 +1,9 @@
 "use client";
 
+import Icon from "@/shared/components/Icon";
+
 import { useState, useEffect, useRef } from "react";
+import { useTranslations } from "next-intl";
 import { Card, Button, ConfirmModal } from "@/shared/components";
 import { useServiceStatus } from "../hooks/useServiceStatus";
 
@@ -11,6 +14,7 @@ interface ApiKeyFieldProps {
 }
 
 export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFieldProps) {
+  const t = useTranslations("embeddedServices");
   const { data, mutate } = useServiceStatus(name);
   const [pending, setPending] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -43,10 +47,10 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
     try {
       const res = await fetch(`/api/services/${name}/rotate-key`, { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setMsg({ ok: true, text: `Key rotated — ${label} restarted to apply the new key` });
+      setMsg({ ok: true, text: t("keyRotated", { name: label }) });
       mutate();
     } catch {
-      setMsg({ ok: false, text: "Failed to rotate key" });
+      setMsg({ ok: false, text: t("keyRotateFailed") });
     } finally {
       setPending(false);
     }
@@ -64,10 +68,10 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
         setPlainKey(body.apiKeyPlain);
         setMsg(null);
       } else {
-        setMsg({ ok: false, text: "Reveal failed: key not returned" });
+        setMsg({ ok: false, text: t("keyRevealEmpty") });
       }
     } catch {
-      setMsg({ ok: false, text: "Failed to reveal key" });
+      setMsg({ ok: false, text: t("keyRevealFailed") });
     } finally {
       setRevealPending(false);
       setRevealModalOpen(false);
@@ -78,28 +82,22 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
     <>
       <Card padding="md">
         <div className="flex items-center gap-3 mb-3">
-          <div className="size-8 rounded-lg flex items-center justify-center bg-amber-500/10">
-            <span className="material-symbols-outlined text-amber-500 text-xl">key</span>
+          <div className="size-8 rounded-lg flex items-center justify-center border border-border bg-bg-subtle text-text-main">
+            <Icon name="key" size={20} />
           </div>
           <div>
-            <h3 className="font-medium text-sm">API Key</h3>
-            <p className="text-xs text-text-muted">
-              Key used by OmniRoute to authenticate with {label}
-            </p>
+            <h3 className="font-medium text-sm">{t("apiKey")}</h3>
+            <p className="text-xs text-text-muted">{t("apiKeyDescription", { name: label })}</p>
           </div>
         </div>
 
         {msg && (
           <div
             className={`flex items-center gap-1.5 mb-3 px-2 py-1.5 rounded text-xs ${
-              msg.ok
-                ? "bg-green-500/10 text-green-600 dark:text-green-400"
-                : "bg-red-500/10 text-red-600 dark:text-red-400"
+              msg.ok ? "bg-success/10 text-success" : "bg-error/10 text-error"
             }`}
           >
-            <span className="material-symbols-outlined text-[12px]">
-              {msg.ok ? "check_circle" : "error"}
-            </span>
+            <Icon name={msg.ok ? "check_circle" : "error"} size={12} />
             {msg.text}
           </div>
         )}
@@ -116,7 +114,7 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
               disabled={revealPending || !data?.installedVersion}
               className="shrink-0"
             >
-              Reveal
+              {t("reveal")}
             </Button>
           )}
           {plainKey && (
@@ -126,7 +124,7 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
               onClick={() => setPlainKey(null)}
               className="shrink-0"
             >
-              Hide
+              {t("hide")}
             </Button>
           )}
           <Button
@@ -136,15 +134,11 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
             disabled={pending || !data?.installedVersion}
             className="shrink-0"
           >
-            {pending ? "Rotating…" : "Rotate key"}
+            {pending ? t("rotating") : t("rotateKey")}
           </Button>
         </div>
 
-        {plainKey && (
-          <p className="mt-2 text-[11px] text-text-muted">
-            Key will be hidden automatically in 30 seconds.
-          </p>
-        )}
+        {plainKey && <p className="mt-2 text-[11px] text-text-muted">{t("keyAutoHide")}</p>}
       </Card>
 
       {showReveal && (
@@ -152,10 +146,10 @@ export function ApiKeyField({ name, serviceLabel, showReveal = false }: ApiKeyFi
           isOpen={revealModalOpen}
           onClose={() => setRevealModalOpen(false)}
           onConfirm={confirmReveal}
-          title="Reveal API Key"
-          message="Revealing the API key will be logged in the audit trail. Continue?"
-          confirmText={revealPending ? "Revealing…" : "Reveal"}
-          cancelText="Cancel"
+          title={t("revealTitle")}
+          message={t("revealConfirm")}
+          confirmText={revealPending ? t("revealing") : t("reveal")}
+          cancelText={t("cancel")}
           variant="secondary"
           loading={revealPending}
         />

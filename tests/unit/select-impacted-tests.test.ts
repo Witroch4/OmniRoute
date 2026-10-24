@@ -90,6 +90,14 @@ test("changed unit test under combo/ → run itself", () => {
   assert.deepEqual(sel, ["tests/unit/combo/routing.test.ts"]);
 });
 
+test("changed unit test under translator/ → run itself", () => {
+  const sel = selectImpacted({
+    changed: ["tests/unit/translator/streaming.test.ts"],
+    map: MAP,
+  });
+  assert.deepEqual(sel, ["tests/unit/translator/streaming.test.ts"]);
+});
+
 test("changed unit test under serial/ → run itself", () => {
   const sel = selectImpacted({
     changed: ["tests/unit/serial/flaky-once.test.ts"],

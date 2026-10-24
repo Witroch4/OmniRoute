@@ -1,6 +1,7 @@
 // Pure SSE-payload -> collected-stream parsing for the Antigravity executor.
 // Extracted verbatim from antigravity.ts (no host state, no fetch/auth).
 import { normalizeOpenAICompatibleFinishReasonString } from "../../utils/finishReason.ts";
+import { stripObfuscationZeroWidth } from "../../utils/zeroWidth.ts";
 
 export type AntigravityCollectedStream = {
   textContent: string;
@@ -15,9 +16,13 @@ export type AntigravityCollectedStream = {
   remainingCredits: Array<{ creditType: string; creditAmount: string }> | null;
 };
 
+// Both run once per SSE data line / per text part (processAntigravitySSEPayload),
+// so the literals are hoisted to module constants.
+const TEXTUAL_TOOL_CALL_RE = /^[\s\S]*?\[Tool call:\s*([^\]\n]+)\]\s*\nArguments:\s*([\s\S]+?)\s*$/;
+
 export function stripZeroWidth(value: unknown): unknown {
   if (typeof value === "string") {
-    return value.replace(/[\u200B-\u200D\uFEFF]/g, "");
+    return stripObfuscationZeroWidth(value);
   }
   if (Array.isArray(value)) {
     return value.map((item) => stripZeroWidth(item));
@@ -37,10 +42,8 @@ export function parseAntigravityTextualToolCall(
   text: unknown
 ): { name: string; args: unknown } | null {
   if (typeof text !== "string") return null;
-  const normalized = text.replace(/[\u200B-\u200D\uFEFF]/g, "");
-  const match = normalized.match(
-    /^[\s\S]*?\[Tool call:\s*([^\]\n]+)\]\s*\nArguments:\s*([\s\S]+?)\s*$/
-  );
+  const normalized = stripObfuscationZeroWidth(text);
+  const match = normalized.match(TEXTUAL_TOOL_CALL_RE);
   if (!match) return null;
   const name = match[1]?.trim();
   const rawArgs = match[2]?.trim();
@@ -110,7 +113,7 @@ export function processAntigravitySSEPayload(
           collected.finishReason = "tool_calls";
           continue;
         }
-        if (typeof part.text === "string" && !part.thought && !part.thoughtSignature) {
+        if (typeof part.text === "string" && !part.thought) {
           const textualToolCall = parseAntigravityTextualToolCall(part.text);
           if (textualToolCall) {
             addAntigravityTextualToolCall(collected, textualToolCall);
@@ -118,9 +121,23 @@ export function processAntigravitySSEPayload(
             collected.textContent += part.text;
           }
         }
+        // Native Gemini function calls. Non-streaming responses (and some
+        // streaming ones) carry the tool call as `part.functionCall` rather than
+        // the textual `[Tool call: ...]` markdown. Without this, a tool-only
+        // response produced empty content and a 502 Provider error (#7037).
+        if (part.functionCall && typeof part.functionCall.name === "string") {
+          addAntigravityTextualToolCall(collected, {
+            name: part.functionCall.name,
+            args: part.functionCall.args ?? {},
+          });
+        }
       }
     }
-    if (candidate?.finishReason) {
+    // Preserve a tool-call finish reason: once a native `part.functionCall`
+    // (or textual tool call) has populated `toolCalls`, the candidate's own
+    // finish reason (often STOP) must not clobber it (#7037 — a tool-only
+    // response would otherwise report STOP and lose its tool-call signal).
+    if (candidate?.finishReason && collected.toolCalls.length === 0) {
       collected.finishReason = normalizeOpenAICompatibleFinishReasonString(
         String(candidate.finishReason).toLowerCase()
       );
@@ -129,6 +146,9 @@ export function processAntigravitySSEPayload(
       const um = parsed.response.usageMetadata;
       const cachedTokens =
         typeof um.cachedContentTokenCount === "number" ? um.cachedContentTokenCount : 0;
+      // completion_tokens stays candidatesTokenCount: adding thoughtsTokenCount (upstream
+      // #13055) would bill reasoning twice in this fork's cost model (reasoning is priced
+      // separately) — deliberate divergence until the reasoning accounting is reworked.
       collected.usage = {
         prompt_tokens: um.promptTokenCount || 0,
         completion_tokens: um.candidatesTokenCount || 0,

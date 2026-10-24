@@ -1,14 +1,9 @@
-import { getCodexModelScope } from "../../config/codexQuotaScopes.ts";
-import { getProviderConnectionById, updateProviderConnection } from "@/lib/db/providers";
+import { persistCodexChildCooldown } from "../../services/codexAccount/index.ts";
 
 type CodexFailoverCredentials = {
   connectionId?: string | null;
   providerSpecificData?: unknown;
 };
-
-function asProviderData(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
 
 /**
  * Build the client-facing error for "all Codex accounts exhausted" once failover
@@ -86,32 +81,62 @@ export function buildCodexExhaustedStreamBody(message: string): string {
   return `event: response.failed\ndata: ${payload}\n\ndata: [DONE]\n\n`;
 }
 
+/**
+ * The client-facing Response for "all Codex accounts exhausted" (fork). Streaming
+ * clients (codex-rs) retry on the HTTP status before reading the body, so a stream gets
+ * the reason IN-BAND as a `response.failed` SSE event on a 200; a non-streaming request
+ * gets the clear 429 JSON body with a bounded `Retry-After`.
+ */
+export function buildCodexExhaustedResponse(opts: {
+  exhausted: { retryAfterSeconds: number; body: string; message: string };
+  stream: boolean;
+  upstreamHeaders?: Headers | null;
+  statusText?: string;
+}): Response {
+  const { exhausted } = opts;
+  if (opts.stream) {
+    const sseHeaders = new Headers();
+    sseHeaders.set("content-type", "text/event-stream; charset=utf-8");
+    sseHeaders.set("cache-control", "no-cache, no-transform");
+    sseHeaders.set("connection", "keep-alive");
+    sseHeaders.set("retry-after", String(exhausted.retryAfterSeconds));
+    return new Response(buildCodexExhaustedStreamBody(exhausted.message), {
+      status: 200,
+      statusText: "OK",
+      headers: sseHeaders,
+    });
+  }
+  const headers = new Headers(opts.upstreamHeaders ?? undefined);
+  headers.delete("content-length");
+  headers.delete("content-encoding");
+  headers.set("retry-after", String(exhausted.retryAfterSeconds));
+  headers.set("content-type", "application/json");
+  return new Response(exhausted.body, {
+    status: 429,
+    statusText: opts.statusText || "Too Many Requests",
+    headers,
+  });
+}
+
 export async function markCodexScopeRateLimited(params: {
   failedConnectionId: string;
   model: string | null;
   rateLimitedUntil: string;
   credentials?: CodexFailoverCredentials | null;
 }): Promise<void> {
-  const connection = await getProviderConnectionById(params.failedConnectionId).catch(() => null);
-  const existingProviderData = connection
-    ? asProviderData(connection.providerSpecificData)
-    : asProviderData(params.credentials?.providerSpecificData);
-  const existingScopeMap = asProviderData(existingProviderData.codexScopeRateLimitedUntil);
-  const nextProviderData = {
-    ...existingProviderData,
-    codexScopeRateLimitedUntil: {
-      ...existingScopeMap,
-      [getCodexModelScope(params.model || "")]: params.rateLimitedUntil,
-    },
-  };
+  const persisted = params.model
+    ? await persistCodexChildCooldown({
+        connectionId: params.failedConnectionId,
+        model: params.model,
+        rateLimitedUntil: params.rateLimitedUntil,
+      }).catch(() => null)
+    : null;
 
-  updateProviderConnection(params.failedConnectionId, {
-    ...(connection ? { providerSpecificData: nextProviderData } : {}),
-    lastError: "429 rate limited — codex account rotation",
-    errorCode: 429,
-  }).catch(() => {});
-
-  if (params.credentials && String(params.credentials.connectionId) === params.failedConnectionId) {
-    params.credentials.providerSpecificData = nextProviderData;
+  if (
+    persisted &&
+    params.credentials &&
+    String(params.credentials.connectionId) === params.failedConnectionId
+  ) {
+    params.credentials.providerSpecificData = persisted.providerSpecificData;
   }
 }

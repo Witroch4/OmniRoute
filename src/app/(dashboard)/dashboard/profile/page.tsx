@@ -1,15 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useTranslations } from "next-intl";
-import { Card, Badge } from "@/shared/components";
-import {
-  xpForLevel,
-  calculateLevel,
-  cumulativeXpForLevel,
-  getLevelTier,
-  getLevelTitle,
-} from "@/lib/gamification/xp";
+import { useLocale, useTranslations } from "next-intl";
+import Badge from "@/shared/components/Badge";
+import Button from "@/shared/components/Button";
+import Card from "@/shared/components/Card";
+import Icon from "@/shared/components/Icon";
+import Modal from "@/shared/components/Modal";
+import { cumulativeXpForLevel, getLevelTier, getLevelTitle } from "@/lib/gamification/xp";
 
 interface UserLevel {
   apiKeyId: string;
@@ -41,33 +39,86 @@ interface UserBadge {
   badgeRarity?: string;
 }
 
-const TIER_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  bronze: { label: "Bronze", color: "text-amber-600", bg: "bg-amber-600/10" },
-  silver: { label: "Silver", color: "text-gray-300", bg: "bg-gray-300/10" },
-  gold: { label: "Gold", color: "text-yellow-400", bg: "bg-yellow-400/10" },
-  platinum: { label: "Platinum", color: "text-cyan-300", bg: "bg-cyan-300/10" },
-  diamond: { label: "Diamond", color: "text-violet-400", bg: "bg-violet-400/10" },
+const TIER_CONFIG: Record<string, { labelKey: string; color: string; bg: string }> = {
+  bronze: { labelKey: "tiers.bronze", color: "text-chart-5", bg: "bg-chart-5/10" },
+  silver: { labelKey: "tiers.silver", color: "text-text-muted", bg: "bg-text-muted/10" },
+  gold: { labelKey: "tiers.gold", color: "text-warning", bg: "bg-warning/10" },
+  platinum: { labelKey: "tiers.platinum", color: "text-chart-2", bg: "bg-chart-2/10" },
+  diamond: { labelKey: "tiers.diamond", color: "text-chart-3", bg: "bg-chart-3/10" },
 };
 
+const BADGE_ICONS: Record<string, string> = {
+  sparkles: "auto_awesome",
+  zap: "bolt",
+  cpu: "memory",
+  whale: "water",
+  gift: "redeem",
+  heart: "favorite",
+  santa: "celebration",
+  trophy: "emoji_events",
+  compass: "explore",
+  languages: "translate",
+  blocks: "widgets",
+  gauge: "speed",
+  shield: "shield",
+  flame: "local_fire_department",
+  sword: "swords",
+  crown: "workspace_premium",
+  infinity: "all_inclusive",
+  rocket: "rocket_launch",
+  bug: "bug_report",
+  "git-merge": "merge",
+  medal: "military_tech",
+  question: "help",
+};
+
+function BadgeIcon({ icon, earned }: { icon: string | null; earned: boolean }) {
+  const materialIcon = icon ? BADGE_ICONS[icon] : null;
+  return materialIcon ? (
+    <Icon name={materialIcon} size={32} />
+  ) : (
+    <span aria-hidden="true">{earned ? "🏅" : "🔒"}</span>
+  );
+}
+
+/**
+ * Current daily streak carried by `/api/gamification/level` (#2403). Older or partial
+ * payloads without a `streak` field, or with a non-numeric count, render as no streak.
+ */
+function readStreakCount(data: { streak?: { current?: unknown } | null }): number {
+  return Number(data.streak?.current) || 0;
+}
+
 const RARITY_COLORS: Record<string, string> = {
-  common: "text-gray-400 border-gray-500/30",
-  uncommon: "text-green-400 border-green-500/30",
-  rare: "text-blue-400 border-blue-500/30",
-  epic: "text-purple-400 border-purple-500/30",
-  legendary: "text-amber-400 border-amber-500/30",
+  common: "text-text-muted border-border",
+  uncommon: "text-success border-success/30",
+  rare: "text-info border-info/30",
+  epic: "text-chart-3 border-chart-3/30",
+  legendary: "text-warning border-warning/30",
 };
 
 export default function ProfilePage() {
   const t = useTranslations("common");
+  const tg = useTranslations("gamification");
+  const locale = useLocale();
   const [userLevel, setUserLevel] = useState<UserLevel | null>(null);
   const [allBadges, setAllBadges] = useState<BadgeDef[]>([]);
   const [earnedBadges, setEarnedBadges] = useState<UserBadge[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selectedBadge, setSelectedBadge] = useState<BadgeDef | null>(null);
-  const [streak] = useState(0); // streak data comes from future API
+
+  useEffect(() => {
+    if (!selectedBadge) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedBadge(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [selectedBadge]);
+  const [streak, setStreak] = useState(0);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const [levelRes, badgesRes, earnedRes] = await Promise.all([
         fetch("/api/gamification/level"),
@@ -75,9 +126,14 @@ export default function ProfilePage() {
         fetch("/api/gamification/badges/earned"),
       ]);
 
+      if (!levelRes.ok && !badgesRes.ok && !earnedRes.ok) {
+        throw new Error(tg("profileLoadFailed"));
+      }
+
       if (levelRes.ok) {
         const data = await levelRes.json();
         setUserLevel(data.level ?? data);
+        setStreak(readStreakCount(data));
       }
       if (badgesRes.ok) {
         const data = await badgesRes.json();
@@ -87,20 +143,29 @@ export default function ProfilePage() {
         const data = await earnedRes.json();
         setEarnedBadges(data.badges ?? data ?? []);
       }
-    } catch {
-      // silent fail
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : tg("profileLoadFailed"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tg]);
 
   useEffect(() => {
-    fetchData();
+    const loadTimer = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
+
+    return () => window.clearTimeout(loadTimer);
   }, [fetchData]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        className="flex items-center justify-center min-h-[400px]"
+      >
         <div className="text-text-muted">{t("profileLoading")}</div>
       </div>
     );
@@ -116,9 +181,29 @@ export default function ProfilePage() {
   const tier = getLevelTier(level);
   const tierConfig = TIER_CONFIG[tier] || TIER_CONFIG.bronze;
   const earnedIds = new Set(earnedBadges.map((b) => b.badgeId));
+  const translateBadge = (badge: BadgeDef, field: "name" | "description" | "criteria") => {
+    const key = `badges.${badge.id}.${field}`;
+    const fallback = field === "name" ? badge.name : badge.description || "";
+    return tg.has(key) ? tg(key) : fallback;
+  };
+  const translateRarity = (rarity: string) => {
+    const key = `rarities.${rarity}`;
+    return tg.has(key) ? tg(key) : rarity;
+  };
+  const translateCategory = (category: string) => {
+    const key = `categories.${category}`;
+    return tg.has(key) ? tg(key) : category;
+  };
 
   return (
     <div className="flex flex-col gap-6">
+      <h1 className="sr-only lg:hidden">{t("profile")}</h1>
+      {error && (
+        <div role="alert" className="p-3 rounded-lg bg-error-bg text-error text-sm">
+          {error}
+        </div>
+      )}
+
       {/* Level & XP Card */}
       <Card>
         <div className="flex flex-col md:flex-row md:items-center gap-6">
@@ -129,14 +214,16 @@ export default function ProfilePage() {
               {level}
             </div>
             <div>
-              <h2 className="text-xl font-bold">{getLevelTitle(level)}</h2>
+              <h2 className="text-xl font-bold">
+                {tg(`levelTitles.${getLevelTitle(level).toLowerCase()}`)}
+              </h2>
               <div className="flex items-center gap-2 mt-1">
                 <Badge className={`${tierConfig.bg} ${tierConfig.color} border-0`}>
-                  {tierConfig.label} Tier
+                  {tg("tierLabel", { tier: tg(tierConfig.labelKey) })}
                 </Badge>
                 {streak > 0 && (
-                  <span className="text-sm text-orange-400 flex items-center gap-1">
-                    🔥 {streak} day streak
+                  <span className="text-sm text-warning flex items-center gap-1">
+                    🔥 {tg("dayStreak", { count: streak })}
                   </span>
                 )}
               </div>
@@ -146,20 +233,27 @@ export default function ProfilePage() {
           <div className="flex-1">
             <div className="flex items-center justify-between text-sm mb-2">
               <span className="text-text-muted">
-                Level {level} → {level + 1}
+                {tg("levelProgress", { current: level, next: level + 1 })}
               </span>
               <span className="text-text-muted">
-                {xpInCurrentLevel.toLocaleString()} / {xpForNext.toLocaleString()} XP
+                {xpInCurrentLevel.toLocaleString(locale)} / {xpForNext.toLocaleString(locale)} XP
               </span>
             </div>
-            <div className="w-full h-3 rounded-full bg-border overflow-hidden">
+            <div
+              role="progressbar"
+              aria-label={tg("levelProgress", { current: level, next: level + 1 })}
+              aria-valuemin={0}
+              aria-valuemax={xpForNext}
+              aria-valuenow={Math.min(Math.max(xpInCurrentLevel, 0), xpForNext)}
+              className="w-full h-3 rounded-full bg-border overflow-hidden"
+            >
               <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
+                className="h-full rounded-full bg-gradient-to-r from-chart-3 to-chart-5 transition-all duration-500"
                 style={{ width: `${Math.min(xpProgress, 100)}%` }}
               />
             </div>
             <p className="text-xs text-text-muted mt-1">
-              {totalXp.toLocaleString()} total XP earned
+              {tg("totalXpEarned", { count: totalXp.toLocaleString(locale) })}
             </p>
           </div>
         </div>
@@ -171,10 +265,8 @@ export default function ProfilePage() {
           <div className="flex items-center gap-4">
             <div className="text-5xl">🔥</div>
             <div>
-              <p className="text-2xl font-bold">{streak} Day Streak</p>
-              <p className="text-sm text-text-muted">
-                Keep using OmniRoute daily to maintain your streak!
-              </p>
+              <p className="text-2xl font-bold">{tg("dayStreak", { count: streak })}</p>
+              <p className="text-sm text-text-muted">{tg("maintainStreak")}</p>
             </div>
           </div>
         </Card>
@@ -183,48 +275,67 @@ export default function ProfilePage() {
       {/* Badges Grid */}
       <div>
         <h3 className="text-lg font-semibold mb-4">
-          Badges ({earnedBadges.length} / {allBadges.length})
+          {tg("badgesTitle", { earned: earnedBadges.length, total: allBadges.length })}
         </h3>
 
         {allBadges.length === 0 ? (
           <Card>
-            <div className="text-center py-12 text-text-muted">
-              No badges available yet. Keep using OmniRoute to unlock achievements!
-            </div>
+            <div className="text-center py-12 text-text-muted">{tg("noBadges")}</div>
           </Card>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {allBadges.map((badge) => {
               const isEarned = earnedIds.has(badge.id);
+              const isHiddenAndLocked = Boolean(badge.hidden) && !isEarned;
               const earnedInfo = earnedBadges.find((b) => b.badgeId === badge.id);
               const rarityColor = RARITY_COLORS[badge.rarity] || RARITY_COLORS.common;
 
               return (
+                // kit-exception: Multi-line badge tile (icon, name, description, date, progress): the kit Button
+                // is a single-line pill, so the tile stays a native <button> on kit tokens.
                 <button
                   key={badge.id}
-                  onClick={() => setSelectedBadge(badge)}
-                  className={`relative p-4 rounded-xl border transition-all text-left ${
+                  type="button"
+                  onClick={() => !isHiddenAndLocked && setSelectedBadge(badge)}
+                  disabled={isHiddenAndLocked}
+                  // Locked: dashed border, muted surface, dimmed glyph and a lock mark. The text
+                  // keeps full token ink — the old tile-wide opacity-50 + grayscale put names and
+                  // descriptions under AA (36 axe color-contrast nodes, F4).
+                  className={`relative p-4 rounded-xl border transition-all text-start ${
                     isEarned
                       ? `${rarityColor} bg-surface hover:shadow-md`
-                      : "border-border/50 bg-surface/50 opacity-50 grayscale hover:opacity-70"
+                      : "border-dashed border-border bg-bg-subtle enabled:hover:border-text-muted disabled:cursor-default"
                   }`}
+                  data-locked={isEarned ? undefined : "true"}
                 >
-                  <div className="text-3xl mb-2">{badge.icon || (isEarned ? "🏅" : "🔒")}</div>
+                  {!isEarned && (
+                    <span className="absolute top-2 end-2 text-text-muted">
+                      <Icon name="lock" size={14} />
+                      <span className="ci-sr-only">{tg("badgeLocked")}</span>
+                    </span>
+                  )}
+                  <div className={`text-3xl mb-2 ${isEarned ? "" : "opacity-50 grayscale"}`}>
+                    <BadgeIcon icon={isHiddenAndLocked ? null : badge.icon} earned={isEarned} />
+                  </div>
                   <p className="font-semibold text-sm truncate">
-                    {badge.hidden && !isEarned ? "???" : badge.name}
+                    {badge.hidden && !isEarned ? "???" : translateBadge(badge, "name")}
                   </p>
                   <p className="text-xs text-text-muted mt-1 line-clamp-2">
-                    {badge.hidden && !isEarned ? "Hidden badge" : badge.description || ""}
+                    {badge.hidden && !isEarned
+                      ? tg("hiddenBadge")
+                      : translateBadge(badge, "description")}
                   </p>
                   {isEarned && earnedInfo?.unlockedAt && (
                     <p className="text-[10px] text-text-muted mt-2">
-                      Earned {new Date(earnedInfo.unlockedAt).toLocaleDateString()}
+                      {tg("earnedDate", {
+                        date: new Date(earnedInfo.unlockedAt).toLocaleDateString(locale),
+                      })}
                     </p>
                   )}
                   {!isEarned && badge.criteria && (
                     <div className="mt-2">
                       <div className="w-full h-1.5 rounded-full bg-border overflow-hidden">
-                        <div className="h-full w-0 rounded-full bg-violet-500/50" />
+                        <div className="h-full w-0 rounded-full bg-chart-3/50" />
                       </div>
                     </div>
                   )}
@@ -236,66 +347,63 @@ export default function ProfilePage() {
       </div>
 
       {/* Badge Detail Modal */}
-      {selectedBadge && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-surface border border-border rounded-xl p-6 w-full max-w-md mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <span className="text-4xl">{selectedBadge.icon || "🏅"}</span>
-                <div>
-                  <h2 className="text-lg font-semibold">{selectedBadge.name}</h2>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${RARITY_COLORS[selectedBadge.rarity] || RARITY_COLORS.common} bg-surface`}
-                  >
-                    {selectedBadge.rarity}
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedBadge(null)}
-                className="text-text-muted hover:text-text-main text-xl"
+      <Modal
+        isOpen={Boolean(selectedBadge)}
+        onClose={() => setSelectedBadge(null)}
+        title={selectedBadge ? translateBadge(selectedBadge, "name") : undefined}
+        size="md"
+        footer={
+          <Button variant="outline" onClick={() => setSelectedBadge(null)}>
+            {t("close")}
+          </Button>
+        }
+      >
+        {selectedBadge && (
+          <>
+            <div className="mb-4 flex items-center gap-3">
+              <span className="text-4xl">
+                <BadgeIcon icon={selectedBadge.icon} earned={earnedIds.has(selectedBadge.id)} />
+              </span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded border ${RARITY_COLORS[selectedBadge.rarity] || RARITY_COLORS.common} bg-surface`}
               >
-                ×
-              </button>
+                {translateRarity(selectedBadge.rarity)}
+              </span>
             </div>
 
             {selectedBadge.description && (
-              <p className="text-sm text-text-muted mb-4">{selectedBadge.description}</p>
+              <p className="text-sm text-text-muted mb-4">
+                {translateBadge(selectedBadge, "description")}
+              </p>
             )}
 
             {selectedBadge.category && (
               <p className="text-xs text-text-muted mb-2">
-                Category: <span className="text-text-main">{selectedBadge.category}</span>
+                {tg("category")}:{" "}
+                <span className="text-text-main">{translateCategory(selectedBadge.category)}</span>
               </p>
             )}
 
             {selectedBadge.criteria && (
-              <div className="p-3 rounded-lg bg-surface/50 border border-border/50">
+              <div className="p-3 rounded-lg bg-bg-subtle border border-border">
                 <p className="text-xs font-medium text-text-muted mb-1">{t("profileHowToEarn")}</p>
-                <p className="text-sm">{selectedBadge.criteria}</p>
+                <p className="text-sm">{translateBadge(selectedBadge, "criteria")}</p>
               </div>
             )}
 
             {earnedIds.has(selectedBadge.id) && (
-              <div className="mt-4 p-3 rounded-lg bg-emerald-500/10 text-emerald-400 text-sm">
-                ✓ Earned on{" "}
-                {new Date(
-                  earnedBadges.find((b) => b.badgeId === selectedBadge.id)?.unlockedAt || ""
-                ).toLocaleDateString()}
+              <div className="mt-4 p-3 rounded-lg bg-success-bg text-success text-sm">
+                ✓{" "}
+                {tg("earnedOn", {
+                  date: new Date(
+                    earnedBadges.find((b) => b.badgeId === selectedBadge.id)?.unlockedAt || ""
+                  ).toLocaleDateString(locale),
+                })}
               </div>
             )}
-
-            <div className="mt-4 flex justify-end">
-              <button
-                onClick={() => setSelectedBadge(null)}
-                className="px-4 py-2 text-sm rounded-lg border border-border text-text-muted hover:text-text-main transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -124,7 +124,9 @@ test("original authenticated HTTP command and the USD policy share the principal
   assert.ok(metadata);
   assert.equal(await limits.buildApiKeyUsageLimitPolicyRejection(request, metadata), null);
   cost(key.id, 94, "2026-10-13T08:00:00.000Z", goId);
-  assert.equal((await limits.buildApiKeyUsageLimitPolicyRejection(request, metadata))?.status, 400);
+  // Non-Anthropic callers get 429 + reset timing since upstream 3.8.53 (#14188); only the
+  // Anthropic /v1/messages envelope keeps 400 (Claude Code re-login guard).
+  assert.equal((await limits.buildApiKeyUsageLimitPolicyRejection(request, metadata))?.status, 429);
 });
 
 test("a timestamp adjustment without replenishment keeps the already observed principal start", async () => {

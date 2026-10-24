@@ -5,12 +5,17 @@ import { createRequire } from "node:module";
 import { normalizeAntigravityClientProfile } from "../../src/shared/constants/antigravityClientProfile.ts";
 import {
   applyAntigravityClientProfileHeaders,
+  deriveAntigravityMachineId,
   getAntigravityBootstrapHeaders,
   getAntigravityClientProfile,
+  resolveAntigravityClientVersion,
 } from "../../open-sse/services/antigravityClientProfile.ts";
-import { antigravityCliUserAgent } from "../../open-sse/config/antigravityCliClient.ts";
+import {
+  antigravityCliUserAgent,
+  getAntigravityCliBuild,
+} from "../../open-sse/config/antigravityCliClient.ts";
 import { antigravityUserAgent } from "../../open-sse/services/antigravityHeaders.ts";
-import { deriveAntigravityMachineId } from "../../open-sse/services/antigravityIdentity.ts";
+import { getAntigravityEnvelopeUserAgent } from "../../open-sse/services/antigravityIdentity.ts";
 import {
   seedAntigravityVersionCache,
   clearAntigravityVersionCache,
@@ -136,4 +141,23 @@ test("getAntigravityBootstrapHeaders keeps the legacy IDE bootstrap headers for 
   assert.equal(headers.Authorization, "Bearer token");
   assert.match(headers["User-Agent"], /^Antigravity\/2\.5\.5 /);
   assert.equal(headers["Client-Metadata"], JSON.stringify({ ideType: "ANTIGRAVITY" }));
+});
+
+test("normalizeAntigravityClientProfile is case-insensitive and ignores non-strings", () => {
+  assert.equal(normalizeAntigravityClientProfile("CLI"), "cli");
+  assert.equal(normalizeAntigravityClientProfile(" IDE "), "ide");
+  assert.equal(normalizeAntigravityClientProfile(""), "cli");
+  assert.equal(normalizeAntigravityClientProfile(null), "cli");
+  assert.equal(normalizeAntigravityClientProfile(42), "cli");
+});
+
+test("resolveAntigravityClientVersion keeps the CLI version pinned with its changelist", async () => {
+  // The CLI version never comes from a release feed: it must stay paired with `cl=`.
+  assert.equal(await resolveAntigravityClientVersion("cli"), getAntigravityCliBuild().version);
+});
+
+test("public request envelopes never infer the internal jetski identity from email", () => {
+  assert.equal(getAntigravityEnvelopeUserAgent({ email: "user@gmail.com" }), "antigravity");
+  assert.equal(getAntigravityEnvelopeUserAgent({ email: "user@company.example" }), "antigravity");
+  assert.equal(getAntigravityEnvelopeUserAgent(null), "antigravity");
 });

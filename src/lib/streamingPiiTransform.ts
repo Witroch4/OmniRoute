@@ -1,5 +1,7 @@
-import { createSseTextTransform, FieldCategory, getFieldCategory } from "./sseTextTransform";
-import { sanitizePII } from "./piiSanitizer";
+import { createSseTextTransform, FieldCategory, classifyField } from "./sseTextTransform";
+import { sanitizePII, getPiiResponseMode } from "./piiSanitizer";
+
+const RECORD_STATS = { recordStats: true } as const;
 
 export interface PiiTransformOptions {
   windowSize?: number;
@@ -18,7 +20,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
         toolArgs: "",
         partialJson: "",
       };
-      choiceBuffers.set(index, buf);
+      choiceBuffers.set(key, buf);
     }
     return buf;
   };
@@ -42,12 +44,23 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     if (field === "toolArgs" || field === "partialJson") {
       return text;
     }
+    // warn/off never mutate the payload: detect-only, emit the original bytes immediately
+    // (no sliding-window buffering/re-chunking) so the stream stays byte-identical (#15507).
+    const mode = getPiiResponseMode();
+    if (mode === "warn" || mode === "off") {
+      if (mode === "warn") sanitizePII(text);
+      return text;
+    }
     if (isSnapshot) {
-      return sanitizePII(text).text;
+      return sanitizePII(text, false, RECORD_STATS).text;
     }
     const buffers = getBuffers(index);
     buffers[field] += text;
-    const { text: sanitized, endMatchIndex } = sanitizePII(buffers[field], !isStopSignal);
+    const { text: sanitized, endMatchIndex } = sanitizePII(
+      buffers[field],
+      !isStopSignal,
+      RECORD_STATS
+    );
     let emitLength = isStopSignal ? sanitized.length : Math.max(0, sanitized.length - W);
 
     // Cap emitLength at the start of any PII that touched the end of the buffer
@@ -75,7 +88,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       for (const key of Object.keys(buffers)) {
         const field = key as FieldCategory;
         if (buffers[field]) {
-          buffers[field] = sanitizePII(buffers[field]).text;
+          buffers[field] = sanitizePII(buffers[field], false, RECORD_STATS).text;
         }
       }
     }
@@ -115,33 +128,6 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       }
       return null;
     }
-
-    // Explicitly target formats to prevent metadata corruption and leakage
-    const METADATA_KEYS = [
-      "id",
-      "model",
-      "object",
-      "created",
-      "finish_reason",
-      "finishReason",
-      "role",
-      "type",
-      "index",
-      "stop_reason",
-      "stop_sequence",
-      "system_fingerprint",
-      "service_tier",
-      "usage",
-      "prompt_tokens",
-      "completion_tokens",
-      "total_tokens",
-      "input_tokens",
-      "output_tokens",
-      "logprobs",
-      "refusal",
-      "name",
-      "event",
-    ];
 
     // 1. Claude format
     if (
@@ -247,9 +233,17 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
 
     // 3. Responses API
     if (typeof lastJson.type === "string" && lastJson.type.startsWith("response.")) {
-      const finalJson = JSON.parse(JSON.stringify(lastJson));
-      const idx = typeof finalJson.output_index === "number" ? finalJson.output_index : 0;
+      const idx = typeof lastJson.output_index === "number" ? lastJson.output_index : 0;
       const buffers = getBuffers(`${idx}_0`);
+      // Never clone a terminal event (output_item.done etc.) — that replays it with the same
+      // sequence_number (#15507). Emit the buffered text as a fresh text delta instead.
+      if (!lastJson.type.endsWith(".delta")) {
+        if (!buffers.content) return null;
+        const delta = buffers.content;
+        buffers.content = "";
+        return { type: "response.output_text.delta", output_index: idx, delta };
+      }
+      const finalJson = JSON.parse(JSON.stringify(lastJson));
       if (buffers.content) {
         finalJson.delta = buffers.content;
         buffers.content = "";
@@ -283,22 +277,31 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
     // 5. Generic fallback
     const templateJson = lastContentJson || lastJson;
     const finalJson = JSON.parse(JSON.stringify(templateJson));
-    const clearDeltas = (obj: any) => {
+    // Skip recognized system metadata (same `classifyField`/METADATA_KEYS as sanitizeObject
+    // in sseTextTransform.ts) — fields like `provider` or `native_finish_reason` must never
+    // be cleared to "" or refilled with buffered answer text here either. See #13488.
+    const clearDeltas = (obj: any, parentKey = "") => {
       if (!obj || typeof obj !== "object") return;
+      const isArray = Array.isArray(obj);
       for (const key of Object.keys(obj)) {
-        if (METADATA_KEYS.includes(key)) {
-          continue;
-        }
         if (typeof obj[key] === "string") {
+          if (classifyField(key, parentKey) === null) {
+            continue;
+          }
           obj[key] = "";
         } else if (typeof obj[key] === "object") {
-          clearDeltas(obj[key]);
+          clearDeltas(obj[key], isArray ? parentKey : key);
         }
       }
     };
     clearDeltas(finalJson);
 
-    const populateRemaining = (obj: any, currentChoiceIdx = 0, currentToolIdx = 0) => {
+    const populateRemaining = (
+      obj: any,
+      currentChoiceIdx = 0,
+      currentToolIdx = 0,
+      parentKey = ""
+    ) => {
       if (!obj || typeof obj !== "object") return;
 
       let choiceIdx = currentChoiceIdx;
@@ -315,20 +318,21 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       }
 
       const compositeKey = `${choiceIdx}_${toolIdx}`;
+      const isArray = Array.isArray(obj);
 
       for (const key of Object.keys(obj)) {
-        if (METADATA_KEYS.includes(key)) {
-          continue;
-        }
         if (typeof obj[key] === "string") {
-          const field: FieldCategory = getFieldCategory(key);
+          const field = classifyField(key, parentKey);
+          if (field === null) {
+            continue;
+          }
           const choiceBuf = getBuffers(compositeKey);
           if (choiceBuf[field]) {
             obj[key] = (obj[key] || "") + choiceBuf[field];
             choiceBuf[field] = "";
           }
         } else if (typeof obj[key] === "object") {
-          populateRemaining(obj[key], choiceIdx, toolIdx);
+          populateRemaining(obj[key], choiceIdx, toolIdx, isArray ? parentKey : key);
         }
       }
     };

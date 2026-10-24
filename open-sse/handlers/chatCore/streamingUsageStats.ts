@@ -11,6 +11,7 @@
  */
 
 import { saveRequestUsage } from "@/lib/usageDb";
+import { recordKeyQuotaUsage } from "@/domain/keyQuota";
 import { recordTokenUsage } from "../../services/tokenLimitCounter.ts";
 import { computeBillableTokens } from "./upstreamTimeouts.ts";
 import { type EffectiveServiceTier } from "./serviceTier.ts";
@@ -34,6 +35,7 @@ export type RecordStreamingUsageStatsContext = {
   endpoint?: string | null | undefined;
   /** Caller's tailnet IP (validated) — usage_history.client_ip. */
   clientIp?: string | null | undefined;
+  cpaAuthIndex?: string | null | undefined;
 };
 
 function persistStreamingUsageRow(usage: object, ctx: RecordStreamingUsageStatsContext): void {
@@ -57,6 +59,7 @@ function persistStreamingUsageRow(usage: object, ctx: RecordStreamingUsageStatsC
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
     clientIp: ctx.clientIp || null,
+    cpaAuthIndex: ctx.cpaAuthIndex || undefined,
   }).catch((err) => {
     console.error("Failed to save usage stats:", err.message);
   });
@@ -66,6 +69,8 @@ function recordStreamingBillableTokens(usage: object, ctx: RecordStreamingUsageS
   if (!ctx.apiKeyInfo?.id || ctx.streamStatus !== 200) return;
   try {
     const billable = computeBillableTokens(usage);
+    // Key-quota tpm/rpm counters advance on every completed stream.
+    recordKeyQuotaUsage(ctx.apiKeyInfo.id, billable);
     if (billable > 0)
       recordTokenUsage(
         ctx.apiKeyInfo.id,

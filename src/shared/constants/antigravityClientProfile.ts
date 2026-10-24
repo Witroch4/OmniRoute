@@ -17,17 +17,18 @@ export const ANTIGRAVITY_CLIENT_PROFILE_OPTIONS: Array<{
   { value: "ide", labelKey: "antigravityClientProfileIde" },
 ];
 
-function toNonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
 export function normalizeAntigravityClientProfile(value: unknown): AntigravityClientProfile {
-  const normalized = toNonEmptyString(value)?.toLowerCase();
-  if (normalized === "ide") return "ide";
-  // "harness"/"sdk" were stored before the official CLI identity replaced the
-  // synthetic harness fingerprint; read them as "cli".
-  if (normalized === "cli" || normalized === "harness" || normalized === "sdk") {
-    return "cli";
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "ide" || normalized === "cli") {
+      return normalized;
+    }
+    // Read-only compatibility for values persisted before the official CLI profile
+    // replaced OmniRoute's synthetic harness/sdk naming. New writes are validated
+    // against ANTIGRAVITY_CLIENT_PROFILE_VALUES and cannot reintroduce these aliases.
+    if (normalized === "harness" || normalized === "sdk") {
+      return "cli";
+    }
   }
   return DEFAULT_ANTIGRAVITY_CLIENT_PROFILE;
 }

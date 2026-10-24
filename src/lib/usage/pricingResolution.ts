@@ -161,6 +161,13 @@ function lookupInProvider(
   return null;
 }
 
+/** A provider's routing alias (`auto`, `auto/...`): a different model per provider. */
+function isRoutingAliasModel(model: string): boolean {
+  const bare = normalizeModelName((model || "").trim().toLowerCase());
+  const lower = (model || "").trim().toLowerCase();
+  return bare === "auto" || lower === "auto" || lower.startsWith("auto/");
+}
+
 /**
  * Resolve pricing for a (provider, model) pair against a merged catalog.
  *
@@ -202,7 +209,12 @@ export function resolveModelPricing(
   }
 
   // 2. The same model id under a different provider. Safe: keyed on the model
-  //    name, so the rates belong to the model actually being billed.
+  //    name, so the rates belong to the model actually being billed — except for
+  //    a provider's own ROUTING alias (`auto`, `cursor/auto`, `orcarouter/auto`):
+  //    that id names a different model on every provider, so another provider's
+  //    `auto` row says nothing about this one. It stays unpriced, which budget
+  //    enforcement treats as fail-closed (#12341), instead of borrowing a price.
+  if (isRoutingAliasModel(model)) return MISSING;
   for (const [providerKey, models] of Object.entries(pricingByProvider)) {
     const hit = lookupInProvider(models, modelCandidates);
     if (hit) {

@@ -1,8 +1,32 @@
-import { BaseGuardrail, type GuardrailContext, type GuardrailExecutionResult } from "./base";
+import {
+  BaseGuardrail,
+  type GuardrailContext,
+  type GuardrailExecutionResult,
+  type GuardrailResult,
+} from "./base";
 import { DocumentInputSupportGuardrail } from "./documentInputSupport";
 import { PIIMaskerGuardrail } from "./piiMasker";
 import { PromptInjectionGuardrail } from "./promptInjection";
 import { VisionBridgeGuardrail } from "./visionBridge";
+import { AudioBridgeGuardrail } from "./audioBridge";
+import { VideoBridgeGuardrail } from "./videoBridge";
+import { CredentialMaskerGuardrail } from "./credentialMasker";
+
+/**
+ * `preCall`/`postCall` may legitimately return nothing — that is the documented
+ * "no change" signal, alongside `{}` and `{ block: false }`
+ * (`docs/security/GUARDRAILS.md`), and `CredentialMaskerGuardrail` still declares
+ * the `| void` arm.
+ *
+ * `void` is not a value the checker lets us inspect, so neither `result?.block`
+ * nor a truthiness test compiles against `GuardrailResult | void`. Funnel the
+ * return through `unknown` once, here, and hand the dispatch loops a plain
+ * optional. Runtime behavior is unchanged: a guardrail that returns nothing
+ * still yields `undefined` and is still treated as "passed".
+ */
+function asGuardrailResult(raw: unknown): GuardrailResult<unknown> | undefined {
+  return raw && typeof raw === "object" ? (raw as GuardrailResult<unknown>) : undefined;
+}
 
 type HeadersLike = Headers | Record<string, unknown> | null | undefined;
 
@@ -50,6 +74,15 @@ function getGuardrailLogger(context: GuardrailContext) {
   return context.log || console;
 }
 
+function guardrailLogMetadata(meta: Record<string, unknown> | null) {
+  if (!meta || !("videoBridgeLogRedaction" in meta)) return meta ?? undefined;
+  // The shadow contains the original transcript for downstream log redaction.
+  // Keep it in execution results, but never emit it to diagnostic transports.
+  const diagnostic = { ...meta };
+  delete diagnostic.videoBridgeLogRedaction;
+  return diagnostic;
+}
+
 export function resolveDisabledGuardrails({
   apiKeyInfo,
   body,
@@ -68,14 +101,14 @@ export function resolveDisabledGuardrails({
     apiKeyInfo && typeof apiKeyInfo === "object"
       ? (apiKeyInfo as Record<string, unknown>).disabledGuardrails
       : undefined;
-  const headerDisabled =
-    getHeaderValue(headers, "x-omniroute-disabled-guardrails") ||
-    getHeaderValue(headers, "x-disabled-guardrails");
+  const headerDisabled = getHeaderValue(headers, "x-omniroute-disabled-guardrails");
+  const legacyHeaderDisabled = getHeaderValue(headers, "x-disabled-guardrails");
 
   return [...coerceDisabledGuardrails(apiKeyDisabled)]
     .concat(coerceDisabledGuardrails(bodyRecord?.disabledGuardrails))
     .concat(coerceDisabledGuardrails(metadata?.disabledGuardrails))
     .concat(coerceDisabledGuardrails(headerDisabled))
+    .concat(coerceDisabledGuardrails(legacyHeaderDisabled))
     .filter((value, index, list) => list.indexOf(value) === index);
 }
 
@@ -128,7 +161,7 @@ export class GuardrailRegistry {
       }
 
       try {
-        const result = await guardrail.preCall(currentPayload, context);
+        const result = asGuardrailResult(await guardrail.preCall(currentPayload, context));
         const modified = result?.modifiedPayload !== undefined;
         const meta = result?.meta || null;
 
@@ -150,7 +183,7 @@ export class GuardrailRegistry {
         logger.debug?.(
           "GUARDRAIL",
           `${guardrail.name} pre-call ${execution.blocked ? "blocked" : modified ? "modified" : "passed"}`,
-          meta || undefined
+          guardrailLogMetadata(meta)
         );
 
         if (execution.blocked) {
@@ -163,6 +196,9 @@ export class GuardrailRegistry {
           };
         }
       } catch (error) {
+        if (context.signal?.aborted) {
+          throw new Error("Guardrail processing aborted");
+        }
         const message = error instanceof Error ? error.message : String(error);
         results.push({
           blocked: false,
@@ -201,7 +237,7 @@ export class GuardrailRegistry {
       }
 
       try {
-        const result = await guardrail.postCall(currentResponse, context);
+        const result = asGuardrailResult(await guardrail.postCall(currentResponse, context));
         const modified = result?.modifiedResponse !== undefined;
         const meta = result?.meta || null;
 
@@ -223,7 +259,7 @@ export class GuardrailRegistry {
         logger.debug?.(
           "GUARDRAIL",
           `${guardrail.name} post-call ${execution.blocked ? "blocked" : modified ? "modified" : "passed"}`,
-          meta || undefined
+          guardrailLogMetadata(meta)
         );
 
         if (execution.blocked) {
@@ -236,6 +272,9 @@ export class GuardrailRegistry {
           };
         }
       } catch (error) {
+        if (context.signal?.aborted) {
+          throw new Error("Guardrail processing aborted");
+        }
         const message = error instanceof Error ? error.message : String(error);
         results.push({
           blocked: false,
@@ -265,8 +304,13 @@ export function registerDefaultGuardrails() {
   if (defaultGuardrailsRegistered) return guardrailRegistry;
 
   guardrailRegistry.register(new VisionBridgeGuardrail());
+  guardrailRegistry.register(new AudioBridgeGuardrail());
+  guardrailRegistry.register(new VideoBridgeGuardrail());
+  // Priority 6 like the Audio Bridge; registered after it so the stable sort keeps
+  // vision-bridge -> audio-bridge -> document-input-support -> video-bridge.
   guardrailRegistry.register(new DocumentInputSupportGuardrail());
   guardrailRegistry.register(new PIIMaskerGuardrail());
+  guardrailRegistry.register(new CredentialMaskerGuardrail());
   guardrailRegistry.register(new PromptInjectionGuardrail());
   defaultGuardrailsRegistered = true;
 

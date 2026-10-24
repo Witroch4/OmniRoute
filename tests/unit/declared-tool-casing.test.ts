@@ -52,6 +52,9 @@ async function streamToolName(echoed: string, clientTools: unknown): Promise<str
     null,
     false,
     false,
+    undefined,
+    new Set(),
+    null,
     clientTools
   );
   const chunk = {
@@ -104,6 +107,8 @@ test("non-streaming Gemini -> client: function calls take the declared casing", 
     FORMATS.GEMINI,
     FORMATS.OPENAI,
     null,
+    null,
+    undefined,
     CLAUDE_CODE_TOOLS
   ) as { choices: Array<{ message: { tool_calls: Array<{ function: { name: string } }> } }> };
   assert.equal(out.choices[0].message.tool_calls[0].function.name, "Read");

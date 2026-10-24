@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import { useTranslations } from "next-intl";
+import Button from "@/shared/components/Button";
 import { usePreviewCompression, type Lane, type PreviewBatch } from "@/hooks/usePreviewCompression";
 import { WaterfallInspector } from "./WaterfallInspector";
 import { DiffPane } from "./DiffPane";
@@ -14,10 +16,10 @@ export interface PlayViewProps {
   laneEngines?: readonly string[];
 }
 
-function laneStatus(l: Lane): string {
+function laneStatus(l: Lane, t: ReturnType<typeof useTranslations>): string {
   const rejected = l.run?.steps?.find((s) => s.rejected);
-  if (rejected) return `⚠ rejeitado: ${rejected.rejectReason ?? ""}`;
-  return l.error ? "⚠ erro" : l.run ? `−${l.run.savingsPercent}%` : "—";
+  if (rejected) return `⚠ ${t("laneRejected", { reason: rejected.rejectReason ?? "" })}`;
+  return l.error ? `⚠ ${t("error")}` : l.run ? `−${l.run.savingsPercent}%` : "—";
 }
 
 function resolveActiveDiff(batch: PreviewBatch | null, selectedLane: string | null) {
@@ -26,24 +28,28 @@ function resolveActiveDiff(batch: PreviewBatch | null, selectedLane: string | nu
 }
 
 function LaneList({ lanes, onSelect }: { lanes: Lane[]; onSelect: (e: string) => void }) {
+  const t = useTranslations("compressionStudio");
   return (
     <>
       {lanes.map((l) => (
-        <button
+        <Button
           key={l.engine}
+          variant="ghost"
+          size="sm"
           data-testid="play-lane"
           onClick={() => onSelect(l.engine)}
-          className="flex w-full items-center justify-between border-b py-1 text-left font-mono text-xs"
+          className="h-auto min-h-8 w-full justify-between rounded-none border-b border-border px-1 py-1 text-left font-mono text-xs"
         >
           <span>{l.engine}</span>
-          <span>{laneStatus(l)}</span>
-        </button>
+          <span>{laneStatus(l, t)}</span>
+        </Button>
       ))}
     </>
   );
 }
 
 export function PlayView({ text, onText, laneEngines = LANE_ENGINES }: PlayViewProps) {
+  const t = useTranslations("compressionStudio");
   const [active, setActive] = useState<string[]>(["rtk", "caveman"]);
   const [fuzzyDedup, setFuzzyDedup] = useState(false);
   const [selectedLane, setSelectedLane] = useState<string | null>(null);
@@ -99,15 +105,20 @@ export function PlayView({ text, onText, laneEngines = LANE_ENGINES }: PlayViewP
         {batch?.combined && (
           <section data-testid="play-combined">
             <header className="text-xs font-semibold">
-              Fluxo combinado — {active.join(" → ")}{" "}
+              {t("combinedFlow")} — {active.join(" → ")}{" "}
               <QuantumLockBadge stats={batch.combined.quantumLock} />
             </header>
             <WaterfallInspector run={batch.combined} />
             <RiskGateBadge stats={batch?.riskGate ?? null} />
           </section>
         )}
+        {batch && !batch.combined && batch.combinedError && (
+          <section data-testid="play-combined-error" className="text-xs text-error">
+            {t("combinedError", { reason: batch.combinedError })}
+          </section>
+        )}
         <section>
-          <header className="text-xs font-semibold">Cada camada sozinha</header>
+          <header className="text-xs font-semibold">{t("eachLayer")}</header>
           <LaneList lanes={batch?.lanes ?? []} onSelect={setSelectedLane} />
         </section>
         {(() => {
@@ -119,14 +130,16 @@ export function PlayView({ text, onText, laneEngines = LANE_ENGINES }: PlayViewP
         })()}
         {activeDiff && (
           <section>
-            <header className="text-xs font-semibold">Diff — {selectedLane ?? "combinado"}</header>
+            <header className="text-xs font-semibold">
+              {t("diff")} — {selectedLane ?? t("combined")}
+            </header>
             <DiffPane segments={activeDiff} preservedBlocks={[]} />
           </section>
         )}
         {batch?.heatmap && (
           <section data-testid="play-heatmap">
             <header className="text-xs font-semibold">
-              Saliency heatmap — {batch.heatmap.mode}
+              {t("saliencyHeatmap")} — {batch.heatmap.mode}
             </header>
             <SaliencyHeatmap heatmap={batch.heatmap} />
           </section>

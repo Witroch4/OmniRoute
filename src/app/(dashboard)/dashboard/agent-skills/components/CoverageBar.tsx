@@ -9,21 +9,21 @@ interface CoverageBarProps {
 
 function barColor(have: number, total: number): string {
   const pct = total > 0 ? have / total : 0;
-  if (pct >= 1) return "bg-emerald-500";
-  if (pct >= 0.75) return "bg-amber-400";
-  return "bg-red-500";
+  if (pct >= 1) return "bg-success";
+  if (pct >= 0.75) return "bg-warning";
+  return "bg-error";
 }
 
 function trackColor(have: number, total: number): string {
   const pct = total > 0 ? have / total : 0;
-  if (pct >= 1) return "bg-emerald-500/20";
-  if (pct >= 0.75) return "bg-amber-400/20";
-  return "bg-red-500/20";
+  if (pct >= 1) return "bg-success/20";
+  if (pct >= 0.75) return "bg-warning/20";
+  return "bg-error/20";
 }
 
 export function CoverageBar({ coverage }: CoverageBarProps): JSX.Element {
   const t = useTranslations("agentSkills");
-  const { api, cli } = coverage;
+  const { api, cli, config } = coverage;
 
   return (
     <div className="flex flex-col gap-2 text-xs" data-testid="coverage-bar">
@@ -46,6 +46,28 @@ export function CoverageBar({ coverage }: CoverageBarProps): JSX.Element {
         </div>
         <span className="shrink-0 text-text-muted w-12 text-right">
           {api.total > 0 ? Math.round((api.have / api.total) * 100) : 0}%
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-text-muted shrink-0">
+          {t("categoryConfig")} {config.have}/{config.total}
+        </span>
+        <div
+          className={`flex-1 h-2 rounded-full overflow-hidden ${trackColor(config.have, config.total)}`}
+        >
+          <div
+            role="progressbar"
+            aria-valuenow={config.have}
+            aria-valuemin={0}
+            aria-valuemax={config.total}
+            aria-label={`${t("categoryConfig")} ${config.have}/${config.total}`}
+            className={`h-full rounded-full transition-all duration-500 ${barColor(config.have, config.total)}`}
+            style={{ width: `${config.total > 0 ? (config.have / config.total) * 100 : 0}%` }}
+          />
+        </div>
+        <span className="shrink-0 text-text-muted w-12 text-right">
+          {config.total > 0 ? Math.round((config.have / config.total) * 100) : 0}%
         </span>
       </div>
 

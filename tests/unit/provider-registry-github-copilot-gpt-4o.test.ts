@@ -4,6 +4,10 @@
  * The final Copilot allowlist keeps `gpt-4o-2024-11-20` but intentionally drops
  * the older bare `gpt-4o` alias. GPT-4o is a chat/completions model — it must
  * NOT use `openai-responses`.
+ *
+ * Fork: upstream 3.8.53 drops `gpt-4o-2024-11-20` from its curated Copilot catalog "by
+ * operator choice"; the fork keeps it (it is on this account's Copilot picker).
+ * The bare `gpt-4o` alias stays retired on both sides.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -42,5 +46,15 @@ test("getModelsByProviderId(github) exposes gpt-4o-2024-11-20", () => {
     models.some((m) => m.id === "gpt-4o"),
     false,
     "bare gpt-4o is not in the curated list"
+  );
+});
+
+test("bare gpt-4o stays out of live discovery (retired); gpt-4o-2024-11-20 is kept", async () => {
+  const { parseGitHubCopilotModels } = await import("../../open-sse/services/githubCopilotModels.ts");
+  assert.deepEqual(
+    parseGitHubCopilotModels({
+      data: ["gpt-4o", "gpt-4o-2024-11-20"].map((id) => ({ id, capabilities: { type: "chat" } })),
+    }).map((model) => model.id),
+    ["gpt-4o-2024-11-20"]
   );
 });

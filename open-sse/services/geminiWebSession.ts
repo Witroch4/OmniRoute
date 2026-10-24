@@ -11,6 +11,8 @@
  * the RotateCookies call. Who persists the result and when is `src/lib/geminiWebSessionKeeper.ts`.
  */
 
+import { normalizeGeminiCookieInput } from "../utils/geminiCookies.ts";
+
 // ─── Cookie jar ─────────────────────────────────────────────────────────────
 
 export interface CookiePair {
@@ -144,10 +146,10 @@ function readProviderSpecificString(providerSpecificData: unknown, key: string):
   return readString((providerSpecificData as Record<string, unknown>)[key]);
 }
 
+// 3.8.53 sync: upstream's normalizer also accepts a browser cookie-export JSON (#11554), so the
+// executor, the keeper and the connection test all read a pasted export the same way.
 function normalizeCookieInput(raw: string, cookieName = "__Secure-1PSID"): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  return trimmed.includes("=") ? trimmed : `${cookieName}=${trimmed}`;
+  return normalizeGeminiCookieInput(raw, cookieName);
 }
 
 /**

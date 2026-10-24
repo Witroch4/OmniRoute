@@ -1,3 +1,5 @@
+import { findRetiredAntigravityModel } from "./antigravityRetiredModels.ts";
+
 export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
   // Claude (Antigravity backend). Same backend as the `agy` provider (see agyModels.ts);
   // discussion #3184 confirmed Claude is user-callable through the `antigravity` OAuth
@@ -172,6 +174,8 @@ export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
   "gemini-claude-sonnet-4-5": "claude-sonnet-5-5-high",
   "gemini-claude-sonnet-4-5-thinking": "claude-sonnet-5-5-high",
   "gemini-claude-opus-4-5-thinking": "claude-opus-5-5-high",
+  // Bare GPT-OSS display id → the only served tier (upstream #12608).
+  "gpt-oss-120b": "gpt-oss-120b-medium",
 });
 
 type AntigravityModelAliasMap = Record<string, string>;
@@ -222,6 +226,69 @@ const UPSTREAM_PUBLIC_MODEL_IDS = new Set(
   ANTIGRAVITY_PUBLIC_MODELS.map((model) => resolveAntigravityModelId(model.id))
 );
 
+// The authenticated Antigravity `:fetchAvailableModels` response is the source of truth for
+// the models enabled for the current account and client version. Keep only known non-chat
+// surfaces out of that live catalog; do not require every newly launched chat model to be
+// added to this static fallback catalog first.
+const ANTIGRAVITY_NON_CHAT_MODEL_IDS = new Set([
+  "gemini-3-pro-image-preview",
+  "gemini-3.1-flash-image",
+  "gemini-3.1-flash-tts-preview",
+  "gemini-2.5-flash-preview-tts",
+  "tab_flash_lite_preview",
+  "tab_jump_flash_lite_preview",
+]);
+
+// Non-chat models that still expose user-facing quota buckets. Keep these out of
+// chat discovery while allowing Provider Limits to surface their live quota.
+export const ANTIGRAVITY_QUOTA_VISIBLE_NON_CHAT_MODEL_IDS: ReadonlySet<string> = new Set([
+  "gemini-3-pro-image-preview",
+  "gemini-3.1-flash-image",
+]);
+
+// Ids the upstream release retired from Antigravity chat discovery (#8013/#12608).
+const UPSTREAM_RETIRED_MODEL_IDS = [
+  "gemini-3-pro-preview",
+  "gemini-3.1-pro",
+  "gemini-3.7-flash",
+  "gemini-3.7-flash-high",
+  "gemini-3.7-flash-medium",
+  "gemini-3.7-flash-low",
+  "gemini-3.6-flash-high",
+  "gemini-3.6-flash-medium",
+  "gemini-3.6-flash-low",
+  "gemini-3-flash-agent",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-extra-low",
+  "gemini-3.5-flash-low",
+  "gemini-3.5-flash-high",
+  "gemini-3.5-flash-medium",
+  "gemini-3.5-flash-preview",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-thinking",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-computer-use-preview-10-2025",
+];
+const UPSTREAM_RETIRED_MODEL_ID_SET: ReadonlySet<string> = new Set(UPSTREAM_RETIRED_MODEL_IDS);
+
+/**
+ * Ids hidden from live discovery and quota surfaces. Upstream's list, plus every id
+ * `antigravityRetiredModels.ts` refuses in chat, MINUS anything this catalog still
+ * publishes (Gemini 2.5, Computer Use, …): a model the fork serves must never be
+ * retired behind its back by an upstream list.
+ */
+export function isRetiredAntigravityCatalogId(modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id || PUBLIC_MODEL_IDS.has(id) || UPSTREAM_PUBLIC_MODEL_IDS.has(id)) return false;
+  return (
+    UPSTREAM_RETIRED_MODEL_ID_SET.has(id) || findRetiredAntigravityModel("antigravity", id) !== null
+  );
+}
+
+const ANTIGRAVITY_NON_CHAT_MODEL_PATTERN =
+  /(?:^|[-_])(image|imagen|audio|tts|embedding|embed|video|veo)(?:[-_]|$)/i;
+
 export function resolveAntigravityModelId(modelId: string): string {
   if (!modelId) return modelId;
   return (ANTIGRAVITY_MODEL_ALIASES as AntigravityModelAliasMap)[modelId] || modelId;
@@ -239,9 +306,9 @@ export function toClientAntigravityModelId(modelId: string): string {
 // public "Low" client id. This remap therefore CANNOT be derived from
 // ANTIGRAVITY_REVERSE_MODEL_ALIASES (which has no `gemini-3.5-flash-low` entry precisely
 // because it is already a valid client id) — it encodes the upstream-bucket → client-tier
-// chain explicitly. Keep it the inverse of the `-low/-medium/-high` rows in
-// ANTIGRAVITY_MODEL_ALIASES above. (#3821-review LEDGER-5 — was duplicated as an inline
-// if-ladder in open-sse/services/usage.ts.)
+// chain explicitly. (#3821-review LEDGER-5 — was duplicated as an inline if-ladder in
+// open-sse/services/usage.ts.) Retired tiers still map here; the usage surfaces hide them
+// through `isUserVisibleAntigravityQuotaModelId`.
 const ANTIGRAVITY_QUOTA_BUCKET_TO_CLIENT: AntigravityModelAliasMap = Object.freeze({
   "gemini-3.5-flash-extra-low": "gemini-3.5-flash-low",
   "gemini-3.5-flash-low": "gemini-3.5-flash-medium",
@@ -281,4 +348,38 @@ export function isUserCallableAntigravityModelId(modelId: string): boolean {
   const clientId = toClientAntigravityModelId(modelId);
   const upstreamId = resolveAntigravityModelId(modelId);
   return PUBLIC_MODEL_IDS.has(clientId) || UPSTREAM_PUBLIC_MODEL_IDS.has(upstreamId);
+}
+
+/**
+ * Return whether a model reported by Antigravity's authenticated live catalog is eligible for
+ * chat discovery. The upstream response already applies account/subscription gating and marks
+ * internal entries with `isInternal`; this predicate only excludes known non-chat surfaces.
+ */
+export function isDiscoverableAntigravityModelId(modelId: string): boolean {
+  const id = modelId.trim();
+  if (
+    !id ||
+    id.startsWith("chat_") ||
+    id.startsWith("tab_") ||
+    id.endsWith("_weekly") ||
+    ANTIGRAVITY_NON_CHAT_MODEL_IDS.has(id) ||
+    isRetiredAntigravityCatalogId(id)
+  ) {
+    return false;
+  }
+  return !ANTIGRAVITY_NON_CHAT_MODEL_PATTERN.test(id);
+}
+
+/**
+ * Return whether an Antigravity model quota should be visible to users. Quota
+ * visibility is intentionally broader than chat discovery: image-only models
+ * are callable through /v1/images/generations and have their own live quota
+ * buckets, but must remain excluded from the chat model catalog.
+ */
+export function isUserVisibleAntigravityQuotaModelId(modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id) return false;
+  return (
+    isDiscoverableAntigravityModelId(id) || ANTIGRAVITY_QUOTA_VISIBLE_NON_CHAT_MODEL_IDS.has(id)
+  );
 }

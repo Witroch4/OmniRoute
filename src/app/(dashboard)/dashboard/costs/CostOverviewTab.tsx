@@ -4,25 +4,39 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useProviderNodeMap, resolveProviderName } from "@/lib/display/useProviderNodeMap";
+import { SortableTableHead } from "@omniroute/ui-kit/data-table-shell";
+import { PageHeader } from "@omniroute/ui-kit/page-header";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@omniroute/ui-kit/table";
 import { Card, EmptyState, SegmentedControl, CardSkeleton } from "@/shared/components";
+import Badge from "@/shared/components/Badge";
+import Button from "@/shared/components/Button";
+import Input from "@/shared/components/Input";
+import Icon from "@/shared/components/Icon";
 import {
   getServiceTierDisplayLabel,
   type TranslationFn as CostTranslationFn,
 } from "@/shared/utils/serviceTierLabels";
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  BarChart,
-  Bar,
-} from "recharts";
+import dynamic from "next/dynamic";
+
+const CostTrendCard = dynamic(
+  () => import("./components/CostCharts").then((m) => ({ default: m.CostTrendCard })),
+  { ssr: false }
+);
+const ProviderSpendCard = dynamic(
+  () => import("./components/CostCharts").then((m) => ({ default: m.ProviderSpendCard })),
+  { ssr: false }
+);
+const WeeklyPatternCard = dynamic(
+  () => import("./components/CostCharts").then((m) => ({ default: m.WeeklyPatternCard })),
+  { ssr: false }
+);
 
 import {
   buildCostExplorerRows,
@@ -43,6 +57,7 @@ import {
 } from "./costExplorerParams";
 import { ApiKeyUsageLimitCard, formatResetHint } from "./components/ApiKeyUsageLimitCard";
 import { MetricCard } from "./components/MetricCard";
+import { TopListCard } from "./components/TopListCard";
 import { useApiKeyUsageLimits } from "./useApiKeyUsageLimits";
 
 interface UsageAnalyticsSummary {
@@ -144,12 +159,18 @@ interface UsageAnalyticsPayload {
    * that caveat instead of labeling the window "since reset".
    */
   resetWindow?: { resetAtIso: string | null; isObserved: boolean; windowStartIso: string } | null;
+  // The API reports whether the returned cost figures include token-price
+  // equivalents for flat-rate subscriptions (route.ts). Billed-cost mode omits
+  // it, so treat anything but an explicit `true` as billed money.
+  includesFlatRateEstimates?: boolean;
 }
 
 const RANGE_OPTIONS: Array<{ value: CostRange; labelKey: string }> = [
   { value: "7d", labelKey: "range7d" },
   { value: "30d", labelKey: "range30d" },
   { value: "90d", labelKey: "range90d" },
+  { value: "180d", labelKey: "range180d" },
+  { value: "365d", labelKey: "range365d" },
   { value: "all", labelKey: "rangeAll" },
 ];
 
@@ -162,11 +183,12 @@ const RANGE_OPTIONS: Array<{ value: CostRange; labelKey: string }> = [
 const SINCE_RESET_RANGE_VALUE: CostRange = "sinceReset";
 
 function formatSinceResetButtonLabel(
-  resetWindow: UsageAnalyticsPayload["resetWindow"] | undefined
+  resetWindow: UsageAnalyticsPayload["resetWindow"] | undefined,
+  tUsageLimits: ReturnType<typeof useTranslations>
 ): string {
   if (!resetWindow) return "Since reset";
   if (!resetWindow.isObserved) return "Since reset (rolling 7d — no reset observed yet)";
-  return `Since reset (${formatResetHint(resetWindow.resetAtIso)})`;
+  return `Since reset (${formatResetHint(resetWindow.resetAtIso, tUsageLimits)})`;
 }
 
 /**
@@ -180,7 +202,8 @@ function formatSinceResetButtonLabel(
  */
 function formatSinceResetWindowDetail(
   resetWindow: UsageAnalyticsPayload["resetWindow"] | undefined,
-  locale: string
+  locale: string,
+  tUsageLimits: ReturnType<typeof useTranslations>
 ): string {
   if (!resetWindow) return "Since reset";
   if (!resetWindow.isObserved) {
@@ -192,7 +215,7 @@ function formatSinceResetWindowDetail(
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(resetWindow.windowStartIso));
-  return `Since ${cutLabel} (${formatResetHint(resetWindow.resetAtIso)})`;
+  return `Since ${cutLabel} (${formatResetHint(resetWindow.resetAtIso, tUsageLimits)})`;
 }
 
 const EXPLORER_GROUP_OPTIONS: Array<{
@@ -217,7 +240,25 @@ const CHART_COLORS = [
   "#ec4899",
 ];
 
-function createCurrencyFormatter(locale: string) {
+const SHORT_WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+function formatWeekdayLabel(day: string, locale: string): string {
+  const index = SHORT_WEEKDAY_INDEX[day.slice(0, 3)];
+  if (index === undefined) return day;
+  return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
+    new Date(Date.UTC(2024, 0, 7 + index))
+  );
+}
+
+export function createCurrencyFormatter(locale: string) {
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
@@ -231,16 +272,30 @@ function csvCell(value: string | number): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+// The exports are consumed outside the app, where no i18n runtime is available
+// and the header/summary keys are already English literals, so the estimate
+// disclosure ships as an English marker alongside them.
+const FLAT_RATE_ESTIMATE_CSV_NOTE =
+  "Includes token-price estimates for flat-rate subscriptions; not billed cost.";
+
 function generateCSV(analytics: UsageAnalyticsPayload, locale: string): string {
   const currencyFormatter = createCurrencyFormatter(locale);
   const lines: string[] = [];
+  // Only an explicit `true` means estimate mode; omitted/false/malformed stays
+  // billed-cost, which is what the API itself does with the query parameter.
+  const includesEstimates = analytics.includesFlatRateEstimates === true;
 
   lines.push("# OmniRoute Cost Report");
   lines.push(`# Generated: ${new Date().toISOString()}`);
+  if (includesEstimates) {
+    lines.push(`# ${FLAT_RATE_ESTIMATE_CSV_NOTE}`);
+  }
   lines.push("");
   lines.push("## Summary");
   lines.push("Metric,Value");
-  lines.push(`Total Cost,${csvCell(currencyFormatter.format(analytics.summary.totalCost))}`);
+  lines.push(
+    `${csvCell(includesEstimates ? "Total Cost (includes flat-rate estimates)" : "Total Cost")},${csvCell(currencyFormatter.format(analytics.summary.totalCost))}`
+  );
   lines.push(`Total Requests,${analytics.summary.totalRequests}`);
   lines.push(`Unique Models,${analytics.summary.uniqueModels}`);
   lines.push(`Unique Accounts,${analytics.summary.uniqueAccounts}`);
@@ -298,6 +353,7 @@ function generateJSON(analytics: UsageAnalyticsPayload): string {
   return JSON.stringify(
     {
       generatedAt: new Date().toISOString(),
+      includesFlatRateEstimates: analytics.includesFlatRateEstimates === true,
       summary: analytics.summary,
       dailyTrend: analytics.dailyTrend,
       weeklyPattern: analytics.weeklyPattern,
@@ -326,6 +382,8 @@ function downloadFile(content: string, filename: string, mimeType: string) {
 
 export default function CostOverviewTab() {
   const t = useTranslations("costs");
+  // Reset countdowns ("resets in 6d") share ApiKeyUsageLimitCard's copy.
+  const tUsageLimits = useTranslations("usageLimits");
   const locale = useLocale();
   const nodeMap = useProviderNodeMap();
   const searchParams = useSearchParams();
@@ -377,6 +435,7 @@ export default function CostOverviewTab() {
         const params = new URLSearchParams({
           range,
           presets: "1d,7d,30d",
+          includeFlatRateEstimates: "true",
         });
         if (apiKeyFilter) params.set("apiKeyIds", apiKeyFilter);
         if (costBasis === "billed") params.set("costBasis", costBasis);
@@ -415,7 +474,7 @@ export default function CostOverviewTab() {
 
   const selectedRangeLabel =
     range === SINCE_RESET_RANGE_VALUE
-      ? formatSinceResetWindowDetail(analytics?.resetWindow, locale)
+      ? formatSinceResetWindowDetail(analytics?.resetWindow, locale, tUsageLimits)
       : t(RANGE_OPTIONS.find((option) => option.value === range)?.labelKey || "range30d");
   const summary = analytics?.summary || {
     totalCost: 0,
@@ -432,6 +491,12 @@ export default function CostOverviewTab() {
     streak: 0,
   };
   const hasCostData = summary.totalCost > 0;
+  // The API opts this page into token-price equivalents for flat-rate
+  // subscriptions (includeFlatRateEstimates=true above) and reports back whether
+  // the figures actually carry them. Only an explicit `true` switches the page
+  // to estimate wording — omitted, false, malformed or unknown values keep the
+  // billed-cost presentation, matching the API's own default.
+  const includesFlatRateEstimates = analytics?.includesFlatRateEstimates === true;
 
   const providersByCost = [...(analytics?.byProvider || [])]
     .filter((provider) => (hasCostData ? provider.cost > 0 : provider.requests > 0))
@@ -540,37 +605,38 @@ export default function CostOverviewTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Card className="p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-text-main">{t("overviewTitle")}</h2>
-            <p className="text-sm text-text-muted mt-1">{t("overviewDescription")}</p>
-          </div>
+      <PageHeader
+        compact
+        title={t("overviewTitle")}
+        description={t("overviewDescription")}
+        actions={
           <div className="flex flex-wrap items-center gap-3">
             {summary.streak > 0 && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
-                <span className="material-symbols-outlined text-amber-400 text-sm">
-                  local_fire_department
-                </span>
-                <span className="text-sm font-semibold text-amber-400">{summary.streak}</span>
-                <span className="text-xs text-amber-400/70">{t("dayStreak")}</span>
-              </div>
+              <Badge variant="warning" icon={<Icon name="local_fire_department" size={14} />}>
+                <span className="font-semibold">{summary.streak}</span>
+                <span className="opacity-80">{t("dayStreak")}</span>
+              </Badge>
             )}
             {analytics && summary.totalCost > 0 && (
               <div className="flex items-center gap-1">
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon="download"
                   onClick={() => {
                     const csv = generateCSV(analytics, locale);
                     const dateStr = new Date().toISOString().slice(0, 10);
                     downloadFile(csv, `omniroute-costs-${range}-${dateStr}.csv`, "text/csv");
                   }}
-                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-text-muted hover:text-text-main hover:bg-surface/50 rounded-lg border border-border/30 transition-colors"
                   title={t("exportCSV")}
+                  aria-label={t("exportCSV")}
                 >
-                  <span className="material-symbols-outlined text-sm">download</span>
                   CSV
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon="download"
                   onClick={() => {
                     const json = generateJSON(analytics);
                     const dateStr = new Date().toISOString().slice(0, 10);
@@ -580,12 +646,11 @@ export default function CostOverviewTab() {
                       "application/json"
                     );
                   }}
-                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-text-muted hover:text-text-main hover:bg-surface/50 rounded-lg border border-border/30 transition-colors"
                   title={t("exportJSON")}
+                  aria-label={t("exportJSON")}
                 >
-                  <span className="material-symbols-outlined text-sm">download</span>
                   JSON
-                </button>
+                </Button>
               </div>
             )}
             <SegmentedControl
@@ -596,15 +661,15 @@ export default function CostOverviewTab() {
                 })),
                 {
                   value: SINCE_RESET_RANGE_VALUE,
-                  label: formatSinceResetButtonLabel(analytics?.resetWindow),
+                  label: formatSinceResetButtonLabel(analytics?.resetWindow, tUsageLimits),
                 },
               ]}
               value={range}
               onChange={(value) => setRange(value as CostRange)}
             />
           </div>
-        </div>
-      </Card>
+        }
+      />
 
       <PricingGapAlert gaps={analytics?.pricingGaps} />
 
@@ -613,27 +678,34 @@ export default function CostOverviewTab() {
           label={t("spendToday")}
           value={formatCurrencyCost(locale, presetCosts["1d"] || 0)}
           loading={summaryLoading}
-          color="text-emerald-400"
+          color="text-chart-4"
         />
         <MetricCard
           label={t("spend7d")}
           value={formatCurrencyCost(locale, presetCosts["7d"] || 0)}
           loading={summaryLoading}
-          color="text-sky-400"
+          color="text-chart-2"
         />
         <MetricCard
           label={t("spend30d")}
           value={formatCurrencyCost(locale, presetCosts["30d"] || 0)}
           loading={summaryLoading}
-          color="text-violet-400"
+          color="text-chart-3"
         />
         <MetricCard
           label={t("selectedWindow")}
           value={formatCurrencyCost(locale, summary.totalCost || 0)}
           subValue={selectedRangeLabel}
-          color="text-amber-400"
+          color="text-chart-5"
         />
       </div>
+
+      {includesFlatRateEstimates && (
+        <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning-bg px-4 py-3">
+          <Icon name="info" size={16} className="mt-0.5 text-warning" />
+          <p className="text-xs text-warning">{t("flatRateEstimateNotice")}</p>
+        </div>
+      )}
 
       {selectedApiKeyId && (
         <ApiKeyUsageLimitCard
@@ -725,7 +797,7 @@ export default function CostOverviewTab() {
             {t("routingEfficiency")}
           </h3>
           <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-            <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
+            <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-text-muted font-semibold">
                 {t("fallbackCount")}
               </p>
@@ -738,7 +810,7 @@ export default function CostOverviewTab() {
                 })}
               </p>
             </div>
-            <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
+            <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-text-muted font-semibold">
                 {t("fallbackRate")}
               </p>
@@ -746,30 +818,28 @@ export default function CostOverviewTab() {
                 <p
                   className={`text-lg font-semibold ${
                     (summary.fallbackRatePct || 0) > 10
-                      ? "text-red-400"
+                      ? "text-error"
                       : (summary.fallbackRatePct || 0) > 5
-                        ? "text-amber-400"
-                        : "text-emerald-400"
+                        ? "text-warning"
+                        : "text-success"
                   }`}
                 >
                   {(summary.fallbackRatePct || 0).toFixed(1)}%
                 </p>
-                <span
-                  className="material-symbols-outlined text-sm"
-                  style={{
-                    color:
-                      (summary.fallbackRatePct || 0) > 10
-                        ? "#f87171"
-                        : (summary.fallbackRatePct || 0) > 5
-                          ? "#fbbf24"
-                          : "#34d399",
-                  }}
-                >
-                  {(summary.fallbackRatePct || 0) > 5 ? "warning" : "check_circle"}
-                </span>
+                <Icon
+                  name={(summary.fallbackRatePct || 0) > 5 ? "warning" : "check_circle"}
+                  size={16}
+                  className={
+                    (summary.fallbackRatePct || 0) > 10
+                      ? "text-error"
+                      : (summary.fallbackRatePct || 0) > 5
+                        ? "text-warning"
+                        : "text-success"
+                  }
+                />
               </div>
             </div>
-            <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
+            <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-text-muted font-semibold">
                 {t("modelCoverage")}
               </p>
@@ -786,13 +856,13 @@ export default function CostOverviewTab() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-3">
-              <span className="material-symbols-outlined text-sky-400 text-lg">trending_up</span>
+              <Icon name="trending_up" size={18} className="text-info" />
               <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide">
                 {t("monthlyForecast")}
               </h3>
             </div>
             <div className="flex items-end gap-3">
-              <p className="text-3xl font-bold text-sky-400">
+              <p className="text-3xl font-bold text-info">
                 {currencyFormatter.format(projectedMonthEnd)}
               </p>
               <p className="text-xs text-text-muted pb-1">
@@ -805,13 +875,14 @@ export default function CostOverviewTab() {
               <span>/</span>
               <span>{t("daysRemaining", { days: daysRemainingInMonth })}</span>
             </div>
+            {includesFlatRateEstimates && (
+              <p className="mt-2 text-xs text-warning">{t("flatRateEstimateForecast")}</p>
+            )}
           </Card>
 
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-3">
-              <span className="material-symbols-outlined text-violet-400 text-lg">
-                compare_arrows
-              </span>
+              <Icon name="compare_arrows" size={18} className="text-chart-3" />
               <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide">
                 {t("periodComparison")}
               </h3>
@@ -820,30 +891,32 @@ export default function CostOverviewTab() {
               <p
                 className={`text-3xl font-bold ${
                   costChangePct > 0
-                    ? "text-red-400"
+                    ? "text-error"
                     : costChangePct < 0
-                      ? "text-emerald-400"
+                      ? "text-success"
                       : "text-text-main"
                 }`}
               >
                 {costChangePct > 0 ? "+" : ""}
                 {costChangePct.toFixed(1)}%
               </p>
-              <span
-                className={`material-symbols-outlined text-lg pb-1 ${
+              <Icon
+                name={
                   costChangePct > 0
-                    ? "text-red-400"
+                    ? "arrow_upward"
                     : costChangePct < 0
-                      ? "text-emerald-400"
+                      ? "arrow_downward"
+                      : "remove"
+                }
+                size={18}
+                className={`mb-1 ${
+                  costChangePct > 0
+                    ? "text-error"
+                    : costChangePct < 0
+                      ? "text-success"
                       : "text-text-muted"
                 }`}
-              >
-                {costChangePct > 0
-                  ? "arrow_upward"
-                  : costChangePct < 0
-                    ? "arrow_downward"
-                    : "remove"}
-              </span>
+              />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
               <div className="text-text-muted">
@@ -898,6 +971,7 @@ export default function CostOverviewTab() {
               rows={providersByCost}
               locale={locale}
               hasCostData={hasCostData}
+              legacyFreeLabel={t("legacyFreeLabel")}
             />
             <TopListCard
               title={t("topModels")}
@@ -908,6 +982,7 @@ export default function CostOverviewTab() {
               rows={modelsByCost}
               locale={locale}
               hasCostData={hasCostData}
+              legacyFreeLabel={t("legacyFreeLabel")}
             />
           </div>
 
@@ -958,14 +1033,19 @@ export default function CostOverviewTab() {
             <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.5fr] gap-4">
               <WeeklyPatternCard
                 title={t("weeklyUsagePattern")}
-                rows={analytics?.weeklyPattern || []}
+                rows={(analytics?.weeklyPattern || []).map((row) => ({
+                  ...row,
+                  day: formatWeekdayLabel(row.day, locale),
+                }))}
                 locale={locale}
+                tokensLabel={t("tokens")}
               />
               <ActivityHeatmap
                 title={t("activityHeatmap")}
                 activityMap={analytics?.activityMap || {}}
                 lessLabel={t("less")}
                 moreLabel={t("more")}
+                tokensLabel={t("tokens")}
                 locale={locale}
               />
             </div>
@@ -1065,11 +1145,6 @@ function CostExplorerCard({
     [t, isBilled]
   );
 
-  function renderSortIcon(columnKey: CostExplorerSortKey) {
-    if (sortKey !== columnKey) return "unfold_more";
-    return sortDirection === "asc" ? "arrow_upward" : "arrow_downward";
-  }
-
   function formatCost(value: number): string {
     if (!hasCostData && value <= 0) return t("legacyOrFree");
     return formatCurrencyCost(locale, value);
@@ -1090,9 +1165,7 @@ function CostExplorerCard({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-5">
         <div>
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-emerald-400 text-xl">
-              travel_explore
-            </span>
+            <Icon name="travel_explore" size={20} className="text-success" />
             <h3 className="text-lg font-bold text-text-main">{t("costExplorerTitle")}</h3>
           </div>
           <p className="text-sm text-text-muted mt-1">{t("costExplorerDescription")}</p>
@@ -1110,23 +1183,19 @@ function CostExplorerCard({
             size="sm"
             aria-label="Cost basis"
           />
-          <label className="relative block min-w-55">
-            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">
-              search
-            </span>
-            <input
-              value={searchQuery}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder={t("filterRows")}
-              className="w-full rounded-lg border border-border/40 bg-surface/40 py-2 pl-9 pr-3 text-sm text-text-main placeholder:text-text-muted focus:border-primary focus:outline-none"
-              aria-label={t("filterCostExplorerRows")}
-            />
-          </label>
+          <Input
+            icon="search"
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder={t("filterRows")}
+            aria-label={t("filterCostExplorerRows")}
+            className="min-w-55"
+          />
         </div>
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-xl border border-border/30 bg-surface/20 p-6">
+        <div className="rounded-xl border border-border bg-bg-subtle p-6">
           <EmptyState
             icon="manage_search"
             title={t("noMatchingCostRows")}
@@ -1135,141 +1204,126 @@ function CostExplorerCard({
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            {/* Two extra numeric columns — widen the scroll floor so the added
-                cells don't squeeze the dimension label into an ellipsis. */}
-            <table className="w-full min-w-250 text-sm">
-              <thead>
-                <tr className="border-b border-border/30 text-[11px] uppercase text-text-muted">
-                  {columns.map((column) => (
-                    <th
-                      key={column.key}
-                      className={`pb-2 font-semibold ${
-                        column.align === "right" ? "text-right" : "text-left"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => onSort(column.key)}
-                        className={`inline-flex items-center gap-1 hover:text-text-main ${
-                          column.align === "right" ? "justify-end" : "justify-start"
-                        }`}
-                      >
-                        <span>{column.label}</span>
-                        <span className="material-symbols-outlined text-sm">
-                          {renderSortIcon(column.key)}
-                        </span>
-                      </button>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/20">
-                {rows.map((row) => (
-                  <tr key={row.id} className="hover:bg-surface/20">
-                    <td className="py-3 pr-4">
-                      <div className="flex flex-col">
-                        <span className="font-medium text-text-main">{row.name}</span>
-                        {row.detail ? (
-                          <span className="text-xs text-text-muted truncate max-w-[320px]">
-                            {row.detail}
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td
-                      className={`py-3 text-right font-mono ${
-                        primaryCostKey === "cost"
-                          ? "font-semibold text-text-main"
-                          : "text-text-muted"
-                      }`}
-                    >
-                      {primaryCostKey !== "cost" && row.costsMatchDisplay ? (
-                        <span
-                          title="Same as the billed cost — this row was never redirected"
-                          aria-label="Same as the billed cost"
-                        >
-                          —
-                        </span>
-                      ) : (
-                        formatCost(row.cost)
-                      )}
-                    </td>
-                    <td
-                      className={`py-3 text-right font-mono ${
-                        primaryCostKey === "normalizedCostUsd"
-                          ? "font-semibold text-text-main"
-                          : "text-text-muted"
-                      }`}
-                    >
-                      {primaryCostKey !== "normalizedCostUsd" && row.costsMatchDisplay ? (
-                        <span
-                          title="Same as Cost — this row was never redirected"
-                          aria-label="Same as Cost"
-                        >
-                          —
-                        </span>
-                      ) : (
-                        formatCost(row.normalizedCostUsd)
-                      )}
-                    </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
-                      {numberFormatter.format(row.requests)}
-                    </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
-                      {row.volumeSplitDiffers ? (
-                        numberFormatter.format(
-                          isBilled ? row.servedRequests : row.requestedRequests
-                        )
-                      ) : (
-                        <span
-                          title="No model budget rule redirected this row — served and requested are the same"
-                          aria-label="Served and requested are the same"
-                        >
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
-                      {compactFormatter.format(row.totalTokens)}
-                    </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
-                      {row.volumeSplitDiffers ? (
-                        compactFormatter.format(
-                          isBilled ? row.servedTotalTokens : row.requestedTotalTokens
-                        )
-                      ) : (
-                        <span
-                          title="No model budget rule redirected this row — served and requested are the same"
-                          aria-label="Served and requested are the same"
-                        >
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 text-right font-mono text-text-muted">
-                      {row.avgCostPerRequest > 0
-                        ? currencyFormatter.format(row.avgCostPerRequest)
-                        : "—"}
-                    </td>
-                    <td className="py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-surface/60">
-                          <div
-                            className="h-full rounded-full bg-emerald-400"
-                            style={{ width: `${Math.min(Math.max(row.sharePct, 0), 100)}%` }}
-                          />
-                        </div>
-                        <span className="w-12 font-mono text-text-muted">
-                          {row.sharePct.toFixed(1)}%
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
+          {/* Two extra numeric columns (fork: served × requested split) — widen the scroll
+              floor so the added cells don't squeeze the dimension label into an ellipsis. */}
+          <Table scrollbarLabel={t("costExplorerTitle")} className="min-w-250">
+            <TableHeader>
+              <TableRow>
+                {columns.map((column) => (
+                  <SortableTableHead
+                    key={column.key}
+                    align={column.align}
+                    direction={sortKey === column.key ? sortDirection : undefined}
+                    defaultDirection={column.key === "name" ? "asc" : "desc"}
+                    // handleExplorerSort owns the flip rule; the kit renders the control.
+                    onDirectionChange={() => onSort(column.key)}
+                  >
+                    {column.label}
+                  </SortableTableHead>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell className="pr-4">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-text-main">{row.name}</span>
+                      {row.detail ? (
+                        <span className="max-w-[320px] truncate text-xs text-text-muted">
+                          {row.detail}
+                        </span>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell
+                    className={`text-right font-mono ${
+                      primaryCostKey === "cost" ? "font-semibold text-text-main" : "text-text-muted"
+                    }`}
+                  >
+                    {primaryCostKey !== "cost" && row.costsMatchDisplay ? (
+                      <span
+                        title="Same as the billed cost — this row was never redirected"
+                        aria-label="Same as the billed cost"
+                      >
+                        —
+                      </span>
+                    ) : (
+                      formatCost(row.cost)
+                    )}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right font-mono ${
+                      primaryCostKey === "normalizedCostUsd"
+                        ? "font-semibold text-text-main"
+                        : "text-text-muted"
+                    }`}
+                  >
+                    {primaryCostKey !== "normalizedCostUsd" && row.costsMatchDisplay ? (
+                      <span
+                        title="Same as Cost — this row was never redirected"
+                        aria-label="Same as Cost"
+                      >
+                        —
+                      </span>
+                    ) : (
+                      formatCost(row.normalizedCostUsd)
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-text-muted">
+                    {numberFormatter.format(row.requests)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-text-muted">
+                    {row.volumeSplitDiffers ? (
+                      numberFormatter.format(isBilled ? row.servedRequests : row.requestedRequests)
+                    ) : (
+                      <span
+                        title="No model budget rule redirected this row — served and requested are the same"
+                        aria-label="Served and requested are the same"
+                      >
+                        —
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-text-muted">
+                    {compactFormatter.format(row.totalTokens)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-text-muted">
+                    {row.volumeSplitDiffers ? (
+                      compactFormatter.format(
+                        isBilled ? row.servedTotalTokens : row.requestedTotalTokens
+                      )
+                    ) : (
+                      <span
+                        title="No model budget rule redirected this row — served and requested are the same"
+                        aria-label="Served and requested are the same"
+                      >
+                        —
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-text-muted">
+                    {row.avgCostPerRequest > 0
+                      ? currencyFormatter.format(row.avgCostPerRequest)
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-border/60">
+                        <div
+                          className="h-full rounded-full bg-success"
+                          style={{ width: `${Math.min(Math.max(row.sharePct, 0), 100)}%` }}
+                        />
+                      </div>
+                      <span className="w-12 font-mono text-text-muted">
+                        {row.sharePct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
           <p className="mt-3 text-xs text-text-muted">{formatRowCount()}</p>
           <p className="mt-1 text-xs text-text-muted">
             {isBilled ? (
@@ -1300,195 +1354,10 @@ function CostExplorerCard({
 
 function CompactMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
+    <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
       <p className="text-xs uppercase tracking-wide text-text-muted font-semibold">{label}</p>
       <p className="text-lg font-semibold text-text-main mt-1">{value}</p>
     </div>
-  );
-}
-
-function ProviderSpendCard({
-  title,
-  rows,
-  locale,
-}: {
-  title: string;
-  rows: UsageAnalyticsProviderRow[];
-  locale: string;
-}) {
-  const currencyFormatter = createCurrencyFormatter(locale);
-  const chartRows = rows.slice(0, 6).map((row, index) => ({
-    name: row.provider,
-    value: row.cost,
-    fill: CHART_COLORS[index % CHART_COLORS.length],
-  }));
-
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-4">
-        {title}
-      </h3>
-      <div className="flex flex-col gap-4 md:flex-row md:items-center">
-        <div className="w-full md:w-45 h-45">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chartRows}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={45}
-                outerRadius={72}
-                paddingAngle={2}
-              >
-                {chartRows.map((entry) => (
-                  <Cell key={entry.name} fill={entry.fill} stroke="none" />
-                ))}
-              </Pie>
-              <Tooltip
-                formatter={(value: number) => currencyFormatter.format(value || 0)}
-                contentStyle={{
-                  background: "var(--surface)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: "12px",
-                }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="flex-1 space-y-2">
-          {chartRows.map((row) => (
-            <div key={row.name} className="flex items-center justify-between gap-3 text-sm">
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: row.fill }}
-                />
-                <span className="truncate text-text-main">{row.name}</span>
-              </div>
-              <span className="font-mono text-text-muted">
-                {currencyFormatter.format(row.value)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function CostTrendCard({
-  title,
-  rows,
-  locale,
-}: {
-  title: string;
-  rows: UsageAnalyticsTrendRow[];
-  locale: string;
-}) {
-  const currencyFormatter = createCurrencyFormatter(locale);
-  const chartRows = rows.map((row) => ({
-    date: row.date.slice(5),
-    cost: row.cost || 0,
-  }));
-
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-4">
-        {title}
-      </h3>
-      <div className="h-55">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartRows} margin={{ top: 5, right: 12, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-              interval={Math.max(Math.floor(chartRows.length / 8), 0)}
-            />
-            <YAxis
-              tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={(value) => currencyFormatter.format(value).replace(".00", "")}
-              width={48}
-            />
-            <Tooltip
-              formatter={(value: number) => currencyFormatter.format(value || 0)}
-              contentStyle={{
-                background: "var(--surface)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: "12px",
-              }}
-            />
-            <Line
-              type="monotone"
-              dataKey="cost"
-              stroke="#10b981"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </Card>
-  );
-}
-
-function WeeklyPatternCard({
-  title,
-  rows,
-  locale,
-}: {
-  title: string;
-  rows: Array<{ day: string; avgTokens: number; totalTokens: number }>;
-  locale: string;
-}) {
-  const chartData = rows.map((row) => ({
-    day: row.day,
-    tokens: row.avgTokens || 0,
-  }));
-
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-4">
-        {title}
-      </h3>
-      <div className="h-40">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-            <XAxis
-              dataKey="day"
-              tick={{ fontSize: 11, fill: "var(--text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={(value) =>
-                new Intl.NumberFormat(locale, { notation: "compact" }).format(Number(value || 0))
-              }
-              width={40}
-            />
-            <Tooltip
-              formatter={(value: number) =>
-                `${new Intl.NumberFormat(locale).format(value || 0)} tokens`
-              }
-              contentStyle={{
-                background: "var(--surface)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: "12px",
-              }}
-            />
-            <Bar dataKey="tokens" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </Card>
   );
 }
 
@@ -1497,12 +1366,14 @@ function ActivityHeatmap({
   activityMap,
   lessLabel,
   moreLabel,
+  tokensLabel,
   locale,
 }: {
   title: string;
   activityMap: Record<string, number>;
   lessLabel: string;
   moreLabel: string;
+  tokensLabel: string;
   locale: string;
 }) {
   const days: Array<{ date: string; value: number }> = [];
@@ -1518,12 +1389,12 @@ function ActivityHeatmap({
 
   const maxValue = Math.max(...days.map((day) => day.value), 1);
   const getIntensity = (value: number): string => {
-    if (value === 0) return "bg-surface/30";
+    if (value === 0) return "bg-border/50";
     const ratio = value / maxValue;
-    if (ratio < 0.25) return "bg-emerald-900/50";
-    if (ratio < 0.5) return "bg-emerald-700/60";
-    if (ratio < 0.75) return "bg-emerald-500/70";
-    return "bg-emerald-400";
+    if (ratio < 0.25) return "bg-success/25";
+    if (ratio < 0.5) return "bg-success/45";
+    if (ratio < 0.75) return "bg-success/70";
+    return "bg-success";
   };
 
   const weeks: Array<Array<{ date: string; value: number }>> = [];
@@ -1546,7 +1417,7 @@ function ActivityHeatmap({
                   className={`w-2.75 h-2.75 rounded-xs ${getIntensity(day.value)}`}
                   title={`${day.date}: ${
                     day.value > 0
-                      ? `${new Intl.NumberFormat(locale).format(day.value)} tokens`
+                      ? `${new Intl.NumberFormat(locale).format(day.value)} ${tokensLabel}`
                       : "No activity"
                   }`}
                 />
@@ -1558,70 +1429,13 @@ function ActivityHeatmap({
       <div className="flex items-center gap-2 mt-3 text-[10px] text-text-muted">
         <span>{lessLabel}</span>
         <div className="flex gap-0.5">
-          <div className="w-2.5 h-2.5 rounded-xs bg-surface/30" />
-          <div className="w-2.5 h-2.5 rounded-xs bg-emerald-900/50" />
-          <div className="w-2.5 h-2.5 rounded-xs bg-emerald-700/60" />
-          <div className="w-2.5 h-2.5 rounded-xs bg-emerald-500/70" />
-          <div className="w-2.5 h-2.5 rounded-xs bg-emerald-400" />
+          <div className="w-2.5 h-2.5 rounded-xs bg-border/50" />
+          <div className="w-2.5 h-2.5 rounded-xs bg-success/25" />
+          <div className="w-2.5 h-2.5 rounded-xs bg-success/45" />
+          <div className="w-2.5 h-2.5 rounded-xs bg-success/70" />
+          <div className="w-2.5 h-2.5 rounded-xs bg-success" />
         </div>
         <span>{moreLabel}</span>
-      </div>
-    </Card>
-  );
-}
-
-function TopListCard({
-  title,
-  rows,
-  nameKey,
-  valueKey,
-  secondaryKey,
-  secondaryLabel,
-  locale,
-  hasCostData,
-}: {
-  title: string;
-  rows: Array<Record<string, any>>;
-  nameKey: string;
-  valueKey: string;
-  secondaryKey?: string;
-  secondaryLabel?: string;
-  locale: string;
-  hasCostData?: boolean;
-}) {
-  const currencyFormatter = createCurrencyFormatter(locale);
-
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-4">
-        {title}
-      </h3>
-      <div className="space-y-2">
-        {rows.slice(0, 6).map((row) => (
-          <div
-            key={String(row[nameKey])}
-            className="flex items-center justify-between gap-3 rounded-lg border border-border/20 bg-surface/20 px-4 py-3"
-          >
-            <span className="text-sm text-text-main truncate">{String(row[nameKey])}</span>
-            <div className="flex items-center gap-3 shrink-0">
-              {secondaryKey ? (
-                <span className="text-xs text-text-muted">
-                  {new Intl.NumberFormat(locale, { notation: "compact" }).format(
-                    Number(row[secondaryKey] || 0)
-                  )}{" "}
-                  {secondaryLabel}
-                </span>
-              ) : null}
-              <span className="text-sm font-mono text-text-muted">
-                {hasCostData || Number(row[valueKey] || 0) > 0 ? (
-                  currencyFormatter.format(Number(row[valueKey] || 0))
-                ) : (
-                  <span className="text-xs italic opacity-70">{t("legacyFreeLabel")}</span>
-                )}
-              </span>
-            </div>
-          </div>
-        ))}
       </div>
     </Card>
   );
@@ -1668,42 +1482,38 @@ function CostBreakdownTable({
       <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-4">
         {title}
       </h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-[11px] text-text-muted uppercase border-b border-border/30">
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  className={`pb-2 font-semibold ${
-                    column.align === "right" ? "text-right" : "text-left"
-                  }`}
-                >
-                  {column.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/20">
-            {rows.map((row) => (
-              <tr key={String(row[columns[0].key])} className="hover:bg-surface/20">
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={`py-2 ${
-                      column.align === "right"
-                        ? "text-right font-mono text-text-muted"
-                        : "text-left text-text-main truncate max-w-50"
-                    }`}
-                  >
-                    {formatValue(row[column.key], column.format)}
-                  </td>
-                ))}
-              </tr>
+      <Table scrollbarLabel={title}>
+        <TableHeader>
+          <TableRow>
+            {columns.map((column) => (
+              <TableHead
+                key={column.key}
+                className={column.align === "right" ? "text-right" : "text-left"}
+              >
+                {column.label}
+              </TableHead>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={String(row[columns[0].key])}>
+              {columns.map((column) => (
+                <TableCell
+                  key={column.key}
+                  className={
+                    column.align === "right"
+                      ? "text-right font-mono text-text-muted"
+                      : "max-w-50 truncate text-left text-text-main"
+                  }
+                >
+                  {formatValue(row[column.key], column.format)}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </Card>
   );
 }

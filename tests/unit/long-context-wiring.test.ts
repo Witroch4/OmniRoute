@@ -110,13 +110,16 @@ test("a model without a long_context block ignores the bucket entirely", async (
   near(spend, 402_000 * 1e-6 + 3_100 * 5e-6, "Haiku 4.5 stays flat");
 });
 
+// Usage stats show flat-rate plans as $0 (upstream 3.8.53 classifies the `claude`/`cc`
+// Claude Code plan as flat-rate), so the stats cases use the metered `anthropic` API,
+// whose Haiku 5.5 row carries the same long-context tier.
 test("usage stats price the recent window per request, not on the sum", async () => {
   const now = new Date().toISOString();
   const requests = [
     ...Array.from({ length: 120 }, () => ({ ...SMALL, at: now })),
     { ...LONG, at: now },
   ];
-  for (const r of requests) insert("claude", "claude-haiku-5-5", r);
+  for (const r of requests) insert("anthropic", "claude-haiku-5-5", r);
 
   const result = await stats.getUsageStats();
   near(result.totalCost, perRequestCost(requests), "stats total");
@@ -124,8 +127,11 @@ test("usage stats price the recent window per request, not on the sum", async ()
 
 test("usage stats with aggregation on: the UNION runs and rolled-up days stay at stored cost", async () => {
   const current = dbSettings.getUserDatabaseSettings();
+  // The raw-data cutoff follows retention.usageHistory (the real rollup boundary) since
+  // upstream 3.8.53, so shorten that window too.
   dbSettings.updateDatabaseSettings({
     aggregation: { ...current.aggregation, enabled: true, rawDataRetentionDays: 7 },
+    retention: { ...current.retention, usageHistory: 7 },
   });
   try {
     const now = new Date().toISOString();
@@ -135,14 +141,14 @@ test("usage stats with aggregation on: the UNION runs and rolled-up days stay at
       .prepare(
         `INSERT INTO daily_usage_summary (date, provider, model, total_input_tokens,
            total_output_tokens, total_requests, total_cost)
-         VALUES ('2026-05-20', 'claude', 'claude-haiku-5-5', 5000000, 200000, 2500, 0.37)`
+         VALUES ('2026-05-20', 'anthropic', 'claude-haiku-5-5', 5000000, 200000, 2500, 0.37)`
       )
       .run();
     const requests = [
       ...Array.from({ length: 30 }, () => ({ ...SMALL, at: now })),
       { ...LONG, at: now },
     ];
-    for (const r of requests) insert("claude", "claude-haiku-5-5", r);
+    for (const r of requests) insert("anthropic", "claude-haiku-5-5", r);
 
     const result = await stats.getUsageStats();
     near(
@@ -151,7 +157,10 @@ test("usage stats with aggregation on: the UNION runs and rolled-up days stay at
       "raw per request + stored summary cost"
     );
   } finally {
-    dbSettings.updateDatabaseSettings({ aggregation: { ...current.aggregation } });
+    dbSettings.updateDatabaseSettings({
+      aggregation: { ...current.aggregation },
+      retention: { ...current.retention },
+    });
   }
 });
 

@@ -14,7 +14,8 @@ import {
   supportsXHighEffort,
   supportsXHighEffortForMaxNormalization,
 } from "../../open-sse/config/providerModels.ts";
-import { GITHUB_COPILOT_MODEL_ALLOWLIST } from "../../open-sse/services/githubCopilotModels.ts";
+// GITHUB_COPILOT_MODEL_ALLOWLIST is no longer used to gate the registry — the
+// registry and the discovery fallback are asserted independently below.
 
 test("provider models helpers expose model lists and defaults", () => {
   const openaiModels = getProviderModels("openai");
@@ -83,24 +84,83 @@ test("Reka registry exposes preset models", () => {
   assert.equal(isValidModel("reka", "reka-flash"), true);
 });
 
+// Fork: the gh registry is the fork account's own Copilot picker (2026-09-03 /
+// 2026-10-12), minus GitHub's announced retirements, plus Copilot's "auto" — not
+// upstream's curated fifteen (gpt-6-astra, gpt-5.6-sol, claude-fable-5.1 and
+// claude-opus-5 are policy-disabled on this account and answer 400).
 test("GitHub Copilot registry reflects the current supported model lineup", () => {
   const githubModels = getProviderModels("gh");
-  const ids = githubModels.map((model) => model.id);
+  const ids: string[] = githubModels.map((model) => model.id);
 
-  assert.deepEqual(ids, [...GITHUB_COPILOT_MODEL_ALLOWLIST]);
-  assert.equal(getModelTargetFormat("gh", "gpt-5.3-codex"), "openai-responses");
-  assert.equal(getModelTargetFormat("gh", "claude-opus-4.6"), null);
-  assert.equal(getModelTargetFormat("gh", "claude-opus-4.8-fast"), null);
-  assert.equal(getModelTargetFormat("gh", "gemini-3.5-flash"), null);
-  assert.equal(getModelTargetFormat("gh", "kimi-k2.7-code"), null);
-  assert.equal(ids.includes("gpt-4"), false);
-  assert.equal(ids.includes("gpt-4o"), false);
-  assert.equal(ids.includes("gpt-5.4-nano"), false);
-  assert.equal(ids.includes("gpt-5.1"), false);
-  assert.equal(ids.includes("gpt-5.1-codex"), false);
-  assert.equal(ids.includes("claude-opus-4.1"), false);
-  assert.equal(ids.includes("claude-opus-4-5-20251101"), false);
-  assert.equal(ids.includes("gemini-3-flash-preview"), false);
+  assert.deepEqual(ids, [
+    "claude-fable-5",
+    "claude-opus-4.8-fast",
+    "claude-opus-4.8",
+    "claude-sonnet-4.6",
+    "claude-sonnet-5.5",
+    "claude-sonnet-5",
+    "claude-haiku-5.5",
+    "claude-haiku-4.5",
+    "gpt-5.5",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gpt-6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "grok-4.7",
+    "grok-4.6",
+    "grok-4.5",
+    "mai-code-1.1-flash",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4o-2024-11-20",
+    "gpt-4o-mini",
+    "gpt-4-0125-preview",
+    "kimi-k3",
+    "mai-code-1-flash",
+    // Copilot's server-side "auto" model selection (#16679).
+    "auto",
+  ]);
+  for (const id of [
+    "gpt-6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "grok-4.7",
+    "grok-4.6",
+    "grok-4.5",
+    "mai-code-1.1-flash",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5-mini",
+    "mai-code-1-flash",
+  ]) {
+    assert.equal(getModelTargetFormat("gh", id), "openai-responses");
+  }
+  for (const id of ids.filter((id) => id.startsWith("claude-"))) {
+    assert.equal(getModelTargetFormat("gh", id), "claude");
+  }
+  assert.equal(getModelTargetFormat("gh", "gemini-3.8-flash"), "openai");
+  assert.equal(getModelTargetFormat("gh", "kimi-k3"), "openai");
+});
+
+test("verified Anthropic launch catalogs keep Fable 5.1 first", () => {
+  for (const provider of ["anthropic", "cc", "cw"]) {
+    assert.equal(
+      getProviderModels(provider)[0]?.id,
+      "claude-fable-5-1",
+      `${provider} must list the strongest Claude model first`
+    );
+  }
+});
+
+test("Copilot catalogs keep their independently verified defaults", () => {
+  // Fork: the gh default is the first entry of the fork's own picker.
+  assert.equal(getProviderModels("gh")[0]?.id, "claude-fable-5");
+  assert.equal(getProviderModels("ghe-copilot")[0]?.id, "claude-fable-5");
 });
 
 test("Kiro registry exposes the current CLI model lineup with context windows", () => {
@@ -141,6 +201,8 @@ test("Claude max effort support excludes Haiku family and non-Claude IDs", () =>
 test("xhigh effort support defaults to pass-through and opts out explicit false models", () => {
   const claudeModels = new Set(getModelsByProviderId("claude").map((model) => model.id));
 
+  assert.ok(claudeModels.has("claude-opus-5"));
+  assert.equal(supportsXHighEffort("claude", "claude-opus-5"), true);
   assert.ok(claudeModels.has("claude-opus-4-8"));
   assert.equal(supportsXHighEffort("claude", "claude-opus-4-8"), true);
   assert.equal(supportsXHighEffort("claude", "claude-opus-4-7"), true);

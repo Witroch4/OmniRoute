@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@omniroute/ui-kit/tabs";
 import type { InterceptedRequest } from "@/mitm/inspector/types";
-import { cn } from "@/shared/utils/cn";
+import EmptyState from "@/shared/components/EmptyState";
+import Icon from "@/shared/components/Icon";
 import { HeadersTab } from "./tabs/HeadersTab";
 import { RequestBodyTab } from "./tabs/RequestBodyTab";
 import { ResponseBodyTab } from "./tabs/ResponseBodyTab";
@@ -16,19 +19,19 @@ type TabId = "conversation" | "headers" | "request" | "response" | "timing" | "l
 
 interface Tab {
   id: TabId;
-  label: string;
+  labelKey: string;
   icon: string;
   llmOnly?: boolean;
 }
 
 const TABS: Tab[] = [
-  { id: "conversation", label: "Conversation", icon: "chat_bubble" },
-  { id: "headers", label: "Headers", icon: "list" },
-  { id: "request", label: "Request", icon: "upload" },
-  { id: "response", label: "Response", icon: "download" },
-  { id: "timing", label: "Timing", icon: "timer" },
-  { id: "llm", label: "LLM", icon: "psychology", llmOnly: true },
-  { id: "stats", label: "Stats", icon: "bar_chart" },
+  { id: "conversation", labelKey: "tabConversation", icon: "chat_bubble" },
+  { id: "headers", labelKey: "tabHeaders", icon: "list" },
+  { id: "request", labelKey: "tabRequest", icon: "upload" },
+  { id: "response", labelKey: "tabResponse", icon: "download" },
+  { id: "timing", labelKey: "tabTiming", icon: "timer" },
+  { id: "llm", labelKey: "tabLlm", icon: "psychology", llmOnly: true },
+  { id: "stats", labelKey: "tabStats", icon: "bar_chart" },
 ];
 
 interface DetailsPanelProps {
@@ -37,20 +40,13 @@ interface DetailsPanelProps {
 }
 
 export function DetailsPanel({ request, allRequests }: DetailsPanelProps) {
+  const t = useTranslations("trafficInspector");
   const [activeTab, setActiveTab] = useState<TabId>("conversation");
 
   if (!request) {
     return (
-      <div className="h-full flex items-center justify-center text-text-muted">
-        <div className="text-center space-y-2">
-          <span
-            className="material-symbols-outlined text-[36px] block"
-            aria-hidden="true"
-          >
-            info
-          </span>
-          <p className="text-sm">Select a request to inspect it.</p>
-        </div>
+      <div data-testid="details-panel" className="h-full flex items-center justify-center p-4">
+        <EmptyState icon="info" title={t("selectRequest")} />
       </div>
     );
   }
@@ -62,48 +58,50 @@ export function DetailsPanel({ request, allRequests }: DetailsPanelProps) {
   const currentTab = visibleTabs.find((t) => t.id === activeTab) ? activeTab : "conversation";
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div
-        role="tablist"
-        aria-label="Request details"
-        className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 pt-1 bg-bg-subtle shrink-0"
+    <div data-testid="details-panel" className="h-full flex flex-col overflow-hidden">
+      {/* Tab bar + panels: kit Tabs; TabsContent renders only the selected panel, with
+          role="tabpanel" wired to its trigger. */}
+      <Tabs
+        variant="underline"
+        value={currentTab}
+        onValueChange={(next) => setActiveTab(next as TabId)}
+        className="flex flex-1 flex-col overflow-hidden"
       >
-        {visibleTabs.map((tab) => {
-          const selected = currentTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                "inline-flex items-center gap-1 h-8 px-2 text-xs rounded-t border-b-2 transition-colors focus-ring",
-                selected
-                  ? "border-blue-500 text-blue-400 bg-surface"
-                  : "border-transparent text-text-muted hover:text-text-main hover:bg-surface/50"
-              )}
-            >
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">
-                {tab.icon}
-              </span>
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+        <div className="shrink-0 border-b border-border bg-bg-subtle px-2 pt-1">
+          <TabsList aria-label={t("requestDetails")} className="flex-wrap">
+            {visibleTabs.map((tab) => (
+              <TabsTrigger key={tab.id} value={tab.id} className="gap-1 text-xs">
+                <Icon name={tab.icon} size={13} />
+                {t(tab.labelKey)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
-        {currentTab === "conversation" && <ConversationTab request={request} />}
-        {currentTab === "headers" && <HeadersTab request={request} />}
-        {currentTab === "request" && <RequestBodyTab request={request} />}
-        {currentTab === "response" && <ResponseBodyTab request={request} />}
-        {currentTab === "timing" && <TimingTab request={request} />}
-        {currentTab === "llm" && isLlm && <LlmDetailsTab request={request} />}
-        {currentTab === "stats" && <StatsTab requests={allRequests} />}
-      </div>
+        <TabsContent value="conversation" className="flex-1 overflow-hidden">
+          <ConversationTab request={request} />
+        </TabsContent>
+        <TabsContent value="headers" className="flex-1 overflow-hidden">
+          <HeadersTab request={request} />
+        </TabsContent>
+        <TabsContent value="request" className="flex-1 overflow-hidden">
+          <RequestBodyTab request={request} />
+        </TabsContent>
+        <TabsContent value="response" className="flex-1 overflow-hidden">
+          <ResponseBodyTab request={request} />
+        </TabsContent>
+        <TabsContent value="timing" className="flex-1 overflow-hidden">
+          <TimingTab request={request} />
+        </TabsContent>
+        {isLlm && (
+          <TabsContent value="llm" className="flex-1 overflow-hidden">
+            <LlmDetailsTab request={request} />
+          </TabsContent>
+        )}
+        <TabsContent value="stats" className="flex-1 overflow-hidden">
+          <StatsTab requests={allRequests} />
+        </TabsContent>
+      </Tabs>
 
       {/* Annotation footer */}
       <div className="shrink-0 border-t border-border px-3 py-2 bg-bg-subtle">

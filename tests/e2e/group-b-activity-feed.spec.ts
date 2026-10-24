@@ -47,7 +47,7 @@ test.describe("Group B — Activity Feed", () => {
   });
 
   test("activity page exists and returns 200", async ({ page }) => {
-    const response = await page.goto("http://localhost:20128/dashboard/activity", {
+    const response = await page.goto("/dashboard/activity", {
       waitUntil: "domcontentloaded",
     });
     // After login redirect the page should settle on activity or login
@@ -59,9 +59,7 @@ test.describe("Group B — Activity Feed", () => {
     await gotoDashboardRoute(page, "/dashboard/activity");
 
     // The page header should be visible (h1 or title element)
-    const heading = page
-      .locator("h1, [data-testid='activity-title']")
-      .first();
+    const heading = page.locator("h1, [data-testid='activity-title']").first();
     await expect(heading).toBeVisible({ timeout: 15000 });
 
     // ActivityFeed renders <div role="status"> (empty state) or a
@@ -72,7 +70,7 @@ test.describe("Group B — Activity Feed", () => {
     // the dashboard redirected to login without rendering the feed.
     const feedContainer = page.locator(
       "[data-testid='activity-feed'], [data-testid='activity-empty-state']," +
-      " .activity-feed, [role='status'], [role='list'], ul.divide-y, div.divide-y"
+        " .activity-feed, [role='status'], [role='list'], ul.divide-y, div.divide-y"
     );
     await expect(feedContainer.first()).toBeVisible({ timeout: 15000 });
   });
@@ -89,8 +87,13 @@ test.describe("Group B — Activity Feed", () => {
 
     await gotoDashboardRoute(page, "/dashboard/activity");
 
-    const pageContent = await page.content();
-    // Stack traces should never appear in the UI (Hard Rule #12)
-    expect(pageContent).not.toMatch(/\s+at\s+\//);
+    // Assert on what the user actually SEES, not on page.content(): the full HTML
+    // embeds the serialized i18n payload, where ordinary provider prose trips a
+    // naive stack-trace match ("...endpoint at /api/v1/chat/completions" — zenmux).
+    // innerText carries only rendered text, which is exactly what Hard Rule #12 is
+    // about. The pattern also requires the :line:col suffix every real stack frame
+    // has, so English sentences containing " at /" can never masquerade as a leak.
+    const visibleText = await page.locator("body").innerText();
+    expect(visibleText).not.toMatch(/\s+at\s+\/\S*:\d+:\d+/);
   });
 });

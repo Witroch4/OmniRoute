@@ -1,10 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Field } from "@omniroute/ui-kit/field";
+import Select from "@/shared/components/Select";
+import Textarea from "@/shared/components/Textarea";
 import { useApiKey } from "../../providers/hooks/useApiKey";
 import { useProviderModels } from "../../providers/hooks/useProviderModels";
 import { buildCurl } from "../../providers/utils/buildCurl";
+import {
+  PLAYGROUND_KEY_ID_HEADER,
+  resolvePlaygroundKeyId,
+} from "../../providers/utils/playgroundAuth";
 import { PlaygroundCard } from "./PlaygroundCard";
 
 interface Props {
@@ -22,7 +29,7 @@ function extractError(data: unknown): string | null {
   return null;
 }
 
-function VideoResultRenderer(data: unknown) {
+function VideoResultRenderer(data: unknown, unsupportedText: string) {
   if (!data || typeof data !== "object") {
     return <pre className="text-xs p-3 text-text-main">{JSON.stringify(data, null, 2)}</pre>;
   }
@@ -38,7 +45,7 @@ function VideoResultRenderer(data: unknown) {
     return (
       <div className="p-3">
         <video controls src={videoUrl} className="max-w-full rounded-lg border border-border">
-          Your browser does not support video.
+          {unsupportedText}
         </video>
       </div>
     );
@@ -48,12 +55,13 @@ function VideoResultRenderer(data: unknown) {
 
 export function VideoExampleCard({ providerId }: Props) {
   const t = useTranslations("miniPlayground");
-  const { apiKey } = useApiKey();
+  const textareaId = useId();
+  const { apiKey, keys } = useApiKey();
   const { models } = useProviderModels(providerId);
 
   const firstModel = models[0]?.id ?? "";
   const [model, setModel] = useState<string>("");
-  const [prompt, setPrompt] = useState<string>("A time-lapse of clouds over a mountain range");
+  const [prompt, setPrompt] = useState<string>(() => t("videoSample"));
   const [running, setRunning] = useState<boolean>(false);
   const [result, setResult] = useState<{ data: unknown; latencyMs: number } | undefined>();
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +74,7 @@ export function VideoExampleCard({ providerId }: Props) {
       (typeof window !== "undefined" ? window.location.origin : "http://localhost:20128") +
       ENDPOINT_PATH,
     headers: {
-      Authorization: `Bearer ${apiKey || "<your-api-key>"}`,
+      Authorization: "Bearer <your-api-key>",
       "Content-Type": "application/json",
     },
     body: buildBody(),
@@ -78,13 +86,18 @@ export function VideoExampleCard({ providerId }: Props) {
     setResult(undefined);
     const t0 = performance.now();
     try {
+      // Authenticate via the dashboard session cookie — never send the masked
+      // apiKey as a Bearer token (it is not a real credential; see #9935).
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "x-connection-id": providerId,
+      };
+      const playgroundKeyId = resolvePlaygroundKeyId(apiKey, keys);
+      if (playgroundKeyId) headers[PLAYGROUND_KEY_ID_HEADER] = playgroundKeyId;
       const res = await fetch(ENDPOINT_PATH, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "x-connection-id": providerId,
-        },
+        credentials: "same-origin",
+        headers,
         body: JSON.stringify(buildBody()),
       });
       const data: unknown = await res.json();
@@ -96,7 +109,7 @@ export function VideoExampleCard({ providerId }: Props) {
         setResult({ data, latencyMs });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(err instanceof Error ? err.message : t("requestFailed"));
     } finally {
       setRunning(false);
     }
@@ -106,41 +119,33 @@ export function VideoExampleCard({ providerId }: Props) {
 
   return (
     <PlaygroundCard
-      kindLabel="Video"
+      kindLabel={t("video")}
       apiEndpoint={ENDPOINT_PATH}
       onRun={handleRun}
       curlSnippet={curlSnippet}
       running={running}
       result={result}
       error={error}
-      resultRenderer={VideoResultRenderer}
+      resultRenderer={(data) => VideoResultRenderer(data, t("browserVideoUnsupported"))}
     >
       {/* Model */}
-      <div>
-        <label className="block text-xs text-text-muted mb-1">{t("model")}</label>
-        <select
-          value={model || firstModel}
-          onChange={(e) => setModel(e.target.value)}
-          className="w-full rounded-md border border-border bg-bg-subtle text-sm px-2 py-1.5 text-text-main focus:outline-none focus:ring-1 focus:ring-primary"
-        >
-          {modelOptions.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.id}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Select
+        label={t("model")}
+        value={model || firstModel}
+        onChange={(e) => setModel(e.target.value)}
+        options={modelOptions.map((m) => ({ value: m.id, label: m.id }))}
+      />
       {/* Prompt */}
-      <div>
-        <label className="block text-xs text-text-muted mb-1">{t("prompt")}</label>
-        <textarea
+      <Field label={t("prompt")} htmlFor={textareaId}>
+        <Textarea
+          id={textareaId}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={2}
-          placeholder="A time-lapse of clouds over a mountain range"
-          className="w-full rounded-md border border-border bg-bg-subtle text-sm px-2 py-1.5 text-text-main focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+          placeholder={t("videoSample")}
+          className="resize-none"
         />
-      </div>
+      </Field>
     </PlaygroundCard>
   );
 }

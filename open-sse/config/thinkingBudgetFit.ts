@@ -86,6 +86,24 @@ export function usesFittedThinkingBudget(model: string | null | undefined): bool
   return typeof model === "string" && /gemini/i.test(model);
 }
 
+/**
+ * Which thinking knob a Gemini request carries — exactly ONE per request.
+ *
+ * Upstream #13463 sends Gemini 3.8 the string `thinkingLevel` instead of a numeric
+ * `thinkingBudget` (and stops injecting `includeThoughts`), to keep thoughts from
+ * eating the output cap. The fork solves that same problem with the numeric budget:
+ * the `-low/-medium/-high` suffix sets the default budget (openai-to-gemini.ts
+ * `tierSuffixThinkingBudget`) and, on Antigravity, `reconcileThinkingBudget` keeps it
+ * inside `max_tokens` with an answer reserve — both measured on the wire against
+ * agy/gemini-3.8-flash-*. So Gemini 3.8 keeps the numeric budget, and only Gemini 4
+ * (#16603: `gemini-4-*` takes `thinkingLevel`, never a budget) uses the level.
+ * An explicit client/operator `thinkingLevel` still wins on every model (the
+ * translators then drop the budget).
+ */
+export function geminiUsesThinkingLevel(model: string | null | undefined): boolean {
+  return typeof model === "string" && /(?:^|\/)gemini-4(?:$|[-.])/i.test(model);
+}
+
 export function reconcileThinkingBudget(
   config: GenerationConfigLike,
   model: string | null | undefined,

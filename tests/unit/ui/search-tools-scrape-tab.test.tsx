@@ -121,9 +121,9 @@ describe("ScrapeTab", () => {
     });
     const errorEl = el.querySelector("[data-testid='url-error']");
     expect(errorEl).toBeTruthy();
-    // next-intl is mocked to echo keys, so the message renders as its i18n key
-    // (search.scrapeUrlRequired = "URL is required").
-    expect(errorEl?.textContent).toBe("scrapeUrlRequired");
+    // next-intl is mocked as a key pass-through above (per repo convention), so the
+    // rendered text is the raw i18n key, not the translated "URL is required" copy.
+    expect(errorEl?.textContent).toContain("scrapeUrlRequired");
   });
 
   it("shows error for invalid URL", () => {

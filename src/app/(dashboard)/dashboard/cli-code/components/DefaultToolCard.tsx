@@ -1,14 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import Icon from "@/shared/components/Icon";
 import { Card, Button, ModelSelectModal } from "@/shared/components";
-import Image from "next/image";
+import Input from "@/shared/components/Input";
+import Select from "@/shared/components/Select";
 import { useTranslations } from "next-intl";
 import { copyToClipboard } from "@/shared/utils/clipboard";
 import { buildOpenCodeConfigDocument } from "@/shared/services/opencodeConfig";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { DEFAULT_DISPLAY_BASE_URL } from "@/shared/hooks";
 import ProviderIcon from "@/shared/components/ProviderIcon";
+import { cn } from "@/shared/utils/cn";
+import { CARD_TOGGLE_CLASS, cardToggleProps } from "./cardToggle";
 
 export default function DefaultToolCard({
   toolId,
@@ -20,10 +24,12 @@ export default function DefaultToolCard({
   activeProviders = [],
   cloudEnabled = false,
   batchStatus,
+  catalog = [],
 }) {
   const t = useTranslations("cliTools");
   const translateOrFallback = useCallback(
     (key, fallback, values = undefined) => {
+      if (!t.has(key)) return fallback;
       try {
         return t(key, values);
       } catch {
@@ -48,6 +54,7 @@ export default function DefaultToolCard({
   );
   const isMultiModelTool = tool.modelSelectionMode === "multiple";
   const usesOpenCodePreview = tool.previewConfigMode === "opencode";
+  const usesQwenCodePreview = tool.previewConfigMode === "qwen";
   const selectedKeyObj = apiKeys?.find((k) => k.id === selectedApiKeyId);
 
   const resolveApiKeyValue = useCallback(
@@ -99,40 +106,44 @@ export default function DefaultToolCard({
 
   // Persist and restore model selection per tool via localStorage
   useEffect(() => {
-    const savedModel = localStorage.getItem(`omniroute-cli-model-${toolId}`);
-    if (savedModel) {
-      if (isMultiModelTool) {
-        try {
-          const parsed = JSON.parse(savedModel);
-          if (Array.isArray(parsed)) {
-            const normalized = parsed.map((value) => String(value || "").trim()).filter(Boolean);
-            setModelValues(normalized);
-            setModelValue(normalized[0] || "");
-          } else {
+    const restoreTimer = window.setTimeout(() => {
+      const savedModel = localStorage.getItem(`omniroute-cli-model-${toolId}`);
+      if (savedModel) {
+        if (isMultiModelTool) {
+          try {
+            const parsed = JSON.parse(savedModel);
+            if (Array.isArray(parsed)) {
+              const normalized = parsed.map((value) => String(value || "").trim()).filter(Boolean);
+              setModelValues(normalized);
+              setModelValue(normalized[0] || "");
+            } else {
+              setModelValue(savedModel);
+              setModelValues([savedModel]);
+            }
+          } catch {
             setModelValue(savedModel);
             setModelValues([savedModel]);
           }
-        } catch {
+        } else {
           setModelValue(savedModel);
-          setModelValues([savedModel]);
         }
-      } else {
-        setModelValue(savedModel);
       }
-    }
-    const savedKey = localStorage.getItem(`omniroute-cli-key-${toolId}`);
-    // (#523) localStorage may contain a masked key string from before the fix —
-    // match by prefix/suffix against known keys to find the id.
-    if (savedKey && apiKeys?.length > 0) {
-      const prefix = savedKey.slice(0, 8);
-      const suffix = savedKey.slice(-4);
-      const matchedKey = apiKeys.find(
-        (k) =>
-          (k.rawKey && k.rawKey.startsWith(prefix) && k.rawKey.endsWith(suffix)) ||
-          (k.key && k.key.startsWith(prefix) && k.key.endsWith(suffix))
-      );
-      if (matchedKey) setSelectedApiKeyId(matchedKey.id);
-    }
+      const savedKey = localStorage.getItem(`omniroute-cli-key-${toolId}`);
+      // (#523) localStorage may contain a masked key string from before the fix —
+      // match by prefix/suffix against known keys to find the id.
+      if (savedKey && apiKeys?.length > 0) {
+        const prefix = savedKey.slice(0, 8);
+        const suffix = savedKey.slice(-4);
+        const matchedKey = apiKeys.find(
+          (k) =>
+            (k.rawKey && k.rawKey.startsWith(prefix) && k.rawKey.endsWith(suffix)) ||
+            (k.key && k.key.startsWith(prefix) && k.key.endsWith(suffix))
+        );
+        if (matchedKey) setSelectedApiKeyId(matchedKey.id);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restoreTimer);
   }, [toolId, apiKeys, isMultiModelTool]);
 
   const handleModelChange = useCallback(
@@ -187,15 +198,18 @@ export default function DefaultToolCard({
   }, [isExpanded, runtimeStatus, t, toolId]);
 
   const replaceVars = useCallback(
-    (text) => {
+    (text, modelOverride = "") => {
       const keyToUse = resolveApiKeyValue();
 
       return text
         .replace(/\{\{baseUrl\}\}/g, baseUrlWithV1)
         .replace(/\{\{apiKey\}\}/g, keyToUse)
-        .replace(/\{\{model\}\}/g, getSelectedModelLabels()[0] || t("modelPlaceholder"));
+        .replace(
+          /\{\{model\}\}/g,
+          modelOverride || getSelectedModelLabels()[0] || t("modelPlaceholder")
+        );
     },
-    [baseUrl, getSelectedModelLabels, resolveApiKeyValue, t]
+    [baseUrlWithV1, getSelectedModelLabels, resolveApiKeyValue, t]
   );
 
   const handleCopy = async (text, field) => {
@@ -211,6 +225,9 @@ export default function DefaultToolCard({
 
   const getRenderedCodeBlock = useCallback(() => {
     if (!tool.codeBlock?.code) return "";
+    if (usesQwenCodePreview) {
+      return replaceVars(tool.codeBlock.code, getSelectedModels()[0]);
+    }
     if (!usesOpenCodePreview) return replaceVars(tool.codeBlock.code);
 
     const keyToUse = resolveApiKeyValue();
@@ -221,18 +238,21 @@ export default function DefaultToolCard({
         models: getSelectedModels(),
         model: getSelectedModels()[0],
         modelLabels: getSelectedModelLabelMap(),
+        catalog,
       }),
       null,
       2
     );
   }, [
-    baseUrl,
+    baseUrlWithV1,
+    catalog,
     getSelectedModels,
     getSelectedModelLabelMap,
     replaceVars,
     resolveApiKeyValue,
-    tool.codeBlock?.code,
+    tool.codeBlock,
     usesOpenCodePreview,
+    usesQwenCodePreview,
   ]);
 
   const handleSelectModel = (model) => {
@@ -265,7 +285,11 @@ export default function DefaultToolCard({
       // (#523) Prefer keyId lookup so the backend writes the real key to disk.
       const selectedKeyId = selectedApiKeyId?.trim() || null;
 
-      const res = await fetch(`/api/cli-tools/guide-settings/${toolId}`, {
+      const saveEndpoint =
+        toolId === "qwen"
+          ? "/api/cli-tools/qwen-settings"
+          : `/api/cli-tools/guide-settings/${toolId}`;
+      const res = await fetch(saveEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -275,6 +299,7 @@ export default function DefaultToolCard({
           model: modelValue,
           models: isMultiModelTool ? getSelectedModels() : undefined,
           modelLabels: getSelectedModelLabelMap(),
+          ...(usesOpenCodePreview ? { catalog } : {}),
         }),
       });
       const data = await res.json();
@@ -286,6 +311,8 @@ export default function DefaultToolCard({
           text:
             (typeof data.error === "string" ? data.error : data.error?.message) ||
             t("failedToSave"),
+          // 422 from the container guard: the body is host-CLI guidance, not a failure.
+          containerEphemeralTarget: Boolean(data.containerEphemeralTarget),
         });
       }
     } catch (error) {
@@ -303,27 +330,30 @@ export default function DefaultToolCard({
       <div className="mt-2 flex items-center gap-2">
         {apiKeys && apiKeys.length > 0 ? (
           <>
-            <select
+            <Select
               value={selectedApiKeyId}
               onChange={(e) => handleApiKeyChange(e.target.value)}
-              className="flex-1 px-3 py-2 bg-bg-secondary rounded-lg text-sm border border-border focus:outline-none focus:ring-1 focus:ring-primary/50"
+              aria-label={t("apiKey")}
+              className="min-w-0 w-auto flex-1"
             >
               {apiKeys.map((key) => (
                 <option key={key.id} value={key.id}>
                   {key.key}
                 </option>
               ))}
-            </select>
-            <button
+            </Select>
+            <Button
+              variant="outline"
+              size="icon"
               onClick={() => {
                 handleCopy(resolveApiKeyValue(), "apiKey");
               }}
-              className="shrink-0 px-3 py-2 bg-bg-secondary hover:bg-bg-tertiary rounded-lg border border-border transition-colors"
+              aria-label={copiedField === "apiKey" ? t("copied") : t("copy")}
+              title={copiedField === "apiKey" ? t("copied") : t("copy")}
+              className="shrink-0"
             >
-              <span className="material-symbols-outlined text-lg">
-                {copiedField === "apiKey" ? "check" : "content_copy"}
-              </span>
-            </button>
+              <Icon name={copiedField === "apiKey" ? "check" : "content_copy"} size={18} />
+            </Button>
           </>
         ) : (
           <span className="text-sm text-text-muted">
@@ -341,8 +371,7 @@ export default function DefaultToolCard({
 
     return (
       <div className="mt-2 flex items-center gap-2">
-        <input
-          type="text"
+        <Input
           value={displayValue}
           onChange={(e) =>
             isMultiModelTool
@@ -355,38 +384,41 @@ export default function DefaultToolCard({
               : handleModelChange(e.target.value)
           }
           placeholder={t("modelPlaceholder")}
-          className="flex-1 px-3 py-2 bg-bg-secondary rounded-lg text-sm border border-border focus:outline-none focus:ring-1 focus:ring-primary/50"
+          aria-label={t("model")}
+          className="min-w-0 w-auto flex-1"
         />
-        <button
+        <Button
+          variant="outline"
           onClick={() => setShowModelModal(true)}
           disabled={!hasActiveProviders}
-          className={`shrink-0 px-3 py-2 rounded-lg border text-sm transition-colors ${
-            hasActiveProviders
-              ? "bg-bg-secondary border-border text-text-main hover:border-primary cursor-pointer"
-              : "opacity-50 cursor-not-allowed border-border"
-          }`}
+          className="shrink-0"
         >
           {t("selectModel")}
-        </button>
+        </Button>
         {displayValue && (
           <>
-            <button
+            <Button
+              variant="outline"
+              size="icon"
               onClick={() => handleCopy(displayValue, "model")}
-              className="shrink-0 px-3 py-2 bg-bg-secondary hover:bg-bg-tertiary rounded-lg border border-border transition-colors"
+              aria-label={copiedField === "model" ? t("copied") : t("copy")}
+              title={copiedField === "model" ? t("copied") : t("copy")}
+              className="shrink-0"
             >
-              <span className="material-symbols-outlined text-lg">
-                {copiedField === "model" ? "check" : "content_copy"}
-              </span>
-            </button>
-            <button
+              <Icon name={copiedField === "model" ? "check" : "content_copy"} size={18} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={() =>
                 isMultiModelTool ? handleModelValuesChange([]) : handleModelChange("")
               }
-              className="p-2 text-text-muted hover:text-red-500 rounded transition-colors"
               title={t("clear")}
+              aria-label={t("clear")}
+              className="text-text-muted hover:text-error"
             >
-              <span className="material-symbols-outlined text-lg">close</span>
-            </button>
+              <Icon name="close" size={18} />
+            </Button>
           </>
         )}
       </div>
@@ -404,26 +436,26 @@ export default function DefaultToolCard({
           const isWarning = note.type === "warning";
           const isError = note.type === "cloudCheck" && !cloudEnabled;
 
-          let bgClass = "bg-blue-500/10 border-blue-500/30";
-          let textClass = "text-blue-600 dark:text-blue-400";
-          let iconClass = "text-blue-500";
+          let bgClass = "bg-info/10 border-info/30";
+          let textClass = "text-info ";
+          let iconClass = "text-info";
           let icon = "info";
 
           if (isWarning) {
-            bgClass = "bg-yellow-500/10 border-yellow-500/30";
-            textClass = "text-yellow-600 dark:text-yellow-400";
-            iconClass = "text-yellow-500";
+            bgClass = "bg-warning/10 border-warning/30";
+            textClass = "text-warning ";
+            iconClass = "text-warning";
             icon = "warning";
           } else if (isError) {
-            bgClass = "bg-red-500/10 border-red-500/30";
-            textClass = "text-red-600 dark:text-red-400";
-            iconClass = "text-red-500";
+            bgClass = "bg-error/10 border-error/30";
+            textClass = "text-error ";
+            iconClass = "text-error";
             icon = "error";
           }
 
           return (
             <div key={index} className={`flex items-start gap-3 p-3 rounded-lg border ${bgClass}`}>
-              <span className={`material-symbols-outlined text-lg ${iconClass}`}>{icon}</span>
+              <Icon name={icon} size={18} className={iconClass} />
               <p className={`text-sm ${textClass}`}>
                 {translateOrFallback(`guides.${toolId}.notes.${index}`, note.text)}
               </p>
@@ -446,23 +478,25 @@ export default function DefaultToolCard({
       <div className="flex flex-col gap-4">
         {checkingRuntime && (
           <div className="flex items-center gap-2 text-text-muted text-sm">
-            <span className="material-symbols-outlined animate-spin text-base">
-              progress_activity
-            </span>
+            <Icon name="progress_activity" size={16} className="animate-spin" />
             <span>{t("checkingRuntime")}</span>
           </div>
         )}
         {!checkingRuntime && runtimeStatus && !runtimeStatus.error && (
-          <div className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-            <span className="material-symbols-outlined text-blue-500 text-lg">
-              {runtimeStatus.reason === "not_required"
-                ? "info"
-                : runtimeStatus.installed && runtimeStatus.runnable
-                  ? "check_circle"
-                  : "warning"}
-            </span>
+          <div className="flex items-start gap-3 p-3 bg-info/10 border border-info/30 rounded-lg">
+            <Icon
+              name={
+                runtimeStatus.reason === "not_required"
+                  ? "info"
+                  : runtimeStatus.installed && runtimeStatus.runnable
+                    ? "check_circle"
+                    : "warning"
+              }
+              size={18}
+              className="text-info"
+            />
             <div className="flex flex-col gap-1">
-              <p className="text-sm text-blue-700 dark:text-blue-300">
+              <p className="text-sm text-info">
                 {runtimeStatus.reason === "not_required"
                   ? t("guideOnlyIntegration")
                   : runtimeStatus.installed && runtimeStatus.runnable
@@ -476,7 +510,7 @@ export default function DefaultToolCard({
               {runtimeStatus.commandPath && (
                 <p className="text-xs text-text-muted">
                   {t("binary")}:{" "}
-                  <code className="px-1 py-0.5 rounded bg-black/5 dark:bg-white/10">
+                  <code className="px-1 py-0.5 rounded bg-bg-subtle">
                     {runtimeStatus.commandPath}
                   </code>
                 </p>
@@ -484,7 +518,7 @@ export default function DefaultToolCard({
               {runtimeStatus.configPath && (
                 <p className="text-xs text-text-muted">
                   {t("configPath")}:{" "}
-                  <code className="px-1 py-0.5 rounded bg-black/5 dark:bg-white/10">
+                  <code className="px-1 py-0.5 rounded bg-bg-subtle">
                     {runtimeStatus.configPath}
                   </code>
                 </p>
@@ -493,11 +527,9 @@ export default function DefaultToolCard({
           </div>
         )}
         {!checkingRuntime && runtimeStatus?.error && (
-          <div className="flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-            <span className="material-symbols-outlined text-red-500 text-lg">error</span>
-            <p className="text-sm text-red-600 dark:text-red-400">
-              {t("failedCheckRuntimeStatus")}
-            </p>
+          <div className="flex items-start gap-3 p-3 bg-error/10 border border-error/30 rounded-lg">
+            <Icon name="error" size={18} className="text-error" />
+            <p className="text-sm text-error">{t("failedCheckRuntimeStatus")}</p>
           </div>
         )}
         {renderNotes()}
@@ -511,7 +543,7 @@ export default function DefaultToolCard({
                 {item.step}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-text">
+                <p className="font-medium text-text-main">
                   {translateOrFallback(`guides.${toolId}.steps.${item.step}.title`, item.title)}
                 </p>
                 {item.desc && (
@@ -525,18 +557,26 @@ export default function DefaultToolCard({
                 {item.type === "modelSelector" && renderModelSelector()}
                 {item.value && (
                   <div className="mt-2 flex items-center gap-2">
-                    <code className="flex-1 px-3 py-2 bg-bg-secondary rounded-lg text-sm font-mono border border-border truncate">
+                    <code className="flex-1 px-3 py-2 bg-bg-subtle rounded-lg text-sm font-mono border border-border truncate">
                       {replaceVars(item.value)}
                     </code>
                     {item.copyable && (
-                      <button
+                      <Button
+                        variant="outline"
+                        size="icon"
                         onClick={() => handleCopy(item.value, `${item.step}-${item.title}`)}
-                        className="shrink-0 px-3 py-2 bg-bg-secondary hover:bg-bg-tertiary rounded-lg border border-border transition-colors"
+                        aria-label={
+                          copiedField === `${item.step}-${item.title}` ? t("copied") : t("copy")
+                        }
+                        className="shrink-0"
                       >
-                        <span className="material-symbols-outlined text-lg">
-                          {copiedField === `${item.step}-${item.title}` ? "check" : "content_copy"}
-                        </span>
-                      </button>
+                        <Icon
+                          name={
+                            copiedField === `${item.step}-${item.title}` ? "check" : "content_copy"
+                          }
+                          size={18}
+                        />
+                      </Button>
                     )}
                   </div>
                 )}
@@ -550,17 +590,17 @@ export default function DefaultToolCard({
               <span className="text-xs text-text-muted uppercase tracking-wide">
                 {tool.codeBlock.language}
               </span>
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => handleCopy(getRenderedCodeBlock(), "codeblock")}
-                className="flex items-center gap-1 px-2 py-1 text-xs bg-bg-secondary hover:bg-bg-tertiary rounded border border-border transition-colors"
+                className="gap-1 text-xs"
               >
-                <span className="material-symbols-outlined text-sm">
-                  {copiedField === "codeblock" ? "check" : "content_copy"}
-                </span>
+                <Icon name={copiedField === "codeblock" ? "check" : "content_copy"} size={14} />
                 {copiedField === "codeblock" ? t("copied") : t("copy")}
-              </button>
+              </Button>
             </div>
-            <pre className="p-4 bg-bg-secondary rounded-lg border border-border overflow-x-auto">
+            <pre className="p-4 bg-bg-subtle rounded-lg border border-border overflow-x-auto">
               <code className="text-sm font-mono whitespace-pre">{getRenderedCodeBlock()}</code>
             </pre>
           </div>
@@ -571,12 +611,14 @@ export default function DefaultToolCard({
           <div className="mt-2">
             {message && (
               <div
-                className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs mb-2 ${message.type === "success" ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600"}`}
+                className={`flex gap-2 px-2 py-1.5 rounded text-xs mb-2 ${message.containerEphemeralTarget ? "items-start" : "items-center"} ${message.type === "success" ? "bg-success/10 text-success" : "bg-error/10 text-error"}`}
               >
-                <span className="material-symbols-outlined text-[14px]">
-                  {message.type === "success" ? "check_circle" : "error"}
+                <Icon name={message.type === "success" ? "check_circle" : "error"} size={14} />
+                {/* The container refusal is a multi-line runbook — keep its line
+                    breaks instead of collapsing it into one unreadable line. */}
+                <span className={message.containerEphemeralTarget ? "whitespace-pre-line" : ""}>
+                  {message.text}
                 </span>
-                <span>{message.text}</span>
               </div>
             )}
             <div className="flex items-center gap-2">
@@ -588,7 +630,7 @@ export default function DefaultToolCard({
                   disabled={isMultiModelTool ? getSelectedModels().length === 0 : !modelValue}
                   loading={saving}
                 >
-                  <span className="material-symbols-outlined text-[14px] mr-1">save</span>
+                  <Icon name="save" size={14} className="mr-1" />
                   {t("saveConfig")}
                 </Button>
               )}
@@ -598,17 +640,17 @@ export default function DefaultToolCard({
                   size="sm"
                   onClick={() => handleCopy(getRenderedCodeBlock(), "codeblock")}
                 >
-                  <span className="material-symbols-outlined text-[14px] mr-1">
-                    {copiedField === "codeblock" ? "check" : "content_copy"}
-                  </span>
+                  <Icon
+                    name={copiedField === "codeblock" ? "check" : "content_copy"}
+                    size={14}
+                    className="mr-1"
+                  />
                   {copiedField === "codeblock" ? t("copied") : t("copyConfig")}
                 </Button>
               )}
               {(isMultiModelTool ? getSelectedModels().length > 0 : !!modelValue) && (
                 <span className="text-xs text-text-muted flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[14px] text-green-500">
-                    check_circle
-                  </span>
+                  <Icon name="check_circle" size={14} className="text-success" />
                   {t("selectionSaved")}
                 </span>
               )}
@@ -620,43 +662,37 @@ export default function DefaultToolCard({
   };
 
   const renderIcon = () => {
+    // Tool SVGs are non-square (e.g. opencode is 234×42, cursor is 467×532).
+    // next/image's dev check warns whenever the rendered aspect-ratio size
+    // differs from the square width/height attributes, so these render as a
+    // plain <img> capped at 32px on both axes — true ratio, no dev noise.
+    const renderImg = (src: string) => (
+      // eslint-disable-next-line @next/next/no-img-element -- local static SVG asset
+      <img
+        src={src}
+        alt={tool.name}
+        width={32}
+        height={32}
+        className="size-8 object-contain rounded-lg"
+        style={{ width: "auto", height: "auto", maxWidth: 32, maxHeight: 32 }}
+        onError={(e) => {
+          (e.currentTarget as HTMLElement).style.display = "none";
+        }}
+      />
+    );
     if (tool.image) {
-      return (
-        <Image
-          src={tool.image}
-          alt={tool.name}
-          width={32}
-          height={32}
-          className="size-8 object-contain rounded-lg"
-          sizes="32px"
-          onError={(e) => {
-            (e.currentTarget as HTMLElement).style.display = "none";
-          }}
-        />
-      );
+      return renderImg(tool.image);
     }
     if (tool.imageLight || tool.imageDark) {
       const themedSrc = isDark
         ? tool.imageDark || tool.imageLight
         : tool.imageLight || tool.imageDark;
-      return (
-        <Image
-          src={themedSrc}
-          alt={tool.name}
-          width={32}
-          height={32}
-          className="size-8 object-contain rounded-lg"
-          sizes="32px"
-          onError={(e) => {
-            (e.currentTarget as HTMLElement).style.display = "none";
-          }}
-        />
-      );
+      return renderImg(themedSrc);
     }
     if (tool.icon) {
       return (
-        <span className="material-symbols-outlined text-xl" style={{ color: tool.color }}>
-          {tool.icon}
+        <span className="inline-flex" style={{ color: tool.color }}>
+          <Icon name={tool.icon} size={20} />
         </span>
       );
     }
@@ -665,8 +701,11 @@ export default function DefaultToolCard({
 
   return (
     <Card padding="sm" className="overflow-hidden">
-      <div className="flex items-center justify-between hover:cursor-pointer" onClick={onToggle}>
-        <div className="flex items-center gap-3">
+      <div
+        className={cn("flex items-center justify-between hover:cursor-pointer", CARD_TOGGLE_CLASS)}
+        {...cardToggleProps(isExpanded, onToggle)}
+      >
+        <div className="flex min-w-0 items-center gap-3">
           <div className="size-8 rounded-lg flex items-center justify-center shrink-0">
             {renderIcon()}
           </div>
@@ -683,32 +722,32 @@ export default function DefaultToolCard({
 
                 if (isGuide) {
                   return (
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                      <span className="size-1.5 rounded-full bg-blue-500" />
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-info/10 text-info">
+                      <span className="size-1.5 rounded-full bg-info" />
                       {t("guide")}
                     </span>
                   );
                 }
                 if (isDetected) {
                   return (
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-green-500/10 text-green-600 dark:text-green-400">
-                      <span className="size-1.5 rounded-full bg-green-500" />
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-success/10 text-success">
+                      <span className="size-1.5 rounded-full bg-success" />
                       {t("detected")}
                     </span>
                   );
                 }
                 if (isInstalled === false && (rs || bs)) {
                   return (
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-zinc-500/10 text-zinc-500 dark:text-zinc-400">
-                      <span className="size-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500" />
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-surface-2/10 text-text-muted">
+                      <span className="size-1.5 rounded-full bg-surface-2" />
                       {t("notInstalled")}
                     </span>
                   );
                 }
                 if (isInstalled && !isDetected && (rs || bs)) {
                   return (
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-yellow-500/10 text-yellow-600 dark:text-yellow-400">
-                      <span className="size-1.5 rounded-full bg-yellow-500" />
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full bg-warning/10 text-warning">
+                      <span className="size-1.5 rounded-full bg-warning" />
                       {t("notReady")}
                     </span>
                   );
@@ -721,11 +760,11 @@ export default function DefaultToolCard({
             </p>
           </div>
         </div>
-        <span
-          className={`material-symbols-outlined text-text-muted text-[20px] transition-transform ${isExpanded ? "rotate-180" : ""}`}
-        >
-          expand_more
-        </span>
+        <Icon
+          name="expand_more"
+          size={20}
+          className={cn("text-text-muted transition-transform", isExpanded && "rotate-180")}
+        />
       </div>
 
       {isExpanded && <div className="mt-6 pt-6 border-t border-border">{renderGuideSteps()}</div>}

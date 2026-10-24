@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 
 import {
   isModelUnavailableOnAccount,
+  markModelUnavailableAsRetryable,
   retryImageOnOtherAccounts,
 } from "../../src/lib/images/imageAccountFailover.ts";
 
@@ -182,4 +183,55 @@ test("a throwing pick keeps the original failure", async () => {
   });
   assert.equal(out.result.success, false);
   assert.equal(out.credentials.connectionId, gmail.connectionId);
+});
+
+// 3.8.53 sync: both image routes now run upstream's single account loop
+// (executeImageWithCredentialFallback, #8307). The fork's class reaches that loop as a
+// `retryable` flag, so these lock the flag and the loop honouring it.
+test("markModelUnavailableAsRetryable flags only the 400 another account can serve", () => {
+  const sol: Res = { success: false, status: 400, error: SOL_400 };
+  assert.equal(markModelUnavailableAsRetryable("codex", sol).retryable, true);
+  assert.equal(sol.retryable, undefined, "the original result is not mutated");
+
+  const moderation: Res = {
+    success: false,
+    status: 400,
+    error: JSON.stringify({ message: "rejected by the safety system", code: "moderation_blocked" }),
+  };
+  assert.equal(markModelUnavailableAsRetryable("codex", moderation).retryable, undefined);
+  assert.equal(
+    markModelUnavailableAsRetryable("codex", { success: false, status: 429, error: SOL_400 })
+      .retryable,
+    undefined
+  );
+  const ok: Res = { success: true };
+  assert.equal(markModelUnavailableAsRetryable("codex", ok), ok);
+});
+
+test("upstream's image account loop re-serves the fork's class on the next account", async () => {
+  const { executeImageWithCredentialFallback } =
+    await import("../../src/sse/services/imageCredentialRetry.ts");
+  const first = { connectionId: "49bd610e-aaaa", accessToken: "t1" };
+  const second = { connectionId: "a095273c-bbbb", accessToken: "t2" };
+  const attempted: string[] = [];
+
+  const { credentials, result } = await executeImageWithCredentialFallback({
+    provider: "codex",
+    requestedModel: "codex/gpt-6-sol",
+    credentials: first,
+    selectNextCredentials: async (_provider, _model, excluded) =>
+      excluded.has(second.connectionId) ? null : second,
+    execute: async (creds: { connectionId: string }) => {
+      attempted.push(creds.connectionId);
+      const raw =
+        creds.connectionId === first.connectionId
+          ? { success: false, status: 400, error: SOL_400 }
+          : { success: true, status: 200, data: { created: 1, data: [] } };
+      return markModelUnavailableAsRetryable("codex", raw);
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(credentials.connectionId, second.connectionId);
+  assert.deepEqual(attempted, [first.connectionId, second.connectionId]);
 });

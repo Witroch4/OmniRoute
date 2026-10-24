@@ -69,7 +69,12 @@ const budget = [
   { file: "open-sse/utils/tlsClient.ts", maxAny: 0 },
   { file: "open-sse/utils/proxyFetch.ts", maxAny: 0 },
   { file: "open-sse/utils/error.ts", maxAny: 0 },
-  { file: "open-sse/translator/request/openai-to-gemini.ts", maxAny: 0 },
+  // 2 FALSE POSITIVES: convertOpenAIToolChoiceToGemini() compares the OpenAI
+  // `tool_choice` value against the STRING literal "any" (`choice === "any"` and
+  // `c.type === "any"`) — same tool_choice-detection pattern as the executors/base.ts
+  // entry above. The checker strips comments but not strings, and there are zero
+  // actual TypeScript `any` types in this file. Budget set to the matched count.
+  { file: "open-sse/translator/request/openai-to-gemini.ts", maxAny: 2 },
   { file: "open-sse/translator/request/antigravity-to-openai.ts", maxAny: 0 },
   { file: "open-sse/translator/request/claude-to-openai.ts", maxAny: 0 },
   { file: "open-sse/handlers/audioTranscription.ts", maxAny: 0 },
@@ -128,6 +133,9 @@ for (const item of budget) {
   // Remove block and line comments to avoid false positives with the word "any" in comments
   let cleanContent = content.replace(/\/\*[\s\S]*?\*\//g, "");
   cleanContent = cleanContent.replace(/\/\/.*$/gm, "");
+  // A property access (including AbortSignal.any) is an identifier, not a type.
+  // Leave type annotations and the existing string-literal budgets unchanged.
+  cleanContent = cleanContent.replace(/(?<!\.)\.\s*any\b/g, "");
   const matches = cleanContent.match(anyRegex);
   const count = matches ? matches.length : 0;
   const status = count <= item.maxAny ? "OK" : "FAIL";

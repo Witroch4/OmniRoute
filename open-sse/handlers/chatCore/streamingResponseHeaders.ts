@@ -23,22 +23,33 @@ export function assembleStreamingResponseHeaders(
      * whose value would otherwise contradict `model` above. Omitted/equal to `model`
      * (the common, non-redirected case) is a no-op — see its doc comment. */
     servedModel?: string | null;
+    comboStrategy?: string | null | undefined;
+    fallbackAttempts?: number;
+    // #14116: combo/pool account-identity triple, forwarded straight into
+    // buildStreamingResponseHeaders so a foreign-combo-account response never
+    // leaks that account's Codex quota headers to the caller. All optional —
+    // omitting them preserves today's unconditional-forwarding behavior.
+    isCombo?: boolean;
+    requestedConnectionId?: string | null;
+    selectedConnectionId?: string | null;
   },
   buildStreamingResponseHeaders: typeof defaultBuildStreaming = defaultBuildStreaming
 ): Record<string, string> {
   const responseHeaders: Record<string, string> = {
-    ...buildStreamingResponseHeaders(
-      args.providerHeaders,
-      {
-        provider: args.provider,
-        model: args.model,
-        cacheHit: false,
-        latencyMs: 0,
-        usage: null,
-        costUsd: 0,
-      },
-      { servedModel: args.servedModel }
-    ),
+    ...buildStreamingResponseHeaders(args.providerHeaders, {
+      provider: args.provider,
+      model: args.model,
+      cacheHit: false,
+      latencyMs: 0,
+      usage: null,
+      costUsd: 0,
+      strategy: args.comboStrategy ?? "single",
+      ...(args.fallbackAttempts !== undefined ? { fallbackAttempts: args.fallbackAttempts } : {}),
+      isCombo: args.isCombo,
+      requestedConnectionId: args.requestedConnectionId,
+      selectedConnectionId: args.selectedConnectionId,
+      servedModel: args.servedModel,
+    }),
     "x-omniroute-request-id": args.pendingRequestId,
   };
   if (args.compressionResponseMeta) {

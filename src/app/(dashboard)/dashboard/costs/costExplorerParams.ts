@@ -1,14 +1,22 @@
 import { type CostExplorerCostBasis, type CostExplorerGroupBy } from "./costExplorerUtils";
 
 /**
- * "sinceReset" resolves its window start through
+ * "sinceReset" (fork) resolves its window start through
  * `getApiKeyWeeklyWindowStartIso`/`resolveApiKeyWeeklyWindow` — the provider's
  * observed weekly reset, the same boundary the API key USD quota is measured
- * against — instead of rolling day arithmetic like the other four values.
+ * against — instead of rolling day arithmetic like the other values.
  */
-export type CostRange = "7d" | "30d" | "90d" | "all" | "sinceReset";
+export type CostRange = "7d" | "30d" | "90d" | "180d" | "365d" | "all" | "sinceReset";
 
-const COST_RANGE_VALUES = new Set<CostRange>(["7d", "30d", "90d", "all", "sinceReset"]);
+const COST_RANGE_VALUES = new Set<CostRange>([
+  "7d",
+  "30d",
+  "90d",
+  "180d",
+  "365d",
+  "all",
+  "sinceReset",
+]);
 const EXPLORER_GROUP_VALUES = new Set<CostExplorerGroupBy>([
   "provider",
   "model",

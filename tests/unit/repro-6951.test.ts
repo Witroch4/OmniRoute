@@ -98,6 +98,12 @@ test("6951: extractToolSchemaMap builds a name->schema map from Chat Completions
   assert.equal(extractToolSchemaMap({}), null);
 });
 
+test("6951: extractToolSchemaMap accepts Claude input_schema tools", () => {
+  const body = { tools: [{ name: "Agent", input_schema: AGENT_SCHEMA }] };
+  const map = extractToolSchemaMap(body);
+  assert.equal(map?.get("Agent"), AGENT_SCHEMA);
+});
+
 test("6951: RED->GREEN — schema threaded end-to-end strips the default-valued isolation arg", () => {
   // Simulates createSSEStream's TranslateState carrying `toolSchemas` extracted from the
   // request body, as wired in open-sse/utils/stream.ts.

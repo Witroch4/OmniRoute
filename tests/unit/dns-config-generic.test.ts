@@ -22,6 +22,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// The isolateDataDir test setup sets OMNIROUTE_SKIP_DNS_WRITE=1, which makes the
+// writers no-ops. This file swaps in a temp hosts file and fake runners, so it is safe
+// to exercise the real write paths; the guard itself is covered by mitm-dnsConfig.test.ts.
+const previousSkipDnsWrite = process.env.OMNIROUTE_SKIP_DNS_WRITE;
+delete process.env.OMNIROUTE_SKIP_DNS_WRITE;
+
 const dnsModule = await import("../../src/mitm/dns/dnsConfig.ts");
 const {
   addDNSEntries,
@@ -29,6 +35,7 @@ const {
   addDNSEntry,
   removeDNSEntry,
   checkDNSEntry,
+  resolveHostsForAgent,
   __setDnsConfigDepsForTests,
 } = dnsModule;
 const { ALL_TARGETS } = await import("../../src/mitm/targets/index.ts");
@@ -310,11 +317,43 @@ test(
   }
 );
 
+test("resolveHostsForAgent returns the agent's hosts and falls back to Antigravity", () => {
+  assert.deepEqual(resolveHostsForAgent(), ANTIGRAVITY_HOSTS);
+  assert.deepEqual(resolveHostsForAgent("__nonexistent_agent__"), ANTIGRAVITY_HOSTS);
+  assert.ok(
+    hostsOf("cursor").includes("api2.cursor.sh"),
+    "cursor target must include api2.cursor.sh"
+  );
+  assert.deepEqual(resolveHostsForAgent("cursor"), hostsOf("cursor"));
+  assert.ok(hostsOf("codex").includes("chatgpt.com"), "codex target must include chatgpt.com");
+});
+
+test(
+  "explicit per-call command dependencies win over the injected defaults",
+  { skip: POSIX_ONLY },
+  async () => {
+    resetHosts();
+    const perCall: string[] = [];
+    await addDNSEntry("fake-sudo", "cursor", {
+      execFileWithPassword: async (_command, args, _password, stdin = "") => {
+        perCall.push(args.join(" "));
+        fs.appendFileSync(hostsFile, stdin);
+        return "";
+      },
+    });
+    assert.equal(perCall.length, 1);
+    assert.equal(execCalls.length, 0, "the injected default runner must not be used");
+    assert.equal(readHosts(), BASE_HOSTS + entriesFor(hostsOf("cursor")));
+  }
+);
+
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
 test.after(() => {
   restoreDeps();
+  if (previousSkipDnsWrite === undefined) delete process.env.OMNIROUTE_SKIP_DNS_WRITE;
+  else process.env.OMNIROUTE_SKIP_DNS_WRITE = previousSkipDnsWrite;
   try {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   } catch {

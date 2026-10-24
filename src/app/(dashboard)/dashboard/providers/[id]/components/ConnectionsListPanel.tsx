@@ -1,12 +1,26 @@
 "use client";
+
+import Icon from "@/shared/components/Icon";
 import React from "react";
+import { useTranslations } from "next-intl";
 import { type ConnectionRowConnection } from "./ConnectionRow";
 import ConnectionRow from "./ConnectionRow";
-import { Button, DistributeProxiesButton } from "@/shared/components";
+import {
+  ActionBar,
+  Button,
+  Checkbox,
+  DistributeProxiesButton,
+  FilterPills,
+  Input,
+} from "@/shared/components";
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import { readBooleanToggle, providerCountText } from "../providerPageHelpers";
 import { compareTr } from "@/shared/utils/turkishText";
 import type { CodexGlobalServiceMode } from "@/lib/providers/codexFastTier";
+import { supportsProviderQuota } from "@/shared/utils/providerQuotaVisibility";
+import type { ConnectionDeleteConfirmState } from "../hooks/useConnectionDeleteConfirm";
+import type { ProviderQuotaCacheEntry } from "../hooks/useProviderQuota";
+import { filterConnectionsByQuery } from "../connectionsSearchFilter";
 
 type ConnectionsListPanelProps = {
   connections: ConnectionRowConnection[];
@@ -24,8 +38,12 @@ type ConnectionsListPanelProps = {
   distributingProxies: boolean;
   healthFilter: string;
   page: number;
+  accountSearch: string;
   PAGE_SIZE: number;
-  connProxyMap: Record<string, { proxy?: { host?: string }; level?: string } | undefined>;
+  connProxyMap: Record<
+    string,
+    { proxy?: { host?: string; name?: string }; level?: string } | undefined
+  >;
   proxyConfig: any;
   applyingCodexAuthId: string | null;
   exportingCodexAuthId: string | null;
@@ -36,12 +54,23 @@ type ConnectionsListPanelProps = {
   setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   setPage: React.Dispatch<React.SetStateAction<number>>;
   setHealthFilter: (v: string) => void;
+  setAccountSearch: (v: string) => void;
   // Callbacks from useProviderConnections
-  handleDelete: (id: string) => void;
+  deleteConfirm: ConnectionDeleteConfirmState;
   handleUpdateConnectionStatus: (id: string, isActive: boolean) => void;
   handleToggleRateLimit: (id: string, enabled: boolean) => void;
+  handleToggleQuotaVisibility: (id: string, visible: boolean) => void;
   handleToggleClaudeExtraUsage: (id: string, enabled: boolean) => void;
+  handleToggleCodexPaidCredits: (id: string, enabled: boolean) => void;
+  canAutoSync?: boolean;
+  handleToggleConnectionAutoSync?: (connectionId: string, enabled: boolean) => void;
   handleToggleCliproxyapiMode: (id: string, enabled: boolean) => void;
+  handleSetUpstreamProxyMode: (
+    mode: "native" | "cliproxyapi" | "dario" | "fallback",
+    fallbackBackend?: "cliproxyapi" | "dario"
+  ) => void;
+  upstreamProxyMode: "native" | "cliproxyapi" | "dario" | "fallback";
+  upstreamProxyFallbackBackend: "cliproxyapi" | "dario";
   handleToggleCodexLimit: (id: string, type: "use5h" | "useWeekly", enabled: boolean) => void;
   handleToggleProxyEnabled: (id: string, enabled: boolean) => void;
   handleTogglePerKeyProxyEnabled: (id: string, enabled: boolean) => void;
@@ -55,6 +84,10 @@ type ConnectionsListPanelProps = {
   handleToggleSelectAll: () => void;
   handleDistributeProxies: (tag?: string) => void;
   cpaProviderEnabled: boolean;
+  // Per-account quota strip (useProviderQuota) — threaded to every row.
+  quotaByConnectionId: Record<string, ProviderQuotaCacheEntry>;
+  quotaRefreshingIds: ReadonlySet<string>;
+  handleRefreshQuota: (id: string) => void;
   // Modal triggers (all pass through from client, no closing over client internals)
   onOpenEditModal: (conn: ConnectionRowConnection) => void;
   onOpenOAuth: (conn: ConnectionRowConnection) => void;
@@ -66,6 +99,24 @@ type ConnectionsListPanelProps = {
   gateConnectionFlow: (callback: () => void) => void;
   t: any; // ProviderMessageTranslator
 };
+
+function quotaVisibilityHandler(
+  supported: boolean,
+  connectionId: string,
+  toggle: (id: string, visible: boolean) => void
+) {
+  return supported ? (visible: boolean) => toggle(connectionId, visible) : undefined;
+}
+
+// #7643 — extracted so the two ConnectionRow render call sites (already
+// oversized map callbacks) don't each pick up a new `||` decision point.
+function resolveConnProxyField(
+  connProxyMap: ConnectionsListPanelProps["connProxyMap"],
+  connId: string,
+  field: "host" | "name"
+): string | null {
+  return connProxyMap[connId]?.proxy?.[field] || null;
+}
 
 export default function ConnectionsListPanel({
   connections,
@@ -83,6 +134,7 @@ export default function ConnectionsListPanel({
   distributingProxies,
   healthFilter,
   page,
+  accountSearch,
   PAGE_SIZE,
   connProxyMap,
   proxyConfig,
@@ -94,11 +146,18 @@ export default function ConnectionsListPanel({
   setSelectedIds,
   setPage,
   setHealthFilter,
-  handleDelete,
+  setAccountSearch,
+  deleteConfirm,
   handleUpdateConnectionStatus,
   handleToggleRateLimit,
+  handleToggleQuotaVisibility,
   handleToggleClaudeExtraUsage,
+  handleToggleCodexPaidCredits,
+  handleToggleConnectionAutoSync,
   handleToggleCliproxyapiMode,
+  handleSetUpstreamProxyMode,
+  upstreamProxyMode,
+  upstreamProxyFallbackBackend,
   handleToggleCodexLimit,
   handleToggleProxyEnabled,
   handleTogglePerKeyProxyEnabled,
@@ -112,6 +171,10 @@ export default function ConnectionsListPanel({
   handleToggleSelectAll,
   handleDistributeProxies,
   cpaProviderEnabled,
+  quotaByConnectionId,
+  quotaRefreshingIds,
+  handleRefreshQuota,
+  canAutoSync,
   onOpenEditModal,
   onOpenOAuth,
   onSetProxyTarget,
@@ -122,13 +185,15 @@ export default function ConnectionsListPanel({
   gateConnectionFlow,
   t,
 }: ConnectionsListPanelProps) {
+  const tc = useTranslations("common");
   const sorted = [...connections].sort((a, b) => (a.priority || 0) - (b.priority || 0));
+  const quotaSupported = supportsProviderQuota(providerId);
   const hasAnyTag = sorted.some((c) => c.providerSpecificData?.tag as string | undefined);
   const allSelected = selectedIds.size === connections.length && connections.length > 0;
   const someSelected = selectedIds.size > 0 && selectedIds.size < connections.length;
   const bulkBusy = batchUpdating !== null || batchRetesting || batchDeleting || batchTesting;
   const bulkActions = selectedIds.size > 0 && (
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <ActionBar>
       <Button
         variant="secondary"
         size="sm"
@@ -169,7 +234,7 @@ export default function ConnectionsListPanel({
       >
         {t("batchDeleteSelected", { count: selectedIds.size })}
       </Button>
-    </div>
+    </ActionBar>
   );
 
   const isHealthy = (c: ConnectionRowConnection): boolean => {
@@ -186,7 +251,7 @@ export default function ConnectionsListPanel({
       label: t("filterCreditsExhausted", "Credits Exhausted"),
     },
   ];
-  const filtered =
+  const healthFiltered =
     healthFilter === "all"
       ? sorted
       : sorted.filter((c) => {
@@ -197,32 +262,38 @@ export default function ConnectionsListPanel({
             );
           return c.testStatus === healthFilter;
         });
+  // #7937 — substring search over id/tag/name/email, applied across the FULL
+  // in-memory list (not just the current page).
+  const filtered = filterConnectionsByQuery(accountSearch, healthFiltered);
 
   const totalFilteredPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalFilteredPages - 1);
   const pageStart = clampedPage * PAGE_SIZE;
   const pageEnd = pageStart + PAGE_SIZE;
 
+  const accountSearchInput = (
+    <Input
+      type="text"
+      value={accountSearch}
+      onChange={(e) => setAccountSearch(e.target.value)}
+      placeholder={t("accountSearchPlaceholder", "Search accounts…")}
+      aria-label={t("accountSearchPlaceholder", "Search accounts…")}
+      icon="search"
+      className="w-full sm:w-auto sm:min-w-[160px] sm:max-w-[220px]"
+      inputClassName="text-xs"
+    />
+  );
+
   const filterPills = (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      {STATUS_FILTER_OPTIONS.map((opt) => (
-        <button
-          key={opt.value}
-          onClick={() => {
-            setHealthFilter(opt.value);
-            setPage(0);
-            setSelectedIds(new Set());
-          }}
-          className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
-            healthFilter === opt.value
-              ? "bg-primary text-white"
-              : "bg-muted/60 text-text-muted hover:bg-muted"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
+    <FilterPills
+      options={STATUS_FILTER_OPTIONS}
+      value={healthFilter}
+      onChange={(v) => {
+        setHealthFilter(v);
+        setPage(0);
+        setSelectedIds(new Set());
+      }}
+    />
   );
 
   const paginationBar =
@@ -236,6 +307,7 @@ export default function ConnectionsListPanel({
             variant="ghost"
             size="sm"
             icon="chevron_left"
+            aria-label={tc("previousPage")}
             disabled={clampedPage === 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
           />
@@ -246,6 +318,7 @@ export default function ConnectionsListPanel({
             variant="ghost"
             size="sm"
             icon="chevron_right"
+            aria-label={tc("nextPage")}
             disabled={clampedPage >= totalFilteredPages - 1}
             onClick={() => setPage((p) => Math.min(totalFilteredPages - 1, p + 1))}
           />
@@ -261,56 +334,54 @@ export default function ConnectionsListPanel({
     return (
       <>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-3 py-2 bg-muted/50 rounded-t-lg border border-b-0 border-border">
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allSelectedPage}
-                ref={(el) => {
-                  if (el) el.indeterminate = someSelectedPage;
-                }}
-                onChange={() => {
-                  if (allSelectedPage) {
-                    const toRemove = new Set(pageConnections.map((c) => c.id));
-                    setSelectedIds((prev) => {
-                      const next = new Set(prev);
-                      for (const id of toRemove) next.delete(id);
-                      return next;
-                    });
-                  } else {
-                    setSelectedIds((prev) => {
-                      const next = new Set(prev);
-                      for (const c of pageConnections) next.add(c.id);
-                      return next;
-                    });
-                  }
-                }}
-                className="w-4 h-4 rounded border-border text-primary focus:ring-primary/30 cursor-pointer"
-              />
-              <span className="text-sm font-medium text-text-muted">
-                {selectedIds.size > 0
-                  ? providerCountText(
-                      t,
-                      "selectedCount",
-                      selectedIds.size,
-                      "{count} selected",
-                      "{count} selected"
-                    )
-                  : providerCountText(
-                      t,
-                      "accountsCount",
-                      filtered.length,
-                      "{count} account",
-                      "{count} accounts"
-                    )}
-              </span>
-            </label>
+          <div className="flex w-full items-center gap-2 flex-wrap sm:w-auto">
+            <Checkbox
+              checked={allSelectedPage}
+              indeterminate={someSelectedPage && !allSelectedPage}
+              onChange={() => {
+                if (allSelectedPage) {
+                  const toRemove = new Set(pageConnections.map((c) => c.id));
+                  setSelectedIds((prev) => {
+                    const next = new Set(prev);
+                    for (const id of toRemove) next.delete(id);
+                    return next;
+                  });
+                } else {
+                  setSelectedIds((prev) => {
+                    const next = new Set(prev);
+                    for (const c of pageConnections) next.add(c.id);
+                    return next;
+                  });
+                }
+              }}
+              label={
+                <span className="text-sm font-medium text-text-muted">
+                  {selectedIds.size > 0
+                    ? providerCountText(
+                        t,
+                        "selectedCount",
+                        selectedIds.size,
+                        "{count} selected",
+                        "{count} selected"
+                      )
+                    : providerCountText(
+                        t,
+                        "accountsCount",
+                        filtered.length,
+                        "{count} account",
+                        "{count} accounts"
+                      )}
+                </span>
+              }
+            />
+            {accountSearchInput}
             {filterPills}
           </div>
 
           {bulkActions}
         </div>
-        <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] border border-t-0 border-border rounded-b-lg overflow-hidden">
+        {paginationBar}
+        <div className="flex flex-col divide-y divide-border border border-t-0 border-border rounded-b-lg overflow-hidden">
           {pageConnections.length === 0 ? (
             <div className="px-3 py-6 text-center text-sm text-text-muted">
               {t("noFilteredConnections", "No connections match the current filter.")}
@@ -331,13 +402,29 @@ export default function ConnectionsListPanel({
                 onMoveDown={() => handleSwapPriority(conn, sorted[index + 1])}
                 onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
                 onToggleRateLimit={(enabled) => handleToggleRateLimit(conn.id, enabled)}
+                onToggleQuotaVisibility={quotaVisibilityHandler(
+                  quotaSupported,
+                  conn.id,
+                  handleToggleQuotaVisibility
+                )}
                 onToggleClaudeExtraUsage={(enabled) =>
                   handleToggleClaudeExtraUsage(conn.id, enabled)
                 }
-                isCodex={providerId === "codex"}
+                onToggleCodexPaidCredits={(enabled) =>
+                  handleToggleCodexPaidCredits(conn.id, enabled)
+                }
+                onToggleAutoSync={
+                  canAutoSync && handleToggleConnectionAutoSync
+                    ? (enabled) => handleToggleConnectionAutoSync(conn.id, enabled)
+                    : undefined
+                }
+                isCodex={providerId === "codex" || providerId === "codex-app-server"}
                 isCcCompatible={isCcCompatible}
                 cliproxyapiEnabled={cpaProviderEnabled}
                 onToggleCliproxyapiMode={(enabled) => handleToggleCliproxyapiMode(conn.id, enabled)}
+                upstreamProxyMode={upstreamProxyMode}
+                upstreamProxyFallbackBackend={upstreamProxyFallbackBackend}
+                onSetUpstreamProxyMode={handleSetUpstreamProxyMode}
                 onToggleCodex5h={(enabled) => handleToggleCodexLimit(conn.id, "use5h", enabled)}
                 onToggleCodexWeekly={(enabled) =>
                   handleToggleCodexLimit(conn.id, "useWeekly", enabled)
@@ -345,7 +432,12 @@ export default function ConnectionsListPanel({
                 onRetest={() => handleRetestConnection(conn.id)}
                 isRetesting={retestingId === conn.id}
                 onEdit={() => onOpenEditModal(conn)}
-                onDelete={() => handleDelete(conn.id)}
+                onDelete={() =>
+                  deleteConfirm.request(
+                    conn.id,
+                    pickDisplayValue([conn.name, conn.email], emailsVisible, conn.id)
+                  )
+                }
                 onReauth={
                   conn.authType === "oauth"
                     ? () => gateConnectionFlow(() => onOpenOAuth(conn))
@@ -380,13 +472,17 @@ export default function ConnectionsListPanel({
                 }
                 hasProxy={!!connProxyMap[conn.id]?.proxy}
                 proxySource={connProxyMap[conn.id]?.level || null}
-                proxyHost={connProxyMap[conn.id]?.proxy?.host || null}
+                proxyHost={resolveConnProxyField(connProxyMap, conn.id, "host")}
+                proxyName={resolveConnProxyField(connProxyMap, conn.id, "name")}
                 proxyEnabled={readBooleanToggle(conn.proxyEnabled, true)}
                 onToggleProxyEnabled={(enabled) => handleToggleProxyEnabled(conn.id, enabled)}
                 perKeyProxyEnabled={readBooleanToggle(conn.perKeyProxyEnabled, false)}
                 onTogglePerKeyProxyEnabled={(enabled) =>
                   handleTogglePerKeyProxyEnabled(conn.id, enabled)
                 }
+                quotaCache={quotaByConnectionId[conn.id]}
+                quotaRefreshing={quotaRefreshingIds.has(conn.id)}
+                onRefreshQuota={() => handleRefreshQuota(conn.id)}
               />
             ))
           )}
@@ -396,7 +492,10 @@ export default function ConnectionsListPanel({
     );
   }
 
-  // Build ordered tag groups: untagged first, then alphabetically
+  // Build ordered tag groups: untagged first, then alphabetically. Group
+  // ordering + per-tag totals come from the FULL filtered set so the tag
+  // order/count stay stable across pages; row rendering below only shows the
+  // slice that belongs to the current page (#7937 — tagged view pagination).
   const groupMap = new Map<string, ConnectionRowConnection[]>();
   for (const conn of filtered) {
     const tag = (conn.providerSpecificData?.tag as string | undefined)?.trim() || "";
@@ -409,39 +508,45 @@ export default function ConnectionsListPanel({
     return compareTr(a, b);
   });
 
+  const pageConnectionsTagged = filtered.slice(pageStart, pageEnd);
+  const pagedGroupMap = new Map<string, ConnectionRowConnection[]>();
+  for (const conn of pageConnectionsTagged) {
+    const tag = (conn.providerSpecificData?.tag as string | undefined)?.trim() || "";
+    if (!pagedGroupMap.has(tag)) pagedGroupMap.set(tag, []);
+    pagedGroupMap.get(tag)!.push(conn);
+  }
+  const visibleGroupKeys = groupKeys.filter((tag) => (pagedGroupMap.get(tag)?.length ?? 0) > 0);
+
   return (
     <>
       {selectedIds.size > 0 || connections.length > 0 ? (
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-3 py-2 bg-muted/50 rounded-t-lg border border-b-0 border-border">
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                ref={(el) => {
-                  if (el) el.indeterminate = someSelected;
-                }}
-                onChange={handleToggleSelectAll}
-                className="w-4 h-4 rounded border-border text-primary focus:ring-primary/30 cursor-pointer"
-              />
-              <span className="text-sm font-medium text-text-muted">
-                {selectedIds.size > 0
-                  ? providerCountText(
-                      t,
-                      "selectedCount",
-                      selectedIds.size,
-                      "{count} selected",
-                      "{count} selected"
-                    )
-                  : providerCountText(
-                      t,
-                      "accountsCount",
-                      filtered.length,
-                      "{count} account",
-                      "{count} accounts"
-                    )}
-              </span>
-            </label>
+          <div className="flex w-full items-center gap-2 flex-wrap sm:w-auto">
+            <Checkbox
+              checked={allSelected}
+              indeterminate={someSelected}
+              onChange={handleToggleSelectAll}
+              label={
+                <span className="text-sm font-medium text-text-muted">
+                  {selectedIds.size > 0
+                    ? providerCountText(
+                        t,
+                        "selectedCount",
+                        selectedIds.size,
+                        "{count} selected",
+                        "{count} selected"
+                      )
+                    : providerCountText(
+                        t,
+                        "accountsCount",
+                        filtered.length,
+                        "{count} account",
+                        "{count} accounts"
+                      )}
+                </span>
+              }
+            />
+            {accountSearchInput}
             {filterPills}
           </div>
 
@@ -453,25 +558,23 @@ export default function ConnectionsListPanel({
           </div>
         </div>
       ) : null}
+      {paginationBar}
       <div className="flex flex-col gap-0 border border-t-0 border-border rounded-b-lg overflow-hidden">
-        {groupKeys.map((tag, gi) => {
-          const groupConns = groupMap.get(tag)!;
+        {visibleGroupKeys.map((tag, gi) => {
+          const groupConns = pagedGroupMap.get(tag)!;
+          const groupTotal = groupMap.get(tag)!.length;
           return (
             <div
               key={tag || "__untagged__"}
-              className={
-                gi > 0 ? "border-t border-black/[0.06] dark:border-white/[0.06] mt-1 pt-1" : ""
-              }
+              className={gi > 0 ? "border-t border-border mt-1 pt-1" : ""}
             >
               {tag && (
                 <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-                  <span className="material-symbols-outlined text-[13px] text-text-muted/50">
-                    label
-                  </span>
+                  <Icon name="label" size={13} className="text-text-muted/50" />
                   <span className="text-[11px] font-semibold uppercase tracking-widest text-text-muted/60 select-none">
                     {tag}
                   </span>
-                  <div className="flex-1 h-px bg-black/[0.04] dark:bg-white/[0.04]" />
+                  <div className="flex-1 h-px bg-bg-subtle" />
                   <DistributeProxiesButton
                     onDistribute={async () => {
                       await handleDistributeProxies(tag);
@@ -479,10 +582,10 @@ export default function ConnectionsListPanel({
                     disabled={batchTesting || !!retestingId}
                     size="sm"
                   />
-                  <span className="text-[10px] text-text-muted/40">{groupConns.length}</span>
+                  <span className="text-[10px] text-text-muted/40">{groupTotal}</span>
                 </div>
               )}
-              <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03]">
+              <div className="flex flex-col divide-y divide-border">
                 {groupConns.map((conn, index) => (
                   <ConnectionRow
                     key={conn.id}
@@ -491,22 +594,38 @@ export default function ConnectionsListPanel({
                     isClaude={providerId === "claude"}
                     codexGlobalServiceMode={codexGlobalServiceMode}
                     isFirst={gi === 0 && index === 0}
-                    isLast={gi === groupKeys.length - 1 && index === groupConns.length - 1}
+                    isLast={gi === visibleGroupKeys.length - 1 && index === groupConns.length - 1}
                     isSelected={selectedIds.has(conn.id)}
                     onToggleSelect={() => handleToggleSelectOne(conn.id)}
                     onMoveUp={() => handleSwapPriority(conn, sorted[sorted.indexOf(conn) - 1])}
                     onMoveDown={() => handleSwapPriority(conn, sorted[sorted.indexOf(conn) + 1])}
                     onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
                     onToggleRateLimit={(enabled) => handleToggleRateLimit(conn.id, enabled)}
+                    onToggleQuotaVisibility={quotaVisibilityHandler(
+                      quotaSupported,
+                      conn.id,
+                      handleToggleQuotaVisibility
+                    )}
                     onToggleClaudeExtraUsage={(enabled) =>
                       handleToggleClaudeExtraUsage(conn.id, enabled)
                     }
-                    isCodex={providerId === "codex"}
+                    onToggleCodexPaidCredits={(enabled) =>
+                      handleToggleCodexPaidCredits(conn.id, enabled)
+                    }
+                    onToggleAutoSync={
+                      canAutoSync && handleToggleConnectionAutoSync
+                        ? (enabled) => handleToggleConnectionAutoSync(conn.id, enabled)
+                        : undefined
+                    }
+                    isCodex={providerId === "codex" || providerId === "codex-app-server"}
                     isCcCompatible={isCcCompatible}
                     cliproxyapiEnabled={cpaProviderEnabled}
                     onToggleCliproxyapiMode={(enabled) =>
                       handleToggleCliproxyapiMode(conn.id, enabled)
                     }
+                    upstreamProxyMode={upstreamProxyMode}
+                    upstreamProxyFallbackBackend={upstreamProxyFallbackBackend}
+                    onSetUpstreamProxyMode={handleSetUpstreamProxyMode}
                     onToggleCodex5h={(enabled) => handleToggleCodexLimit(conn.id, "use5h", enabled)}
                     onToggleCodexWeekly={(enabled) =>
                       handleToggleCodexLimit(conn.id, "useWeekly", enabled)
@@ -514,7 +633,12 @@ export default function ConnectionsListPanel({
                     onRetest={() => handleRetestConnection(conn.id)}
                     isRetesting={retestingId === conn.id}
                     onEdit={() => onOpenEditModal(conn)}
-                    onDelete={() => handleDelete(conn.id)}
+                    onDelete={() =>
+                      deleteConfirm.request(
+                        conn.id,
+                        pickDisplayValue([conn.name, conn.email], emailsVisible, conn.id)
+                      )
+                    }
                     onReauth={
                       conn.authType === "oauth"
                         ? () => gateConnectionFlow(() => onOpenOAuth(conn))
@@ -549,13 +673,17 @@ export default function ConnectionsListPanel({
                     }
                     hasProxy={!!connProxyMap[conn.id]?.proxy}
                     proxySource={connProxyMap[conn.id]?.level || null}
-                    proxyHost={connProxyMap[conn.id]?.proxy?.host || null}
+                    proxyHost={resolveConnProxyField(connProxyMap, conn.id, "host")}
+                    proxyName={resolveConnProxyField(connProxyMap, conn.id, "name")}
                     proxyEnabled={readBooleanToggle(conn.proxyEnabled, true)}
                     onToggleProxyEnabled={(enabled) => handleToggleProxyEnabled(conn.id, enabled)}
                     perKeyProxyEnabled={readBooleanToggle(conn.perKeyProxyEnabled, false)}
                     onTogglePerKeyProxyEnabled={(enabled) =>
                       handleTogglePerKeyProxyEnabled(conn.id, enabled)
                     }
+                    quotaCache={quotaByConnectionId[conn.id]}
+                    quotaRefreshing={quotaRefreshingIds.has(conn.id)}
+                    onRefreshQuota={() => handleRefreshQuota(conn.id)}
                   />
                 ))}
               </div>
@@ -563,6 +691,7 @@ export default function ConnectionsListPanel({
           );
         })}
       </div>
+      {paginationBar}
     </>
   );
 }

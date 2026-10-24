@@ -1,7 +1,9 @@
 "use client";
 
 import type { Dispatch, SetStateAction } from "react";
-import { Badge, Button } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import { Badge, Button, Input } from "@/shared/components";
+import Icon from "@/shared/components/Icon";
 
 export type BackupCleanupOptions = {
   keepLatest: number;
@@ -44,15 +46,13 @@ function StatusAlert({ status }: { status: BackupRetentionStatus }) {
     <div
       className={`mt-3 p-3 rounded-lg text-sm ${
         isSuccess
-          ? "bg-green-500/10 text-green-500 border border-green-500/20"
-          : "bg-red-500/10 text-red-500 border border-red-500/20"
+          ? "bg-success/10 text-success border border-success/20"
+          : "bg-error/10 text-error border border-error/20"
       }`}
       role="alert"
     >
       <div className="flex items-center gap-2">
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-          {isSuccess ? "check_circle" : "error"}
-        </span>
+        <Icon name={isSuccess ? "check_circle" : "error"} size={16} />
         {status.message}
       </div>
     </div>
@@ -73,88 +73,82 @@ export default function DatabaseBackupRetentionCard({
   onSaveRetention,
   onCleanupBackups,
 }: DatabaseBackupRetentionCardProps) {
+  const t = useTranslations("settings");
+
   return (
     <div className={`p-3 rounded-lg bg-bg border border-border ${className}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
         <div>
           <p className="text-sm font-medium text-text-main">{title}</p>
           <p className="text-xs text-text-muted">
-            Automatic SQLite backups are stored in <code>db_backups</code>. Configure how many
-            snapshots to keep and optionally delete backups older than N days.
+            {t("storageBackupRetentionDescription")} <code>db_backups</code>.{" "}
+            {t("storageBackupRetentionHelp")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="default" size="sm">
-            {storageHealth.backupCount || 0} backups
+            {t("storageBackupCount", { count: storageHealth.backupCount || 0 })}
           </Badge>
           <Badge variant="default" size="sm">
-            Max {storageHealth.backupRetention.maxFiles}
+            {t("storageBackupMaximum", { count: storageHealth.backupRetention.maxFiles })}
           </Badge>
           <Badge variant="default" size="sm">
             {storageHealth.backupRetention.days > 0
-              ? `${storageHealth.backupRetention.days}d retention`
-              : "Age retention off"}
+              ? t("storageBackupAgeRetention", { count: storageHealth.backupRetention.days })
+              : t("storageBackupAgeRetentionOff")}
           </Badge>
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-xs text-text-muted">
-          Keep latest backups
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={backupCleanupOptions.keepLatest}
-            onChange={(e) => {
-              const parsed = Number.parseInt(e.target.value || "1", 10);
-              setBackupRetentionStatus({ type: "", message: "" });
-              setBackupCleanupOptions((prev) => ({
-                ...prev,
-                keepLatest: Number.isFinite(parsed) ? Math.max(1, parsed) : 1,
-              }));
-            }}
-            className="h-9 w-32 rounded-lg border border-border bg-background px-3 text-sm text-text-main"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-muted">
-          Delete older than days
-          <input
-            type="number"
-            min={0}
-            max={3650}
-            value={backupCleanupOptions.retentionDays}
-            onChange={(e) => {
-              const parsed = Number.parseInt(e.target.value || "0", 10);
-              setBackupRetentionStatus({ type: "", message: "" });
-              setBackupCleanupOptions((prev) => ({
-                ...prev,
-                retentionDays: Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
-              }));
-            }}
-            className="h-9 w-32 rounded-lg border border-border bg-background px-3 text-sm text-text-main"
-          />
-        </label>
+        <Input
+          label={t("storageBackupKeepLatest")}
+          type="number"
+          min={1}
+          max={200}
+          value={backupCleanupOptions.keepLatest}
+          onChange={(e) => {
+            const parsed = Number.parseInt(e.target.value || "1", 10);
+            setBackupRetentionStatus({ type: "", message: "" });
+            setBackupCleanupOptions((prev) => ({
+              ...prev,
+              keepLatest: Number.isFinite(parsed) ? Math.max(1, parsed) : 1,
+            }));
+          }}
+          className="w-32 shrink-0"
+        />
+        <Input
+          label={t("storageBackupDeleteOlderThan")}
+          type="number"
+          min={0}
+          max={3650}
+          value={backupCleanupOptions.retentionDays}
+          onChange={(e) => {
+            const parsed = Number.parseInt(e.target.value || "0", 10);
+            setBackupRetentionStatus({ type: "", message: "" });
+            setBackupCleanupOptions((prev) => ({
+              ...prev,
+              retentionDays: Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+            }));
+          }}
+          className="w-32 shrink-0"
+        />
         <Button
+          icon="save"
           variant="outline"
           size="sm"
           onClick={onSaveRetention}
           loading={saveBackupRetentionLoading}
         >
-          <span className="material-symbols-outlined text-[14px] mr-1" aria-hidden="true">
-            save
-          </span>
-          Save retention
+          {t("storageBackupSaveRetention")}
         </Button>
         <Button
+          icon="auto_delete"
           variant="outline"
           size="sm"
           onClick={onCleanupBackups}
           loading={cleanupBackupsLoading}
         >
-          <span className="material-symbols-outlined text-[14px] mr-1" aria-hidden="true">
-            auto_delete
-          </span>
-          Clean old backups
+          {t("storageBackupCleanOld")}
         </Button>
       </div>
       <StatusAlert status={backupRetentionStatus} />

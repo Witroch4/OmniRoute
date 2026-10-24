@@ -116,10 +116,17 @@ export class GeminiWebGateError extends Error {
 
 function abortError(signal: AbortSignal | null | undefined): Error {
   const reason = signal?.reason;
-  const err =
+  // A fresh Error, never the reason itself: AbortSignal.timeout() aborts with a DOMException
+  // whose `name` is a getter-only accessor, so renaming the reason threw a TypeError instead
+  // of rejecting with an AbortError (found by the 3.8.53 sync's #7286 suite).
+  const err = new Error(
     reason instanceof Error
-      ? reason
-      : new Error(typeof reason === "string" ? reason : "The operation was aborted");
+      ? reason.message
+      : typeof reason === "string"
+        ? reason
+        : "The operation was aborted",
+    reason instanceof Error ? { cause: reason } : undefined
+  );
   err.name = "AbortError";
   return err;
 }

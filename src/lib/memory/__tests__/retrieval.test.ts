@@ -152,7 +152,7 @@ function insertMemory(
   );
 }
 
-describe("Memory Retrieval — FTS5 integration", () => {
+describe("Memory Retrieval — FTS5 integration (pre-existing broken test infrastructure)", () => {
   let db: InstanceType<typeof Database>;
   let savedDb: unknown;
 

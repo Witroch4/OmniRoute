@@ -1,5 +1,8 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+import { Checkbox, CheckboxGroup } from "@omniroute/ui-kit/checkbox";
+
 export type SourceId = "1proxy" | "proxifly" | "iplocate" | "webshare";
 
 export const ALL_SOURCE_IDS: SourceId[] = ["1proxy", "proxifly", "iplocate", "webshare"];
@@ -36,28 +39,20 @@ const SOURCES: Array<{ id: SourceId; label: string }> = [
 ];
 
 export default function SourceToggleBar({ disabledSources, onToggle }: SourceToggleBarProps) {
+  const t = useTranslations("settings");
+
   return (
-    <div className="flex gap-2 flex-wrap" role="group" aria-label="Toggle proxy sources">
-      {SOURCES.map((s) => {
-        const enabled = !disabledSources.has(s.id);
-        return (
-          <button
+    <CheckboxGroup aria-label={t("proxyToggleSources")}>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {SOURCES.map((s) => (
+          <Checkbox
             key={s.id}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium border transition-colors ${
-              enabled
-                ? "bg-primary/20 border-primary text-primary"
-                : "border-border text-text-muted hover:border-primary/50"
-            }`}
-            onClick={() => onToggle(s.id)}
-            aria-pressed={enabled}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${enabled ? "bg-primary" : "bg-text-muted"}`}
-            />
-            {s.label}
-          </button>
-        );
-      })}
-    </div>
+            label={s.label}
+            checked={!disabledSources.has(s.id)}
+            onChange={() => onToggle(s.id)}
+          />
+        ))}
+      </div>
+    </CheckboxGroup>
   );
 }

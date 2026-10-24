@@ -7,9 +7,11 @@ import type { SearchProviderCatalogItem } from "../../../src/shared/schemas/sear
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
-}));
+// next-intl: no local mock — falls through to the real-EN-text default mock in
+// tests/_setup/vitestUiPolyfills.ts. CompareTab renders `{count}`/`{overlap}`
+// interpolated copy (search.maxCompareProviders, search.overlapSummary) that the
+// previous `(key) => key` mock rendered as the raw key, never matching this file's
+// literal-text assertions.
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: { children: React.ReactNode; href: string }) =>
@@ -153,7 +155,8 @@ describe("CompareTab", () => {
     expect(fifthBtn?.disabled).toBe(true);
     // Warning message should appear
     const warning = el.querySelector(".text-warning");
-    expect(warning?.textContent).toContain("maxCompareProviders");
+    // Real EN copy via the global next-intl mock: "A maximum of 4 providers ...".
+    expect(warning?.textContent).toContain("4");
   });
 
   it("D22 — can select up to 4 providers", () => {
@@ -165,9 +168,10 @@ describe("CompareTab", () => {
       buttons.forEach((b) => b.click());
     });
 
-    // All 4 should be selected
+    // All 4 should be selected (the picker is a kit CheckboxGroup now: the checked state is
+    // the native checkbox's, where it used to be the toggle button's aria-pressed).
     buttons.forEach((b) => {
-      expect(b.getAttribute("aria-pressed")).toBe("true");
+      expect((b as unknown as HTMLInputElement).checked).toBe(true);
     });
   });
 

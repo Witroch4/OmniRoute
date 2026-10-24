@@ -23,21 +23,44 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { isVisionModelId } from "../../src/shared/constants/visionModels.ts";
-import { getResolvedModelCapabilities } from "../../src/lib/modelCapabilities.ts";
-import {
-  getBestVisionModel,
-  isCredentiallessProviderKey,
-} from "../../src/lib/guardrails/visionBridgeRouter.ts";
-import { PROVIDER_MODELS } from "../../open-sse/config/providerModels.ts";
+// The router's lockout check reads provider connections; keep it off the real data dir.
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-vb-noauth-"));
+
+const { isVisionModelId } = await import("../../src/shared/constants/visionModels.ts");
+const { getResolvedModelCapabilities } = await import("../../src/lib/modelCapabilities.ts");
+const { getBestVisionModel: getBestVisionModelAsync, isCredentiallessProviderKey } =
+  await import("../../src/lib/guardrails/visionBridgeRouter.ts");
+const { PROVIDER_MODELS } = await import("../../open-sse/config/providerModels.ts");
+const { NOAUTH_PROVIDERS } = await import("../../src/shared/constants/providers/noauth.ts");
+
+// Upstream 3.8.53 made the router async and credential-aware. Fail open on the
+// credential store (indeterminate `null`), exactly like the upstream router tests,
+// so these assertions isolate the fork's own exclusion and same-provider preference.
+const FAIL_OPEN_DEPS = {
+  hasUsableCredentials: async () => null,
+  getActiveSyncedCatalog: async () => ({ authoritative: false, models: [] }),
+  isModelLocked: () => false,
+};
+function getBestVisionModel(config: Record<string, unknown> = {}) {
+  return getBestVisionModelAsync(config, FAIL_OPEN_DEPS);
+}
 
 describe("vision bridge — credential-less providers are never a reroute target", () => {
-  it("classifies the anonymous opencode gateways as credential-less", () => {
-    // These are the two `anonymousFallback: true` gateways; `oc` is the `noAuth`
-    // provider. All three used to be reachable as bridge targets.
-    for (const key of ["opencode-zen", "opencode-go", "oc", "opencode"]) {
-      assert.equal(isCredentiallessProviderKey(key), true, `${key} must be credential-less`);
+  it("classifies every noAuth provider (id and alias) as credential-less", () => {
+    // Upstream 3.8.53 retired the anonymous OpenCode endpoints (`oc`, and the
+    // `anonymousFallback` flag on opencode-zen/opencode-go, which now need a key —
+    // #12242), so the set is derived from the live noAuth catalog instead.
+    const noAuth = Object.entries(NOAUTH_PROVIDERS as Record<string, { alias?: string }>);
+    assert.ok(noAuth.length > 0, "fixture drift: expected noAuth providers");
+    for (const [id, def] of noAuth) {
+      assert.equal(isCredentiallessProviderKey(id), true, `${id} must be credential-less`);
+      if (def.alias) {
+        assert.equal(isCredentiallessProviderKey(def.alias), true, `${def.alias} too`);
+      }
     }
     // A real, credentialed provider must not be swept up by the same predicate.
     for (const key of ["cc", "claude", "gh", "github", "agy", "openai", "anthropic"]) {
@@ -45,8 +68,8 @@ describe("vision bridge — credential-less providers are never a reroute target
     }
   });
 
-  it("never auto-selects a credential-less provider as the vision model", () => {
-    const best = getBestVisionModel();
+  it("never auto-selects a credential-less provider as the vision model", async () => {
+    const best = await getBestVisionModel();
     if (!best) return; // no vision-capable candidate at all is a separate failure
     const prefix = best.includes("/") ? best.slice(0, best.indexOf("/")) : best;
     assert.equal(
@@ -56,7 +79,7 @@ describe("vision bridge — credential-less providers are never a reroute target
     );
   });
 
-  it("excludes every credential-less namespace from the candidate pool", () => {
+  it("excludes every credential-less namespace from the candidate pool", async () => {
     // Guards the loop-level skip rather than just the winner: a scoring change
     // must not quietly make these reachable again as a fallback candidate.
     const credentialless = Object.keys(PROVIDER_MODELS).filter((alias) =>
@@ -67,7 +90,7 @@ describe("vision bridge — credential-less providers are never a reroute target
       "fixture drift: expected at least one credential-less provider in PROVIDER_MODELS"
     );
     for (const alias of credentialless) {
-      const best = getBestVisionModel({ excludedModels: [] });
+      const best = await getBestVisionModel({ excludedModels: [] });
       assert.ok(
         !best || !best.startsWith(`${alias}/`),
         `${alias} must never be selected as a vision target`
@@ -95,11 +118,7 @@ describe("vision bridge — an unknown capability is not a blind verdict", () =>
   for (const id of READ_A_TEST_IMAGE_IN_PRODUCTION) {
     it(`${id} is unknown, never asserted blind`, () => {
       const v = getResolvedModelCapabilities(id).supportsVision;
-      assert.notEqual(
-        v,
-        false,
-        `${id} is asserted blind, but it read a test image in production`
-      );
+      assert.notEqual(v, false, `${id} is asserted blind, but it read a test image in production`);
     });
   }
 
@@ -124,9 +143,9 @@ describe("vision bridge — a reroute stays inside the caller's provider", () =>
   // be answered by a metered `anthropic/` model while the same account already had a
   // vision-capable sibling — the caller's credential, quota and cost profile silently
   // swapped out.
-  it("prefers a vision-capable sibling from the requested provider", () => {
+  it("prefers a vision-capable sibling from the requested provider", async () => {
     for (const alias of ["gh", "agy", "cc"]) {
-      const picked = getBestVisionModel({ requestedModel: `${alias}/some-blind-model` });
+      const picked = await getBestVisionModel({ requestedModel: `${alias}/some-blind-model` });
       assert.ok(picked, `${alias}: expected a vision target`);
       assert.ok(
         picked.startsWith(`${alias}/`),
@@ -135,25 +154,25 @@ describe("vision bridge — a reroute stays inside the caller's provider", () =>
     }
   });
 
-  it("does not let one provider's cached pick leak to another", () => {
+  it("does not let one provider's cached pick leak to another", async () => {
     // The selection cache is keyed per requested provider; without that, the first
     // caller's answer would be served to everyone for the cache TTL.
-    const gh = getBestVisionModel({ requestedModel: "gh/some-blind-model" });
-    const agy = getBestVisionModel({ requestedModel: "agy/some-blind-model" });
+    const gh = await getBestVisionModel({ requestedModel: "gh/some-blind-model" });
+    const agy = await getBestVisionModel({ requestedModel: "agy/some-blind-model" });
     assert.ok(gh?.startsWith("gh/"), `gh got ${gh}`);
     assert.ok(agy?.startsWith("agy/"), `agy got ${agy}`);
   });
 
-  it("still answers when the requested provider has nothing that can see", () => {
+  it("still answers when the requested provider has nothing that can see", async () => {
     // Leaving the provider is correct here — the alternative is failing the request.
-    const picked = getBestVisionModel({ requestedModel: "codex/gpt-5.5" });
+    const picked = await getBestVisionModel({ requestedModel: "codex/gpt-5.5" });
     assert.ok(picked, "expected a fallback target outside the provider");
     assert.equal(isCredentiallessProviderKey(picked.split("/")[0]), false);
   });
 
-  it("an explicit operator override still wins over the preference", () => {
+  it("an explicit operator override still wins over the preference", async () => {
     assert.equal(
-      getBestVisionModel({ fixedModel: "cc/claude-opus-5", requestedModel: "gh/x" }),
+      await getBestVisionModel({ fixedModel: "cc/claude-opus-5", requestedModel: "gh/x" }),
       "cc/claude-opus-5"
     );
   });
@@ -162,11 +181,7 @@ describe("vision bridge — a reroute stays inside the caller's provider", () =>
 describe("vision bridge — the Claude 5 generation is vision-capable", () => {
   // claude-opus-5 is the one that regressed; the rest pin the family so the next
   // Claude 5 id added without a spec cannot silently resolve as blind.
-  const CLAUDE_5 = [
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-fable-5",
-  ];
+  const CLAUDE_5 = ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"];
 
   for (const id of CLAUDE_5) {
     it(`${id} passes the id heuristic`, () => {
@@ -184,7 +199,8 @@ describe("vision bridge — the Claude 5 generation is vision-capable", () => {
   it("does not widen the heuristic to unrelated ids", () => {
     // The list is deliberately conservative — a false positive routes an image to
     // a blind model (#4071).
-    for (const id of ["claude-instant-1", "gpt-5.4", "kimi-k2", "gemma-2-9b"]) {
+    // (`gpt-5.4` left this list: upstream 3.8.53 lists it as vision-capable, which it is.)
+    for (const id of ["claude-instant-1", "kimi-k2", "gemma-2-9b"]) {
       assert.equal(isVisionModelId(id), false, `${id} must not be treated as vision`);
     }
   });

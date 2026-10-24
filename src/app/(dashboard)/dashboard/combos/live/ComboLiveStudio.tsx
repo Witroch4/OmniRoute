@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { NodeTypes } from "@xyflow/react";
+import { useTranslations } from "next-intl";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@omniroute/ui-kit/tabs";
+import Badge from "@/shared/components/Badge";
+import Select from "@/shared/components/Select";
 import { FlowCanvas } from "@/shared/components/flow/FlowCanvas";
+import { FLOW_EDGE_COLORS, flowColorAlpha } from "@/shared/components/flow/edgeStyles";
 import {
   comboRunToFlow,
   reduceComboEvent,
@@ -43,6 +48,7 @@ interface FleetOverviewProps {
 }
 
 function FleetOverview({ comboEvents }: FleetOverviewProps) {
+  const t = useTranslations("combos");
   // `now` must advance, or the 60s rolling window freezes at mount and aging
   // events are never re-classified out of "active". A low-frequency tick rolls it.
   const [now, setNow] = useState(() => Date.now());
@@ -59,10 +65,10 @@ function FleetOverview({ comboEvents }: FleetOverviewProps) {
 
   if (total === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-2 text-muted">
+      <div className="flex flex-col items-center justify-center h-full gap-2 text-text-muted">
         <span className="text-2xl opacity-40">⌁</span>
-        <p className="text-sm">No providers observed yet.</p>
-        <p className="text-xs opacity-60">Fleet data arrives via live combo events.</p>
+        <p className="text-sm">{t("liveNoProviders")}</p>
+        <p className="text-xs opacity-60">{t("liveFleetDataHint")}</p>
       </div>
     );
   }
@@ -71,15 +77,18 @@ function FleetOverview({ comboEvents }: FleetOverviewProps) {
     <div className="flex flex-col gap-3 p-4 h-full overflow-auto" data-testid="fleet-overview">
       {sets.active.size > 0 && (
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted mb-1.5">
-            Active ({sets.active.size})
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5">
+            {t("liveActiveCount", { count: sets.active.size })}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[...sets.active].map((p) => (
               <span
                 key={p}
                 className="text-[11px] px-2 py-0.5 rounded-full font-medium"
-                style={{ backgroundColor: "#22c55e20", color: "#22c55e" }}
+                style={{
+                  backgroundColor: flowColorAlpha(FLOW_EDGE_COLORS.active, 13),
+                  color: FLOW_EDGE_COLORS.active,
+                }}
               >
                 {p}
               </span>
@@ -89,15 +98,18 @@ function FleetOverview({ comboEvents }: FleetOverviewProps) {
       )}
       {sets.error.size > 0 && (
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted mb-1.5">
-            Errors ({sets.error.size})
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5">
+            {t("liveErrorCount", { count: sets.error.size })}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[...sets.error].map((p) => (
               <span
                 key={p}
                 className="text-[11px] px-2 py-0.5 rounded-full font-medium"
-                style={{ backgroundColor: "#ef444420", color: "#ef4444" }}
+                style={{
+                  backgroundColor: flowColorAlpha(FLOW_EDGE_COLORS.error, 13),
+                  color: FLOW_EDGE_COLORS.error,
+                }}
               >
                 {p}
               </span>
@@ -107,8 +119,8 @@ function FleetOverview({ comboEvents }: FleetOverviewProps) {
       )}
       {sets.last.size > 0 && (
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted mb-1.5">
-            Inactive ({sets.last.size})
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5">
+            {t("liveInactiveCount", { count: sets.last.size })}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[...sets.last].map((p) => (
@@ -133,14 +145,15 @@ function FleetOverview({ comboEvents }: FleetOverviewProps) {
 // ── Empty state ───────────────────────────────────────────────────────────
 
 function EmptyState() {
+  const t = useTranslations("combos");
   return (
     <div
-      className="flex flex-col items-center justify-center h-full gap-3 text-muted"
+      className="flex flex-col items-center justify-center h-full gap-3 text-text-muted"
       data-testid="combo-live-studio-empty"
     >
       <span className="text-3xl opacity-40">⌁</span>
-      <p className="text-sm">No combo run available.</p>
-      <p className="text-xs opacity-60">Live data arrives via the WS combo channel.</p>
+      <p className="text-sm">{t("liveNoRun")}</p>
+      <p className="text-xs opacity-60">{t("liveDataHint")}</p>
     </div>
   );
 }
@@ -148,13 +161,16 @@ function EmptyState() {
 // ── Disconnected banner ───────────────────────────────────────────────────
 
 function DisconnectedBanner() {
+  const t = useTranslations("combos");
   return (
     <div
-      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-bg/80 text-xs text-muted shrink-0"
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-bg/80 text-xs text-text-muted shrink-0"
       data-testid="combo-disconnected-banner"
     >
-      <span className="text-amber-500 font-semibold">●</span>
-      <span>Live disabled — WebSocket disconnected. Showing last known state.</span>
+      <span className="font-semibold" style={{ color: FLOW_EDGE_COLORS.last }} aria-hidden="true">
+        ●
+      </span>
+      <span>{t("liveDisconnected")}</span>
     </div>
   );
 }
@@ -224,6 +240,7 @@ export function ComboLiveStudio({
   providerHealth,
   connectionHealth,
 }: ComboLiveStudioProps) {
+  const t = useTranslations("combos");
   const [mode, setMode] = useState<"single" | "fleet">("single");
   const [selectedCombo, setSelectedCombo] = useState<string>("");
 
@@ -277,49 +294,53 @@ export function ComboLiveStudio({
   const showSelector = runProp === undefined;
 
   return (
-    <div className="flex flex-col h-full gap-2" data-testid="combo-live-studio">
+    <Tabs
+      variant="capsule"
+      value={mode}
+      onValueChange={(next) => setMode(next as "single" | "fleet")}
+      className="flex flex-col h-full gap-2"
+      data-testid="combo-live-studio"
+    >
       {/* ── Toolbar ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-bg/60 shrink-0 flex-wrap">
         {showSelector && (
-          <select
-            className="text-xs border border-border rounded px-2 py-1 bg-bg text-muted"
+          <Select
+            compact
+            // The kit Field is full-width by default; in the toolbar it must not push the tabs
+            // onto their own line.
+            className="w-auto"
             value={selectedCombo}
             onChange={(e) => setSelectedCombo(e.target.value)}
-            aria-label="Select combo"
+            aria-label={t("liveSelectCombo")}
             data-testid="combo-selector"
-          >
-            <option value="">— select combo —</option>
-            {comboOptions.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+            placeholder={t("liveSelectComboPlaceholder")}
+            placeholderDisabled={false}
+            options={comboOptions.map((name) => ({ value: name, label: name }))}
+          />
         )}
 
         {displayRun && (
           <>
-            <span className="text-xs font-mono text-muted truncate">{displayRun.comboName}</span>
+            <span className="text-xs font-mono text-text-muted truncate">
+              {displayRun.comboName}
+            </span>
             {displayRun.strategy && (
-              <span
-                className="text-xs px-1.5 py-0.5 rounded-full font-semibold"
-                style={{ backgroundColor: "#6366f120", color: "#6366f1" }}
-              >
+              <Badge size="sm" variant="primary" className="font-semibold">
                 {displayRun.strategy}
-              </span>
+              </Badge>
             )}
-            <span className="text-xs text-muted">
-              {displayRun.targets.length} target{displayRun.targets.length !== 1 ? "s" : ""}
+            <span className="text-xs text-text-muted">
+              {t("liveTargetCount", { count: displayRun.targets.length })}
             </span>
             <span
               className="text-xs font-bold"
               style={{
                 color:
                   displayRun.outcome === "succeeded"
-                    ? "#22c55e"
+                    ? "var(--orch-status-success)"
                     : displayRun.outcome === "exhausted"
-                      ? "#ef4444"
-                      : "#f59e0b",
+                      ? "var(--orch-status-error)"
+                      : "var(--orch-status-warning)",
               }}
               data-testid="run-outcome"
             >
@@ -328,41 +349,26 @@ export function ComboLiveStudio({
           </>
         )}
 
-        {/* Single ⇄ Fleet toggle */}
-        <div className="ml-auto flex items-center border border-border rounded overflow-hidden text-xs">
-          <button
-            className="px-2.5 py-1 transition-colors"
-            style={{
-              background: mode === "single" ? "var(--color-primary)" : "transparent",
-              color: mode === "single" ? "#fff" : "var(--color-text-muted)",
-            }}
-            onClick={() => setMode("single")}
-            data-testid="mode-single"
-          >
-            Single
-          </button>
-          <button
-            className="px-2.5 py-1 transition-colors"
-            style={{
-              background: mode === "fleet" ? "var(--color-primary)" : "transparent",
-              color: mode === "fleet" ? "#fff" : "var(--color-text-muted)",
-            }}
-            onClick={() => setMode("fleet")}
-            data-testid="mode-fleet"
-          >
-            Fleet
-          </button>
-        </div>
+        {/* Single ⇄ Fleet toggle — kit capsule tabs; each mode is a TabsContent below. */}
+        <TabsList className="ms-auto">
+          <TabsTrigger value="single" data-testid="mode-single">
+            {t("liveSingle")}
+          </TabsTrigger>
+          <TabsTrigger value="fleet" data-testid="mode-fleet">
+            {t("liveFleet")}
+          </TabsTrigger>
+        </TabsList>
       </div>
 
       {/* ── Disconnected banner ───────────────────────────────────────────── */}
       {!isConnected && <DisconnectedBanner />}
 
       {/* ── Main canvas area ─────────────────────────────────────────────── */}
-      <div className="flex-1 min-h-0 rounded-lg overflow-hidden border border-border">
-        {mode === "fleet" ? (
-          <FleetOverview comboEvents={comboEvents} />
-        ) : displayRun ? (
+      <TabsContent
+        value="single"
+        className="mt-0 flex-1 min-h-0 rounded-lg overflow-hidden border border-border"
+      >
+        {displayRun ? (
           <FlowCanvas
             nodes={nodes}
             edges={edges}
@@ -373,8 +379,14 @@ export function ComboLiveStudio({
         ) : (
           <EmptyState />
         )}
-      </div>
-    </div>
+      </TabsContent>
+      <TabsContent
+        value="fleet"
+        className="mt-0 flex-1 min-h-0 rounded-lg overflow-hidden border border-border"
+      >
+        <FleetOverview comboEvents={comboEvents} />
+      </TabsContent>
+    </Tabs>
   );
 }
 

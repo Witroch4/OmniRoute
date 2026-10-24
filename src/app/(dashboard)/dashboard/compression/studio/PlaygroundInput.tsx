@@ -1,4 +1,10 @@
 "use client";
+import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
+import { CheckboxGroup } from "@omniroute/ui-kit/checkbox";
+import Button from "@/shared/components/Button";
+import Checkbox from "@/shared/components/Checkbox";
+import Textarea from "@/shared/components/Textarea";
 export const LANE_ENGINES = [
   "session-dedup",
   "ccr",
@@ -28,6 +34,63 @@ export interface PlaygroundInputProps {
   heatmap: "ultra" | "universal" | false;
   onToggleHeatmap: () => void;
 }
+
+function EngineOptions({
+  active,
+  onToggleActive,
+}: {
+  active: string[];
+  onToggleActive: (engine: string) => void;
+}) {
+  const t = useTranslations("compressionStudio");
+  return (
+    <div>
+      <CheckboxGroup label={t("activeCombined")} className="gap-1">
+        {LANE_ENGINES.map((engine) => (
+          <Checkbox
+            key={engine}
+            label={engine}
+            checked={active.includes(engine)}
+            onChange={() => onToggleActive(engine)}
+          />
+        ))}
+        <Checkbox
+          disabled
+          label={
+            <>
+              llmlingua <span className="text-[10px]">({t("requiresOnnx")})</span>
+            </>
+          }
+        />
+      </CheckboxGroup>
+    </div>
+  );
+}
+
+function ToggleOption({
+  testId,
+  checked,
+  onChange,
+  children,
+  className = "text-sm",
+}: {
+  testId: string;
+  checked: boolean;
+  onChange: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Checkbox
+      className={className}
+      data-testid={testId}
+      checked={checked}
+      onChange={onChange}
+      label={children}
+    />
+  );
+}
+
 export function PlaygroundInput({
   text,
   onText,
@@ -46,85 +109,53 @@ export function PlaygroundInput({
   heatmap,
   onToggleHeatmap,
 }: PlaygroundInputProps) {
+  const t = useTranslations("compressionStudio");
   return (
     <div className="flex flex-col gap-3">
-      <textarea
+      <Textarea
         data-testid="play-input"
-        className="min-h-[160px] w-full rounded border p-2 font-mono text-xs"
+        aria-label={t("inputPlaceholder")}
+        className="min-h-[160px] w-full font-mono text-xs"
         value={text}
         onChange={(e) => onText(e.target.value)}
-        placeholder="Cole prompt / tool-output / contexto..."
+        placeholder={t("inputPlaceholder")}
       />
-      <div>
-        <div className="text-[10px] uppercase opacity-60">Ativos no fluxo combinado</div>
-        {LANE_ENGINES.map((e) => (
-          <label key={e} className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={active.includes(e)}
-              onChange={() => onToggleActive(e)}
-            />
-            {e}
-          </label>
-        ))}
-        <label className="flex items-center gap-2 text-sm opacity-50">
-          <input type="checkbox" disabled /> llmlingua{" "}
-          <span className="text-[10px]">(requer modelo ONNX)</span>
-        </label>
-      </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          data-testid="fidelity-toggle"
-          checked={fidelityGate}
-          onChange={onToggleFidelity}
-        />
-        Verificar fidelidade (rejeitar camada que corromper)
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          data-testid="fuzzy-toggle"
-          checked={fuzzyDedup}
-          onChange={onToggleFuzzy}
-        />
-        Fuzzy dedup (near-duplicate → CCR)
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          data-testid="risk-toggle"
-          checked={riskGate}
-          onChange={onToggleRisk}
-        />
-        Protect sensitive content (risk-gate)
-      </label>
-      <label className="flex items-center gap-1 text-xs">
-        <input
-          type="checkbox"
-          data-testid="quantum-toggle"
-          checked={quantumLock}
-          onChange={onToggleQuantum}
-        />
-        QuantumLock (stabilize cache prefix)
-      </label>
-      <label className="flex items-center gap-1 text-xs">
-        <input
-          type="checkbox"
-          data-testid="heatmap-toggle"
-          checked={Boolean(heatmap)}
-          onChange={onToggleHeatmap}
-        />
-        Saliency heatmap {heatmap ? `(${heatmap})` : ""}
-      </label>
-      <button
+      <EngineOptions active={active} onToggleActive={onToggleActive} />
+      <ToggleOption testId="fidelity-toggle" checked={fidelityGate} onChange={onToggleFidelity}>
+        {t("verifyFidelity")}
+      </ToggleOption>
+      <ToggleOption testId="fuzzy-toggle" checked={fuzzyDedup} onChange={onToggleFuzzy}>
+        {t("fuzzyDedup")}
+      </ToggleOption>
+      <ToggleOption testId="risk-toggle" checked={riskGate} onChange={onToggleRisk}>
+        {t("protectSensitive")}
+      </ToggleOption>
+      <ToggleOption
+        testId="quantum-toggle"
+        checked={quantumLock}
+        onChange={onToggleQuantum}
+        className="text-xs"
+      >
+        {t("quantumLock")}
+      </ToggleOption>
+      <ToggleOption
+        testId="heatmap-toggle"
+        checked={Boolean(heatmap)}
+        onChange={onToggleHeatmap}
+        className="text-xs"
+      >
+        {t("saliencyHeatmap")} {heatmap ? `(${heatmap})` : ""}
+      </ToggleOption>
+      <Button
         data-testid="play-run"
-        className="rounded bg-blue-500/30 py-2 font-semibold"
+        icon="play_arrow"
+        fullWidth
         onClick={onRun}
+        loading={loading}
         disabled={loading}
       >
-        {loading ? "Rodando..." : "▶ Run"}
-      </button>
+        {loading ? t("running") : t("run")}
+      </Button>
     </div>
   );
 }

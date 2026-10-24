@@ -6,7 +6,28 @@ import { v4 as uuidv4 } from "uuid";
 import { getDbInstance, rowToCamel } from "../core";
 import { selectProviderNodeForConnection } from "../providerNodeSelect";
 import { backupDbFile } from "../backup";
+import { invalidateDbCache } from "../readCache";
 import { toRecord, type JsonRecord } from "./columns";
+import { resetProviderNodePrefixCache } from "./nodePrefix";
+
+function normalizeDailyQuotaResetHour(value: unknown): number | null {
+  return value === 0 || value ? Number(value) : null;
+}
+
+function withParsedCustomHeaders(node: JsonRecord, storedJson: string | null): JsonRecord {
+  const result: JsonRecord = { ...node };
+  if (storedJson) {
+    try {
+      result.customHeaders = JSON.parse(storedJson);
+    } catch {
+      result.customHeaders = null;
+    }
+  } else {
+    result.customHeaders = null;
+  }
+  delete result.customHeadersJson;
+  return result;
+}
 
 interface StatementLike<TRow = unknown> {
   all: (...params: unknown[]) => TRow[];
@@ -18,7 +39,7 @@ interface DbLike {
   prepare: <TRow = unknown>(sql: string) => StatementLike<TRow>;
 }
 
-export async function getProviderNodes(filter: JsonRecord = {}) {
+export async function getProviderNodes(filter: JsonRecord = {}, limit?: number, offset?: number) {
   const db = getDbInstance() as unknown as DbLike;
   let sql = "SELECT * FROM provider_nodes";
   const params: Record<string, unknown> = {};
@@ -27,8 +48,28 @@ export async function getProviderNodes(filter: JsonRecord = {}) {
     sql += " WHERE type = @type";
     params.type = filter.type;
   }
+  sql += " ORDER BY id ASC";
+  if (limit !== undefined) {
+    sql += " LIMIT @limit OFFSET @offset";
+    params.limit = limit;
+    params.offset = offset ?? 0;
+  }
 
   return db.prepare(sql).all(params).map(rowToCamel);
+}
+
+export function getProviderNodesCount(filter: JsonRecord = {}): number {
+  const db = getDbInstance() as unknown as DbLike;
+  let sql = "SELECT count(*) as cnt FROM provider_nodes";
+  const params: Record<string, unknown> = {};
+
+  if (filter.type) {
+    sql += " WHERE type = @type";
+    params.type = filter.type;
+  }
+
+  const row = db.prepare(sql).get(params) as { cnt: number };
+  return row.cnt;
 }
 
 export async function getProviderNodeById(id: string) {
@@ -49,6 +90,33 @@ export async function resolveProviderNodeForConnection(idOrType: string) {
   return selectProviderNodeForConnection(idOrType, all);
 }
 
+export const PROVIDER_NODE_ID_CONFLICT = "PROVIDER_NODE_ID_CONFLICT";
+
+/** Thrown by createProviderNode when a node with the same id already exists. */
+export class ProviderNodeIdConflictError extends Error {
+  readonly code = PROVIDER_NODE_ID_CONFLICT;
+  readonly nodeId: string;
+
+  constructor(nodeId: string) {
+    super(`Provider node ID "${nodeId}" already exists`);
+    this.name = "ProviderNodeIdConflictError";
+    this.nodeId = nodeId;
+  }
+}
+
+// Matched by `code` (not only `instanceof`) so the guard survives duplicated module
+// instances across bundles/realms.
+export function isProviderNodeIdConflictError(
+  error: unknown
+): error is ProviderNodeIdConflictError {
+  return (
+    error instanceof ProviderNodeIdConflictError ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { code?: unknown }).code === PROVIDER_NODE_ID_CONFLICT)
+  );
+}
+
 export async function createProviderNode(data: JsonRecord) {
   const db = getDbInstance() as unknown as DbLike;
   const now = new Date().toISOString();
@@ -67,31 +135,30 @@ export async function createProviderNode(data: JsonRecord) {
     // Optional operator-supplied remote icon URL (#2166) — plain TEXT, no JSON parsing needed.
     iconUrl: data.iconUrl || null,
     customHeadersJson,
+    dailyQuotaResetTimezone: data.dailyQuotaResetTimezone || null,
+    dailyQuotaResetHour: normalizeDailyQuotaResetHour(data.dailyQuotaResetHour),
     createdAt: now,
     updatedAt: now,
   };
 
-  db.prepare(
-    `
-    INSERT INTO provider_nodes (id, type, name, prefix, api_type, base_url, chat_path, models_path, icon_url, custom_headers_json, created_at, updated_at)
-    VALUES (@id, @type, @name, @prefix, @apiType, @baseUrl, @chatPath, @modelsPath, @iconUrl, @customHeadersJson, @createdAt, @updatedAt)
+  const result = db
+    .prepare(
+      `
+    INSERT INTO provider_nodes (id, type, name, prefix, api_type, base_url, chat_path, models_path, icon_url, custom_headers_json, daily_quota_reset_timezone, daily_quota_reset_hour, created_at, updated_at)
+    VALUES (@id, @type, @name, @prefix, @apiType, @baseUrl, @chatPath, @modelsPath, @iconUrl, @customHeadersJson, @dailyQuotaResetTimezone, @dailyQuotaResetHour, @createdAt, @updatedAt)
+    ON CONFLICT(id) DO NOTHING
   `
-  ).run(node);
+    )
+    .run(node);
+  // Ids can be operator-chosen (custom suffix), so a collision is a caller error,
+  // never a silent overwrite nor an unhandled constraint failure.
+  if ((result?.changes ?? 0) === 0) throw new ProviderNodeIdConflictError(String(node.id));
 
   backupDbFile("pre-write");
+  invalidateDbCache("nodes");
+  resetProviderNodePrefixCache();
 
-  const result: JsonRecord = { ...node };
-  if (customHeadersJson) {
-    try {
-      result.customHeaders = JSON.parse(customHeadersJson);
-    } catch {
-      result.customHeaders = null;
-    }
-  } else {
-    result.customHeaders = null;
-  }
-  delete result.customHeadersJson;
-  return result;
+  return withParsedCustomHeaders({ ...node }, customHeadersJson);
 }
 
 export async function updateProviderNode(id: string, data: JsonRecord) {
@@ -122,7 +189,10 @@ export async function updateProviderNode(id: string, data: JsonRecord) {
     UPDATE provider_nodes SET type = @type, name = @name, prefix = @prefix,
     api_type = @apiType, base_url = @baseUrl, chat_path = @chatPath,
     models_path = @modelsPath, icon_url = @iconUrl,
-    custom_headers_json = @customHeadersJson, updated_at = @updatedAt
+    custom_headers_json = @customHeadersJson,
+    daily_quota_reset_timezone = @dailyQuotaResetTimezone,
+    daily_quota_reset_hour = @dailyQuotaResetHour,
+    updated_at = @updatedAt
     WHERE id = @id
   `
   ).run({
@@ -138,24 +208,16 @@ export async function updateProviderNode(id: string, data: JsonRecord) {
     // stored custom icon when the caller submits an empty value.
     iconUrl: merged["iconUrl"] || null,
     customHeadersJson: merged["customHeadersJson"] || null,
+    dailyQuotaResetTimezone: merged["dailyQuotaResetTimezone"] || null,
+    dailyQuotaResetHour: normalizeDailyQuotaResetHour(merged["dailyQuotaResetHour"]),
     updatedAt: merged["updatedAt"],
   });
 
   backupDbFile("pre-write");
+  invalidateDbCache("nodes");
+  resetProviderNodePrefixCache();
 
-  const result: JsonRecord = { ...merged };
-  const storedJson = merged["customHeadersJson"] as string | null;
-  if (storedJson) {
-    try {
-      result.customHeaders = JSON.parse(storedJson);
-    } catch {
-      result.customHeaders = null;
-    }
-  } else {
-    result.customHeaders = null;
-  }
-  delete result.customHeadersJson;
-  return result;
+  return withParsedCustomHeaders(merged, (merged["customHeadersJson"] as string | null) ?? null);
 }
 
 export async function deleteProviderNode(id: string) {
@@ -165,5 +227,7 @@ export async function deleteProviderNode(id: string) {
 
   db.prepare("DELETE FROM provider_nodes WHERE id = ?").run(id);
   backupDbFile("pre-write");
+  invalidateDbCache("nodes");
+  resetProviderNodePrefixCache();
   return rowToCamel(existing);
 }

@@ -101,7 +101,9 @@ describe("getModelTargetFormat with the runtime OpenCode catalog", () => {
 
   it("other providers are untouched", async () => {
     await catalog.refreshOpencodeCatalog({ fetchImpl: stubFetch(RAW) });
-    assert.equal(getModelTargetFormat("openai", "gpt-6-luna"), null);
+    // 3.8.53: upstream registers gpt-6-luna on `openai` (Responses), so a catalog id the
+    // openai registry does not know is what proves the OpenCode catalog does not leak there.
+    assert.equal(getModelTargetFormat("openai", "brand-new-anthropic"), null);
     assert.equal(getModelTargetFormat("opencode-zen", "zen-only-responses"), null);
   });
 

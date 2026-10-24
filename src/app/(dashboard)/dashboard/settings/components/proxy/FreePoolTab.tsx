@@ -1,7 +1,10 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { Button } from "@/shared/components";
+import { DataTableShell } from "@omniroute/ui-kit/data-table-shell";
+import { Table, TableBody, TableHead, TableHeader, TableRow } from "@omniroute/ui-kit/table";
+import { TableLoadingState } from "@omniroute/ui-kit/table-loading";
+import { Button, EmptyState, Input, Select } from "@/shared/components";
 import SourceToggleBar, {
   type SourceId,
   ALL_SOURCE_IDS,
@@ -22,6 +25,12 @@ const MAX_VISIBLE_PAGES = 7;
 
 export default function FreePoolTab() {
   const t = useTranslations("settings");
+  const translateOrFallback = (
+    key: string,
+    fallback: string,
+    values?: Record<string, string | number>
+  ) => (typeof t.has === "function" && !t.has(key) ? fallback : t(key, values));
+  const tc = useTranslations("common");
   const [proxies, setProxies] = useState<FreeProxyRowData[]>([]);
   const [stats, setStats] = useState<FreePoolStats | null>(null);
   const [disabledSources, setDisabledSources] = useState<Set<SourceId>>(new Set());
@@ -176,7 +185,7 @@ export default function FreePoolTab() {
 
   const handleBulkAdd = async (ids: string[]) => {
     if (!ids.length) return;
-    setBulkProgress("Testing proxies...");
+    setBulkProgress(t("proxyFreePoolTesting"));
     try {
       const res = await fetch("/api/settings/free-proxies/bulk-add-to-pool", {
         method: "POST",
@@ -184,7 +193,12 @@ export default function FreePoolTab() {
         body: JSON.stringify({ ids }),
       });
       const data = await res.json();
-      setBulkProgress(`${data.succeeded ?? 0} added, ${data.failed ?? 0} failed`);
+      setBulkProgress(
+        t("proxyFreePoolBulkResult", {
+          succeeded: data.succeeded ?? 0,
+          failed: data.failed ?? 0,
+        })
+      );
       await loadData();
       setSelected(new Set());
     } catch {}
@@ -229,146 +243,219 @@ export default function FreePoolTab() {
     setPage(newPage);
   };
 
+  const columnLabels = [
+    translateOrFallback("proxyFreePoolSource", "Source"),
+    translateOrFallback("proxyFreePoolHostPort", "Host:Port"),
+    translateOrFallback("proxyFreePoolType", "Type"),
+    translateOrFallback("proxyFreePoolCountry", "Country"),
+    translateOrFallback("proxyFreePoolQuality", "Quality"),
+    translateOrFallback("proxyFreePoolLatency", "Latency"),
+  ];
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <SourceToggleBar disabledSources={disabledSources} onToggle={handleToggleSource} />
-        <div className="flex gap-2 ml-auto flex-wrap items-center">
-          <select
-            value={filterProtocol}
-            onChange={(e) => setFilterProtocol(e.target.value)}
-            className="text-xs bg-surface-alt border border-border rounded px-2 py-1"
-            aria-label={t("proxyFreePoolFilterProtocol")}
-          >
-            <option value="">{t("proxyFreePoolProtocol")}</option>
-            {["http", "https", "socks4", "socks5"].map((p) => (
-              <option key={p} value={p}>
-                {p.toUpperCase()}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder={t("proxyFreePoolCountryPlaceholder")}
-            value={filterCountry}
-            onChange={(e) => setFilterCountry(e.target.value.toUpperCase().slice(0, 2))}
-            className="text-xs bg-surface-alt border border-border rounded px-2 py-1 w-28"
-            aria-label={t("proxyFreePoolFilterCountry")}
-          />
-          <input
-            type="number"
-            placeholder={t("proxyFreePoolMinQualityPlaceholder")}
-            value={minQuality}
-            onChange={(e) => setMinQuality(e.target.value)}
-            min={0}
-            max={100}
-            className="text-xs bg-surface-alt border border-border rounded px-2 py-1 w-24"
-            aria-label={t("proxyFreePoolMinQualityLabel")}
-          />
-          <Button size="sm" variant="secondary" icon="sync" onClick={handleSync} disabled={syncing}>
-            {syncing ? t("syncing") : t("proxyFreePoolSyncAll")}
-          </Button>
-        </div>
-      </div>
-
-      {stats && (
-        <div className="text-xs text-text-muted flex gap-4 flex-wrap">
-          <span>
-            {t("proxyFreePoolTotal")}: {stats.total}
-          </span>
-          <span>
-            {t("proxyFreePoolInPool")}: {stats.inPool}
-          </span>
-          {stats.avgQuality != null && (
-            <span>
-              {t("proxyFreePoolAvgQuality")}: {stats.avgQuality}
-            </span>
+      <DataTableShell
+        filterAlignment="end"
+        filters={
+          <div className="flex w-full flex-wrap items-center gap-3">
+            <SourceToggleBar disabledSources={disabledSources} onToggle={handleToggleSource} />
+            <Select
+              compact
+              value={filterProtocol}
+              onChange={(e) => setFilterProtocol(e.target.value)}
+              aria-label={translateOrFallback("proxyFreePoolFilterProtocol", "Filter by protocol")}
+              options={[
+                { value: "", label: translateOrFallback("proxyFreePoolProtocol", "Protocol") },
+                ...["http", "https", "socks4", "socks5"].map((p) => ({
+                  value: p,
+                  label: p.toUpperCase(),
+                })),
+              ]}
+              className="w-32"
+            />
+            <Input
+              type="text"
+              placeholder={translateOrFallback(
+                "proxyFreePoolCountryPlaceholder",
+                "Country (e.g. US)"
+              )}
+              value={filterCountry}
+              onChange={(e) => setFilterCountry(e.target.value.toUpperCase().slice(0, 2))}
+              className="w-32"
+              aria-label={translateOrFallback("proxyFreePoolFilterCountry", "Filter by country")}
+            />
+            <Input
+              type="number"
+              placeholder={translateOrFallback("proxyFreePoolMinQualityPlaceholder", "Min quality")}
+              value={minQuality}
+              onChange={(e) => setMinQuality(e.target.value)}
+              min={0}
+              max={100}
+              className="w-32"
+              aria-label={translateOrFallback(
+                "proxyFreePoolMinQualityLabel",
+                "Minimum quality score"
+              )}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="sync"
+              onClick={handleSync}
+              disabled={syncing}
+            >
+              {syncing
+                ? translateOrFallback("syncing", "Syncing...")
+                : translateOrFallback("proxyFreePoolSyncAll", "Sync all")}
+            </Button>
+          </div>
+        }
+        pagination={
+          totalPages > 1 ? (
+            <nav
+              aria-label={tc("pagination")}
+              className="flex flex-wrap items-center justify-center gap-1 p-2"
+            >
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                icon="chevron_left"
+                onClick={() => handlePageChange(page - 1)}
+                disabled={page <= 1}
+                aria-label={tc("previousPage")}
+              />
+              {buildPageRange().map((p, i) =>
+                p === "ellipsis" ? (
+                  <span
+                    key={`ellipsis-${i}`}
+                    aria-hidden="true"
+                    className="px-1 text-text-muted text-xs"
+                  >
+                    …
+                  </span>
+                ) : (
+                  <Button
+                    key={p}
+                    size="sm"
+                    variant={p === page ? "primary" : "ghost"}
+                    aria-current={p === page ? "page" : undefined}
+                    className="min-w-8 px-2 text-xs"
+                    onClick={() => handlePageChange(p)}
+                  >
+                    {p}
+                  </Button>
+                )
+              )}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                icon="chevron_right"
+                onClick={() => handlePageChange(page + 1)}
+                disabled={page >= totalPages}
+                aria-label={tc("nextPage")}
+              />
+            </nav>
+          ) : undefined
+        }
+      >
+        <div className="flex flex-col gap-3 px-3 pt-3 empty:hidden">
+          {stats && (
+            <div className="text-xs text-text-muted flex gap-4 flex-wrap">
+              <span>
+                {translateOrFallback("proxyFreePoolTotal", "Total")}: {stats.total}
+              </span>
+              <span>
+                {translateOrFallback("proxyFreePoolInPool", "In pool")}: {stats.inPool}
+              </span>
+              {stats.avgQuality != null && (
+                <span>
+                  {translateOrFallback("proxyFreePoolAvgQuality", "Average quality")}:{" "}
+                  {stats.avgQuality}
+                </span>
+              )}
+              {stats.lastSyncAt && (
+                <span suppressHydrationWarning>
+                  {translateOrFallback("lastSync", "Last sync")}:{" "}
+                  {new Date(stats.lastSyncAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
           )}
-          {stats.lastSyncAt && (
-            <span>
-              {t("lastSync")}: {new Date(stats.lastSyncAt).toLocaleTimeString()}
-            </span>
+
+          {syncErrors && (
+            <div
+              className="text-xs text-error flex flex-col gap-1"
+              role="alert"
+              data-testid="free-pool-sync-errors"
+            >
+              {Object.entries(syncErrors).map(([src, errs]) => (
+                <span key={src}>
+                  {src}: {errs.join("; ")}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 p-2 bg-bg-subtle rounded border border-border">
+              <span className="text-xs" role="status">
+                {translateOrFallback("proxyFreePoolSelected", `${selected.size} selected`, {
+                  count: selected.size,
+                })}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => handleBulkAdd(Array.from(selected))}
+              >
+                {translateOrFallback("proxyFreePoolAddSelected", "Add selected to pool")}
+              </Button>
+              {bulkProgress && (
+                <span className="text-xs text-text-muted" role="status">
+                  {bulkProgress}
+                </span>
+              )}
+            </div>
+          )}
+
+          {notInPoolProxies.length > 0 && selected.size === 0 && (
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => handleBulkAdd(notInPoolProxies.slice(0, 100).map((p) => p.id))}
+              >
+                {translateOrFallback("proxyFreePoolAddVisible", "Add all visible to pool")}
+              </Button>
+            </div>
           )}
         </div>
-      )}
 
-      {syncErrors && (
-        <div
-          className="text-xs text-red-500 flex flex-col gap-1"
-          role="alert"
-          data-testid="free-pool-sync-errors"
-        >
-          {Object.entries(syncErrors).map(([src, errs]) => (
-            <span key={src}>
-              {src}: {errs.join("; ")}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {selected.size > 0 && (
-        <div className="flex items-center gap-2 p-2 bg-primary/10 rounded border border-primary/20">
-          <span className="text-xs">{t("proxyFreePoolSelected", { count: selected.size })}</span>
-          <Button size="sm" variant="primary" onClick={() => handleBulkAdd(Array.from(selected))}>
-            {t("proxyFreePoolAddSelected")}
-          </Button>
-          {bulkProgress && <span className="text-xs text-text-muted">{bulkProgress}</span>}
-        </div>
-      )}
-
-      {notInPoolProxies.length > 0 && selected.size === 0 && (
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => handleBulkAdd(notInPoolProxies.slice(0, 100).map((p) => p.id))}
-          >
-            {t("proxyFreePoolAddVisible")}
-          </Button>
-        </div>
-      )}
-
-      <div className="overflow-x-auto rounded border border-border bg-surface">
-        <table className="w-full text-sm">
-          <thead className="bg-surface-alt text-text-muted text-xs">
-            <tr>
-              <th className="px-3 py-2 text-left w-8" scope="col"></th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolSource")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolHostPort")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolType")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolCountry")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolQuality")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col">
-                {t("proxyFreePoolLatency")}
-              </th>
-              <th className="px-3 py-2 text-left" scope="col"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-text-muted">
-                  {t("loading")}
-                </td>
-              </tr>
-            ) : proxies.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-text-muted">
-                  {t("proxyFreePoolEmpty")}
-                </td>
-              </tr>
-            ) : (
-              proxies.map((p) => (
+        {loading ? (
+          <TableLoadingState label={translateOrFallback("loading", "Loading...")} />
+        ) : proxies.length === 0 ? (
+          <EmptyState
+            icon="public"
+            title={translateOrFallback(
+              "proxyFreePoolEmpty",
+              "No proxies found. Click Sync all to fetch from sources."
+            )}
+          />
+        ) : (
+          <Table scrollbarLabel={translateOrFallback("freePoolTab", "Free pool")}>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8" />
+                {columnLabels.map((label) => (
+                  <TableHead key={label}>{label}</TableHead>
+                ))}
+                <TableHead>
+                  <span className="sr-only">{tc("actions")}</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {proxies.map((p) => (
                 <FreeProxyRow
                   key={p.id}
                   proxy={p}
@@ -377,59 +464,17 @@ export default function FreePoolTab() {
                   onAddToPool={handleAddToPool}
                   adding={addingIds.has(p.id)}
                 />
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Page-number pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-1 pt-2">
-          <button
-            type="button"
-            onClick={() => handlePageChange(page - 1)}
-            disabled={page <= 1}
-            aria-label="Previous page"
-          >
-            &laquo;
-          </button>
-          {buildPageRange().map((p, i) =>
-            p === "ellipsis" ? (
-              <span key={`ellipsis-${i}`} className="px-1 text-text-muted text-xs">
-                ...
-              </span>
-            ) : (
-              <button
-                key={p}
-                type="button"
-                onClick={() => handlePageChange(p)}
-                className={`px-2.5 py-1 text-xs rounded ${
-                  p === page
-                    ? "bg-primary text-white font-medium"
-                    : "hover:bg-black/5 dark:hover:bg-white/5"
-                }`}
-              >
-                {p}
-              </button>
-            )
-          )}
-          <button
-            type="button"
-            onClick={() => handlePageChange(page + 1)}
-            disabled={page >= totalPages}
-            aria-label="Next page"
-          >
-            &raquo;
-          </button>
-        </div>
-      )}
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </DataTableShell>
 
       {/* Per-page summary */}
       <div className="text-center text-xs text-text-muted">
         {total > 0
-          ? `Page ${page} of ${totalPages} (${total} total proxies)`
-          : `${total} total proxies`}
+          ? t("proxyFreePoolPageSummary", { page, totalPages, total })
+          : t("proxyFreePoolTotalSummary", { total })}
       </div>
     </div>
   );

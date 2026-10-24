@@ -143,7 +143,7 @@ function toKeeperConnection(row: unknown): GeminiWebKeeperConnection | null {
 }
 
 async function loadDb() {
-  return import("@/lib/localDb");
+  return import("@/lib/db/providers");
 }
 
 export function createDefaultGeminiWebKeeperDeps(): GeminiWebKeeperDeps {

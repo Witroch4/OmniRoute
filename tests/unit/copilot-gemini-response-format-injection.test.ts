@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { GithubExecutor } = await import("../../open-sse/executors/github.ts");
+const { getModelTargetFormat } = await import("../../open-sse/config/providerModels.ts");
 
 const SCHEMA = {
   type: "object",
@@ -77,15 +78,31 @@ test("supportsNativeResponseFormat marks gemini/claude as guests, OpenAI-family 
   }
 });
 
-test("regression: Claude keeps the injection path it has always used", () => {
+// 3.8.53 sync: every Claude id on Copilot (registered or not — getModelTargetFormat
+// resolves claude-* names on gh to "claude") now goes to the native /v1/messages shim
+// (upstream #7223 / 9router#2608). The request translator turns response_format into
+// Anthropic structured output / a system instruction before the executor runs, and the
+// executor skips every /chat/completions quirk for that Anthropic-shaped body, so the
+// prompt injection is left to Gemini — the family that silently ignores the field.
+test("regression: Claude on Copilot takes the native Messages path, never the chat quirks", () => {
   const executor = new GithubExecutor();
-  const transformed = executor.transformRequest("claude-sonnet-5", jsonSchemaRequest(), false, {});
+  for (const model of ["claude-sonnet-5", "claude-unregistered-custom"]) {
+    assert.equal(getModelTargetFormat("gh", model), "claude", model);
+    assert.equal(
+      executor.buildUrl(model, false),
+      "https://api.githubcopilot.com/v1/messages",
+      model
+    );
+  }
+});
 
-  assert.equal(transformed.response_format, undefined);
-  assert.match(
-    transformed.messages[0].content,
-    /Respond only with valid JSON matching this schema/i
-  );
+test("registry Claude ids on the native Messages path are left to the request translator", () => {
+  const executor = new GithubExecutor();
+  const req = jsonSchemaRequest();
+  const transformed = executor.transformRequest("claude-sonnet-5", req, false, {});
+
+  assert.deepEqual(transformed.response_format, req.response_format);
+  assert.equal(transformed.messages[0].role, "user");
 });
 
 test("regression: OpenAI-family models still forward response_format untouched", () => {

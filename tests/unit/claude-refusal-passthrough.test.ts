@@ -55,6 +55,8 @@ async function readStream(chunks: string[], onFailure?: (p: unknown) => void) {
   const options = {
     mode: "passthrough",
     sourceFormat: FORMATS.CLAUDE,
+    // Claude Code on /v1/messages: the client speaks Anthropic SSE (event: lines kept).
+    clientResponseFormat: FORMATS.CLAUDE,
     provider: "claude",
     model: "claude-opus-5-5",
     body: { messages: [{ role: "user", content: "hello" }] },

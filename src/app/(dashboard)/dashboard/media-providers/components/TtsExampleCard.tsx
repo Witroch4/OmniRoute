@@ -1,10 +1,19 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import Button from "@/shared/components/Button";
+import { Slider } from "@omniroute/ui-kit/slider";
+import { Field } from "@omniroute/ui-kit/field";
+import Select from "@/shared/components/Select";
+import Textarea from "@/shared/components/Textarea";
 import { useApiKey } from "../../providers/hooks/useApiKey";
 import { useProviderModels } from "../../providers/hooks/useProviderModels";
 import { buildCurl } from "../../providers/utils/buildCurl";
+import {
+  PLAYGROUND_KEY_ID_HEADER,
+  resolvePlaygroundKeyId,
+} from "../../providers/utils/playgroundAuth";
 import { PlaygroundCard } from "./PlaygroundCard";
 
 interface Props {
@@ -26,14 +35,15 @@ function extractError(data: unknown): string | null {
 
 export function TtsExampleCard({ providerId }: Props) {
   const t = useTranslations("miniPlayground");
-  const { apiKey } = useApiKey();
+  const textareaId = useId();
+  const { apiKey, keys } = useApiKey();
   const { models } = useProviderModels(providerId);
 
   const firstModel = models[0]?.id ?? "tts-1";
   const [model, setModel] = useState<string>("");
   const [voice, setVoice] = useState<string>("alloy");
   const [speed, setSpeed] = useState<string>("1.0");
-  const [inputText, setInputText] = useState<string>("Hello, this is a text-to-speech test.");
+  const [inputText, setInputText] = useState<string>(() => t("ttsSample"));
   const [running, setRunning] = useState<boolean>(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioSize, setAudioSize] = useState<number | null>(null);
@@ -54,7 +64,7 @@ export function TtsExampleCard({ providerId }: Props) {
       (typeof window !== "undefined" ? window.location.origin : "http://localhost:20128") +
       ENDPOINT_PATH,
     headers: {
-      Authorization: `Bearer ${apiKey || "<your-api-key>"}`,
+      Authorization: "Bearer <your-api-key>",
       "Content-Type": "application/json",
     },
     body: buildBody(),
@@ -69,13 +79,18 @@ export function TtsExampleCard({ providerId }: Props) {
     }
     const t0 = performance.now();
     try {
+      // Authenticate via the dashboard session cookie — never send the masked
+      // apiKey as a Bearer token (it is not a real credential; see #9935).
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "x-connection-id": providerId,
+      };
+      const playgroundKeyId = resolvePlaygroundKeyId(apiKey, keys);
+      if (playgroundKeyId) headers[PLAYGROUND_KEY_ID_HEADER] = playgroundKeyId;
       const res = await fetch(ENDPOINT_PATH, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "x-connection-id": providerId,
-        },
+        credentials: "same-origin",
+        headers,
         body: JSON.stringify(buildBody()),
       });
       const elapsed = performance.now() - t0;
@@ -92,7 +107,7 @@ export function TtsExampleCard({ providerId }: Props) {
       setAudioSize(blob.size);
       setLatencyMs(elapsed);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(err instanceof Error ? err.message : t("requestFailed"));
     } finally {
       setRunning(false);
     }
@@ -113,20 +128,15 @@ export function TtsExampleCard({ providerId }: Props) {
   const renderAudio = () => (
     <div className="p-3 flex flex-col gap-2">
       <audio controls src={audioUrl!} className="w-full">
-        Your browser does not support audio.
+        {t("browserAudioUnsupported")}
       </audio>
       <div className="flex items-center gap-2">
         {audioSize !== null && (
           <span className="text-xs text-text-muted">{Math.round(audioSize / 1024)}KB</span>
         )}
-        <button
-          type="button"
-          onClick={handleDownload}
-          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-        >
-          <span className="material-symbols-outlined text-[13px]">download</span>
+        <Button variant="ghost" size="sm" icon="download" onClick={handleDownload}>
           {t("download")} .mp3
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -135,7 +145,7 @@ export function TtsExampleCard({ providerId }: Props) {
 
   return (
     <PlaygroundCard
-      kindLabel="Text to Speech"
+      kindLabel={t("textToSpeech")}
       apiEndpoint={ENDPOINT_PATH}
       onRun={handleRun}
       curlSnippet={curlSnippet}
@@ -146,61 +156,40 @@ export function TtsExampleCard({ providerId }: Props) {
     >
       {/* Model + Voice row */}
       <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="block text-xs text-text-muted mb-1">{t("model")}</label>
-          <select
-            value={model || firstModel}
-            onChange={(e) => setModel(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-subtle text-sm px-2 py-1.5 text-text-main focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            {modelOptions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs text-text-muted mb-1">{t("voice")}</label>
-          <select
-            value={voice}
-            onChange={(e) => setVoice(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-subtle text-sm px-2 py-1.5 text-text-main focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            {VOICES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      {/* Speed */}
-      <div>
-        <label className="block text-xs text-text-muted mb-1">
-          {t("speed")} ({speed}×)
-        </label>
-        <input
-          type="range"
-          min="0.25"
-          max="4.0"
-          step="0.25"
-          value={speed}
-          onChange={(e) => setSpeed(e.target.value)}
-          className="w-full"
+        <Select
+          label={t("model")}
+          value={model || firstModel}
+          onChange={(e) => setModel(e.target.value)}
+          options={modelOptions.map((m) => ({ value: m.id, label: m.id }))}
+        />
+        <Select
+          label={t("voice")}
+          value={voice}
+          onChange={(e) => setVoice(e.target.value)}
+          options={VOICES.map((v) => ({ value: v, label: v }))}
         />
       </div>
+      {/* Speed */}
+      <Slider
+        label={t("speed")}
+        min={0.25}
+        max={4.0}
+        step={0.25}
+        value={Number(speed)}
+        onValueChange={(next) => setSpeed(String(next))}
+        formatValue={(next) => `${next}×`}
+      />
       {/* Input */}
-      <div>
-        <label className="block text-xs text-text-muted mb-1">{t("input")}</label>
-        <textarea
+      <Field label={t("input")} htmlFor={textareaId}>
+        <Textarea
+          id={textareaId}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           rows={2}
-          placeholder="Hello, this is a text-to-speech test."
-          className="w-full rounded-md border border-border bg-bg-subtle text-sm px-2 py-1.5 text-text-main focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+          placeholder={t("ttsSample")}
+          className="resize-none"
         />
-      </div>
+      </Field>
     </PlaygroundCard>
   );
 }

@@ -9,7 +9,7 @@ import {
   checkFallbackError,
   isAccountDeactivated,
 } from "../../open-sse/services/accountFallback.ts";
-import { resolveTerminalConnectionStatus } from "../../src/sse/services/auth.ts";
+import { resolveTerminalConnectionStatus } from "../../src/sse/services/authTerminalStatus.ts";
 
 // Google Cloud Code / Antigravity answer `403 VALIDATION_REQUIRED` with
 // "Verify your account to continue". That phrase was listed in
@@ -112,7 +112,11 @@ test("END-TO-END: the live refusal chain no longer parks the connection as banne
   const terminal = resolveTerminalConnectionStatus(
     403,
     { permanent: fallback.permanent },
-    errorType
+    errorType,
+    "antigravity",
+    false,
+    LIVE_WIRE_TEXT,
+    "verify-account-test-connection"
   );
   assert.equal(terminal, null, `expected no terminal status, got ${terminal}`);
 });
@@ -124,7 +128,11 @@ test("END-TO-END: a real ban still parks the connection as banned", () => {
   const terminal = resolveTerminalConnectionStatus(
     403,
     { permanent: fallback.permanent },
-    errorType
+    errorType,
+    "antigravity",
+    false,
+    banText,
+    "real-ban-test-connection"
   );
   assert.equal(terminal, "banned");
 });

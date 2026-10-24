@@ -30,24 +30,24 @@ test(`CLI_TOOLS has exactly ${EXPECTED_AGENT_COUNT} agent entries`, () => {
   );
 });
 
-test("CLI_TOOLS total code entries (including none) equals 24 (20 visible + 4 none)", () => {
-  // code-none entries: antigravity, kiro, cursor (app), hermes (simple guide)
+test("CLI_TOOLS total code entries (including none) equals 27 (22 visible + 5 none)", () => {
+  // code-none entries: antigravity, kiro, cursor (app), hermes, and zcode.
   const codeNone = codeAll.filter((t) => t.baseUrlSupport === "none");
   assert.equal(
     codeNone.length,
-    4,
-    `Expected 4 code entries with baseUrlSupport='none', got ${codeNone.length}: ${codeNone.map((t) => t.id).join(", ")}`
+    5,
+    `Expected 5 code entries with baseUrlSupport='none', got ${codeNone.length}: ${codeNone.map((t) => t.id).join(", ")}`
   );
-  assert.equal(codeAll.length, 24, `Expected 24 total code entries, got ${codeAll.length}`);
+  assert.equal(codeAll.length, 27, `Expected 27 total code entries, got ${codeAll.length}`);
 });
 
-test("CLI_TOOLS total (code + agent) = 32", () => {
-  assert.equal(all.length, 32, `Expected 32 total entries, got ${all.length}`);
+test("CLI_TOOLS total (code + agent) = 37", () => {
+  assert.equal(all.length, 37, `Expected 37 total entries, got ${all.length}`);
 });
 
 test("All code-none entries have configType mitm OR are legacy excluded entries", () => {
   const codeNone = codeAll.filter((t) => t.baseUrlSupport === "none");
-  const allowedIds = new Set(["antigravity", "kiro", "cursor", "hermes"]);
+  const allowedIds = new Set(["antigravity", "kiro", "cursor", "hermes", "zcode"]);
   for (const entry of codeNone) {
     assert.ok(
       allowedIds.has(entry.id),
@@ -66,7 +66,7 @@ test("All agent entries have baseUrlSupport 'full' or 'partial' (no agent is 'no
   }
 });
 
-test("The 20 visible code entries match D15 list exactly (+ crush + codewhale)", () => {
+test("The 22 visible code entries include Qwen Code's rebuilt integration and Zed", () => {
   const d15List = new Set([
     "claude",
     "codex",
@@ -74,7 +74,6 @@ test("The 20 visible code entries match D15 list exactly (+ crush + codewhale)",
     "kilo",
     "roo",
     "continue",
-    "qwen",
     "aider",
     "forge",
     "jcode",
@@ -88,6 +87,9 @@ test("The 20 visible code entries match D15 list exactly (+ crush + codewhale)",
     "pi",
     "custom",
     "crush",
+    "grok-build",
+    "qwen",
+    "zed",
   ]);
   const visibleIds = new Set(codeVisible.map((t) => t.id));
   for (const id of d15List) {
@@ -98,7 +100,7 @@ test("The 20 visible code entries match D15 list exactly (+ crush + codewhale)",
   }
 });
 
-test("The 8 agent entries match D15 list exactly (+ omp + letta, #6318)", () => {
+test("The 10 agent entries match D15 list exactly (+ omp + letta #6318, + prime-agent #11166, + 5dive #11578)", () => {
   const d15Agents = new Set([
     "hermes-agent",
     "openclaw",
@@ -108,6 +110,8 @@ test("The 8 agent entries match D15 list exactly (+ omp + letta, #6318)", () => 
     "agent-deck",
     "omp",
     "letta",
+    "prime-agent",
+    "5dive",
   ]);
   const agentIds = new Set(agentAll.map((t) => t.id));
   for (const id of d15Agents) {

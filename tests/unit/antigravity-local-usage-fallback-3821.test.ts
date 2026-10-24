@@ -3,11 +3,11 @@
  * stale full `fetchAvailableModels` bucket (used=0) with real consumption summed from
  * `usage_history`, flipping quotaSource to "localUsageHistory". Every prior #3604 test
  * mocks only the HTTP layer, so the model-id match against usage_history.model was never
- * exercised end-to-end. This seeds a real usage_history row keyed by the CLIENT tier id
+ * exercised end-to-end. This seeds a real usage_history row keyed by the upstream/public id
  * the fallback queries and asserts the flip — the regression guard for the id contract.
  *
- * Contract note: the fallback queries `usage_history WHERE model = <client tier id>`
- * (e.g. gemini-3.8-flash-high), so the executor MUST log usage under that same client id
+ * Contract note: the fallback queries `usage_history WHERE model = <public model id>`
+ * (e.g. gemini-3.8-flash-high), so the executor MUST log usage under that same model id
  * for the fallback to fire. This test pins exactly that join.
  */
 import test from "node:test";
@@ -30,7 +30,7 @@ const originalFetch = globalThis.fetch;
 test.after(() => {
   globalThis.fetch = originalFetch;
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("Antigravity fetchAvailableModels(used=0) → localUsageHistory when usage_history has rows", async () => {
@@ -40,8 +40,10 @@ test("Antigravity fetchAvailableModels(used=0) → localUsageHistory when usage_
   const resetTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   const seededTimestamp = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // within window
 
-  // Seed a usage_history row keyed by the CLIENT tier id the fallback queries.
-  const db = core.getDbInstance() as unknown as { prepare: (sql: string) => { run: (...a: unknown[]) => unknown } };
+  // Seed a usage_history row keyed by the public upstream id the fallback queries.
+  const db = core.getDbInstance() as unknown as {
+    prepare: (sql: string) => { run: (...a: unknown[]) => unknown };
+  };
   db.prepare(
     `INSERT INTO usage_history (provider, model, connection_id, tokens_input, tokens_output, tokens_reasoning, success, timestamp)
      VALUES (?, ?, ?, ?, ?, ?, 1, ?)`

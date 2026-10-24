@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Card, Button, Input, Toggle } from "@/shared/components";
-import { cn } from "@/shared/utils/cn";
+import { Card, Button, Input, ModelSelectField, Select, Toggle } from "@/shared/components";
+import Icon from "@/shared/components/Icon";
 import { matchesSearch } from "@/shared/utils/turkishText";
 import FusionDefaultsFields from "./FusionDefaultsFields";
 import {
@@ -103,7 +103,8 @@ export default function ComboDefaultsTab() {
     resetAwareQuotaCacheMaxStaleMs: 0,
     zeroLatencyOptimizationsEnabled: false,
   });
-  const [codexSessionAffinityTtlMs, setCodexSessionAffinityTtlMs] = useState(0);
+  const [sessionAffinityTtlMs, setSessionAffinityTtlMs] = useState(0);
+  const [promptCacheAffinityEnabled, setPromptCacheAffinityEnabled] = useState(true);
   const [providerOverrides, setProviderOverrides] = useState<any>({});
   const [availableProviders, setAvailableProviders] = useState<{ id: string; provider: string }[]>(
     []
@@ -178,11 +179,12 @@ export default function ComboDefaultsTab() {
         if (comboData.providerOverrides) {
           setProviderOverrides(sanitizeProviderOverrides(comboData.providerOverrides));
         }
-        setCodexSessionAffinityTtlMs(
-          Number.isFinite(Number(settingsData.codexSessionAffinityTtlMs))
-            ? Number(settingsData.codexSessionAffinityTtlMs)
+        setSessionAffinityTtlMs(
+          Number.isFinite(Number(settingsData.sessionAffinityTtlMs))
+            ? Number(settingsData.sessionAffinityTtlMs)
             : 0
         );
+        setPromptCacheAffinityEnabled(settingsData.promptCacheAffinityEnabled !== false);
       })
       .catch((err) => console.error("Failed to fetch combo defaults:", err));
   }, []);
@@ -224,10 +226,11 @@ export default function ComboDefaultsTab() {
         comboDefaults;
       const settingsPatch = {
         ...toGlobalRoutingPatch(comboDefaults.strategy, stickyRoundRobinLimit),
-        codexSessionAffinityTtlMs,
+        sessionAffinityTtlMs,
         // #6168: global session-stickiness opt-out — persisted top-level on settings
         // (mirrors stickyRoundRobinLimit) so combo.ts resolution reads settings.disableSessionStickiness.
         disableSessionStickiness: disableSessionStickiness === true,
+        promptCacheAffinityEnabled,
       };
 
       const comboDefaultsRes = await fetch("/api/settings/combo-defaults", {
@@ -321,10 +324,8 @@ export default function ComboDefaultsTab() {
   return (
     <Card>
       <div className="flex items-center gap-3 mb-4">
-        <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500">
-          <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
-            tune
-          </span>
+        <div className="p-2 rounded-lg bg-bg-subtle text-text-muted">
+          <Icon name="tune" size={20} />
         </div>
         <h3 className="text-lg font-semibold">
           {translateOrFallback(t, "comboDefaultsTitle", "Default Routing & Combo Settings")}
@@ -333,15 +334,15 @@ export default function ComboDefaultsTab() {
         {status.message && (
           <span
             className={`text-xs font-medium ml-2 ${
-              status.type === "success" ? "text-emerald-500" : "text-red-500"
+              status.type === "success" ? "text-success" : "text-error"
             }`}
           >
             {status.message}
           </span>
         )}
       </div>
-      <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
-        <p className="text-xs font-medium text-blue-700 dark:text-blue-300">
+      <div className="mb-4 rounded-lg border border-info/20 bg-info/5 p-3">
+        <p className="text-xs font-medium text-info">
           {translateOrFallback(t, "routingAdvancedGuideTitle", "Advanced routing guidance")}
         </p>
         <p className="text-xs text-text-muted mt-1">
@@ -359,10 +360,8 @@ export default function ComboDefaultsTab() {
           )}
         </p>
       </div>
-      <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-        <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
-          {t("comboDefaultsGuideTitle")}
-        </p>
+      <div className="mb-4 rounded-lg border border-warning/20 bg-warning/5 p-3">
+        <p className="text-xs font-medium text-warning">{t("comboDefaultsGuideTitle")}</p>
         <p className="text-xs text-text-muted mt-1">{t("comboDefaultsGuideHint1")}</p>
         <p className="text-xs text-text-muted">{t("comboDefaultsGuideHint2")}</p>
       </div>
@@ -373,37 +372,20 @@ export default function ComboDefaultsTab() {
             <p className="font-medium text-sm">{t("defaultStrategy")}</p>
             <p className="text-xs text-text-muted">{t("defaultStrategyDesc")}</p>
           </div>
-          <div
-            role="tablist"
+          <Select
             aria-label={t("comboStrategyAria")}
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1 p-0.5 rounded-md bg-black/5 dark:bg-white/5"
-          >
-            {strategyOptions.map((s) => (
-              <button
-                key={s.value}
-                role="tab"
-                aria-selected={comboDefaults.strategy === s.value}
-                onClick={async () => {
-                  setComboDefaults((prev) => ({ ...prev, strategy: s.value }));
-                  try {
-                    await syncGlobalRoutingSettings(toGlobalRoutingPatch(s.value));
-                  } catch (error) {
-                    console.error("Failed to sync fallback strategy:", error);
-                    showStatus("error", t("errorOccurred"));
-                  }
-                }}
-                className={cn(
-                  "px-2 py-1 rounded text-xs font-medium transition-all flex items-center justify-center gap-0.5",
-                  comboDefaults.strategy === s.value
-                    ? "bg-white dark:bg-white/10 text-text-main shadow-sm"
-                    : "text-text-muted hover:text-text-main"
-                )}
-              >
-                <span className="material-symbols-outlined text-[14px]">{s.icon}</span>
-                {s.label}
-              </button>
-            ))}
-          </div>
+            value={comboDefaults.strategy}
+            onChange={(event) => {
+              const value = event.target.value;
+              setComboDefaults((prev) => ({ ...prev, strategy: value }));
+              void syncGlobalRoutingSettings(toGlobalRoutingPatch(value)).catch((error) => {
+                console.error("Failed to sync fallback strategy:", error);
+                showStatus("error", t("errorOccurred"));
+              });
+            }}
+            options={strategyOptions.map((s) => ({ value: s.value, label: s.label }))}
+            className="w-56 shrink-0"
+          />
         </div>
 
         {comboDefaults.strategy === "round-robin" && (
@@ -414,8 +396,9 @@ export default function ComboDefaultsTab() {
             </div>
             <Input
               type="number"
+              aria-label={t("stickyLimit")}
               min="1"
-              max="10"
+              max="1000"
               value={comboDefaults.stickyRoundRobinLimit || 3}
               onChange={async (e) => {
                 const nextLimit = parseInt(e.target.value) || 3;
@@ -468,6 +451,26 @@ export default function ComboDefaultsTab() {
             }
             className="text-sm"
           />
+          <Input
+            label={translateOrFallback(t, "comboTimeout", "Combo timeout (seconds)")}
+            type="number"
+            min={1}
+            max={86400}
+            step={1}
+            value={msToOptionalSecondsInput(comboDefaults.comboTimeoutMs)}
+            placeholder={translateOrFallback(
+              t,
+              "inheritComboSafetyTimeout",
+              "Inherit 10-minute hang-stop"
+            )}
+            onChange={(e) =>
+              setComboDefaults((prev) => ({
+                ...prev,
+                comboTimeoutMs: secondsInputToOptionalMs(e.target.value),
+              }))
+            }
+            className="text-sm"
+          />
         </div>
         <p className="text-xs text-text-muted">
           {translateOrFallback(
@@ -476,28 +479,35 @@ export default function ComboDefaultsTab() {
             "Combo targets inherit the current request timeout by default. Set a lower value here only when you want faster fallback."
           )}
         </p>
+        <p className="text-xs text-text-muted">
+          {translateOrFallback(
+            t,
+            "comboTimeoutHint",
+            "Whole-combo wall-clock budget across failover targets. Empty keeps the 10-minute hang-stop. Keep this longer than Target timeout so failover still has time."
+          )}
+        </p>
 
         <div className="grid grid-cols-1 gap-3 pt-3 border-t border-border/50">
           <div>
             <p className="font-medium text-sm">
-              {translateOrFallback(t, "codexSessionAffinityTitle", "Codex session affinity")}
+              {translateOrFallback(t, "sessionAffinityTitle", "Session affinity")}
             </p>
             <p className="text-xs text-text-muted">
               {translateOrFallback(
                 t,
-                "codexSessionAffinityDesc",
-                "Keeps one Codex conversation on the same account for this many seconds. 0 disables it."
+                "sessionAffinityDesc",
+                "Keeps one conversation on the same account for this many seconds, for any provider. 0 disables it."
               )}
             </p>
           </div>
           <Input
-            label={translateOrFallback(t, "codexSessionAffinityTtl", "Affinity TTL (seconds)")}
+            label={translateOrFallback(t, "sessionAffinityTtl", "Affinity TTL (seconds)")}
             type="number"
             min={0}
             max={86400}
             step={60}
-            value={msToSeconds(codexSessionAffinityTtlMs)}
-            onChange={(e) => setCodexSessionAffinityTtlMs(secondsInputToMs(e.target.value, 86400))}
+            value={msToSeconds(sessionAffinityTtlMs)}
+            onChange={(e) => setSessionAffinityTtlMs(secondsInputToMs(e.target.value, 86400))}
             className="text-sm"
           />
         </div>
@@ -632,21 +642,20 @@ export default function ComboDefaultsTab() {
               }
               className="text-sm"
             />
-            <Input
+            <ModelSelectField
               label={translateOrFallback(t, "contextRelaySummaryModel", "Summary Model")}
-              type="text"
               value={comboDefaults.handoffModel ?? ""}
               placeholder="codex/gpt-5.6-sol"
-              onChange={(e) =>
+              onChange={(v) =>
                 setComboDefaults((prev) => ({
                   ...prev,
-                  handoffModel: e.target.value,
+                  handoffModel: v,
                 }))
               }
               className="text-sm"
             />
-            <div className="md:col-span-3 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
-              <p className="text-xs text-blue-700 dark:text-blue-300">
+            <div className="md:col-span-3 rounded-lg border border-info/20 bg-info/5 p-3">
+              <p className="text-xs text-info">
                 {translateOrFallback(
                   t,
                   "contextRelayProviderNote",
@@ -670,9 +679,33 @@ export default function ComboDefaultsTab() {
             </div>
             <Toggle
               checked={comboDefaults.trackMetrics !== false}
+              ariaLabel={t("trackMetrics")}
               onChange={() =>
                 setComboDefaults((prev) => ({ ...prev, trackMetrics: !prev.trackMetrics }))
               }
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">
+                {translateOrFallback(t, "promptCacheAffinity", "Prompt-cache locality routing")}
+              </p>
+              <p className="text-xs text-text-muted">
+                {translateOrFallback(
+                  t,
+                  "promptCacheAffinityDesc",
+                  "Prefer the same provider account for matching prompt-cache keys while preserving health and quota failover."
+                )}
+              </p>
+            </div>
+            <Toggle
+              checked={promptCacheAffinityEnabled}
+              ariaLabel={translateOrFallback(
+                t,
+                "promptCacheAffinity",
+                "Prompt-cache locality routing"
+              )}
+              onChange={() => setPromptCacheAffinityEnabled((enabled) => !enabled)}
             />
           </div>
           <div className="flex items-center justify-between gap-4">
@@ -690,6 +723,7 @@ export default function ComboDefaultsTab() {
             </div>
             <Toggle
               checked={comboDefaults.reasoningTokenBufferEnabled !== false}
+              ariaLabel={translateOrFallback(t, "reasoningTokenBuffer", "Reasoning token buffer")}
               onChange={() =>
                 setComboDefaults((prev) => ({
                   ...prev,
@@ -713,6 +747,11 @@ export default function ComboDefaultsTab() {
             </div>
             <Toggle
               checked={comboDefaults.zeroLatencyOptimizationsEnabled === true}
+              ariaLabel={translateOrFallback(
+                t,
+                "zeroLatencyOptimizations",
+                "Zero-latency optimizations"
+              )}
               onChange={() =>
                 setComboDefaults((prev) => ({
                   ...prev,
@@ -736,6 +775,11 @@ export default function ComboDefaultsTab() {
             </div>
             <Toggle
               checked={comboDefaults.disableSessionStickiness === true}
+              ariaLabel={translateOrFallback(
+                t,
+                "disableSessionStickiness",
+                "Disable session stickiness"
+              )}
               onChange={() =>
                 setComboDefaults((prev) => ({
                   ...prev,
@@ -755,26 +799,30 @@ export default function ComboDefaultsTab() {
             ([provider, config]: [string, any], index: number) => (
               <div
                 key={provider}
-                className="flex items-center gap-1.5 mb-2 p-2 rounded-lg bg-black/[0.02] dark:bg-white/[0.02]"
+                className="flex items-center gap-1.5 mb-2 p-2 rounded-lg bg-bg-subtle"
               >
                 {/* Reorder arrows (combo-builder pattern) */}
                 <div className="flex flex-col gap-0.5">
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    icon="arrow_upward"
                     onClick={() => moveProviderOverride(provider, -1)}
                     disabled={index === 0}
-                    className={`p-0.5 rounded ${index === 0 ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
-                    title="Move up"
-                  >
-                    <span className="material-symbols-outlined text-[12px]">arrow_upward</span>
-                  </button>
-                  <button
+                    className="size-5 min-h-5"
+                    title={t("moveUp")}
+                    aria-label={t("moveUp")}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    icon="arrow_downward"
                     onClick={() => moveProviderOverride(provider, 1)}
                     disabled={index === Object.keys(providerOverrides).length - 1}
-                    className={`p-0.5 rounded ${index === Object.keys(providerOverrides).length - 1 ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
-                    title="Move down"
-                  >
-                    <span className="material-symbols-outlined text-[12px]">arrow_downward</span>
-                  </button>
+                    className="size-5 min-h-5"
+                    title={t("moveDown")}
+                    aria-label={t("moveDown")}
+                  />
                 </div>
                 <span className="text-xs font-mono font-medium min-w-[80px]">{provider}</span>
                 <Input
@@ -792,47 +840,46 @@ export default function ComboDefaultsTab() {
                   aria-label={t("providerMaxRetriesAria", { provider })}
                 />
                 <span className="text-[10px] text-text-muted">{t("retries")}</span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  icon="close"
                   onClick={() => removeProviderOverride(provider)}
-                  className="ml-auto text-red-400 hover:text-red-500 transition-colors"
+                  className="ml-auto text-error"
                   aria-label={t("removeProviderOverrideAria", { provider })}
-                >
-                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-                    close
-                  </span>
-                </button>
+                />
               </div>
             )
           )}
 
           <div className="relative" ref={dropdownRef}>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-2 px-3 py-2 text-xs rounded-lg border border-border/50 bg-black/[0.02] dark:bg-white/[0.02] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] transition-colors w-full mt-2"
+              aria-expanded={dropdownOpen}
+              className="mt-2 w-full justify-between font-normal text-text-muted"
             >
-              <span className="flex-1 text-left text-text-muted">
+              <span className="flex-1 text-left">
                 {t("selectProviderPlaceholder") || "Select provider..."}
               </span>
-              <span
-                className="material-symbols-outlined text-[16px] transition-transform"
-                style={{ transform: dropdownOpen ? "rotate(180deg)" : "none" }}
-              >
-                expand_more
-              </span>
-            </button>
+              <Icon
+                name="expand_more"
+                size={16}
+                className={`transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
+              />
+            </Button>
 
             {dropdownOpen && (
-              <div className="absolute z-50 mt-1 w-full rounded-lg border border-border/50 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
+              <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-surface shadow-lg overflow-hidden">
                 <div className="p-2 border-b border-border/50">
-                  <input
+                  <Input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => {
                       setSearchQuery(e.target.value);
                       setHighlightedIdx(0);
                     }}
-                    className="w-full px-2 py-1.5 text-xs rounded-md border border-border/50 bg-transparent outline-none focus:border-amber-500 transition-colors"
                     placeholder={t("searchProviderPlaceholder") || "Search providers..."}
                     aria-label={t("searchProviderAria") || "Search providers"}
                     onKeyDown={handleDropdownKeyDown}
@@ -843,8 +890,8 @@ export default function ComboDefaultsTab() {
                   {filteredProviders.length === 0 ? (
                     <li className="px-3 py-2 text-xs text-text-muted text-center">
                       {availableProviders.filter((p) => !providerOverrides[p.provider]).length === 0
-                        ? "All providers added"
-                        : "No providers found"}
+                        ? t("allProvidersAdded")
+                        : t("noProvidersFound")}
                     </li>
                   ) : (
                     filteredProviders.map((p, idx) => (
@@ -854,8 +901,8 @@ export default function ComboDefaultsTab() {
                         aria-selected={idx === highlightedIdx}
                         className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
                           idx === highlightedIdx
-                            ? "bg-black/[0.05] dark:bg-white/[0.05] font-medium"
-                            : "hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
+                            ? "bg-bg-subtle font-medium"
+                            : "hover:bg-bg-subtle/60"
                         }`}
                         onClick={() => addProviderOverride(p.provider)}
                         onMouseEnter={() => setHighlightedIdx(idx)}

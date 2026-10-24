@@ -22,6 +22,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = "test-ag-weekly-secret";
 
 const core = await import("../../src/lib/db/core.ts");
+const { antigravityCliUserAgent } = await import("../../open-sse/config/antigravityCliClient.ts");
 const { parseAntigravityWeeklyQuotas } =
   await import("../../open-sse/services/usage/antigravityWeeklyQuota.ts");
 // Load usage.ts up-front (its index.ts proxyFetch patch runs at module eval) before mocks.
@@ -33,7 +34,7 @@ const originalFetch = globalThis.fetch;
 test.after(() => {
   globalThis.fetch = originalFetch;
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const RESET_IN_3_DAYS = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
@@ -140,11 +141,15 @@ test("parseAntigravityWeeklyQuotas returns {} for missing/malformed data (best-e
   );
 });
 
-test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-model 5h quotas", async () => {
+test("getUsageForProvider(antigravity) merges weekly quotas with the selected CLI identity", async () => {
   core.resetDbInstance();
 
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
+    const headers = new Headers(init?.headers);
+    // Fork: the CLI identity is the captured official agy CLI (version pinned with `cl=`).
+    assert.equal(headers.get("User-Agent"), antigravityCliUserAgent());
+    assert.equal(headers.get("X-Goog-Api-Client"), null);
 
     if (url.includes("retrieveUserQuotaSummary")) {
       return {
@@ -199,7 +204,7 @@ test("getUsageForProvider(antigravity) merges weekly group quotas alongside per-
     id: "conn-weekly-1",
     provider: "antigravity",
     accessToken: "fake-token-weekly-unique",
-    providerSpecificData: {},
+    providerSpecificData: { clientProfile: "cli" },
     projectId: "test-project",
   };
 

@@ -11,7 +11,11 @@ export const codexProvider: RegistryEntry = {
   alias: "cx",
   format: "openai-responses",
   executor: "codex",
+  // Codex /responses is upstream-streaming even when the client requested stream:false.
+  // Mark it forceStream so chatCore drains terminal SSE into JSON instead of waiting for EOF.
+  forceStream: true,
   baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+  reasoningTransport: "opaque",
   authType: "oauth",
   authHeader: "bearer",
   defaultContextLength: 400000,
@@ -32,156 +36,83 @@ export const codexProvider: RegistryEntry = {
     // model, so it reads exactly like a missing entitlement — same trap as the
     // Fable 5.1 400 in 2026-09-02. That is why the impersonated CLI version was
     // bumped alongside this entry (see config/codexClient.ts).
-    // Capabilities are inherited from the 5.6 constant, and OpenAI's own public
-    // manifest says that is the right call rather than a shortcut — codex-rs
-    // models-manager/models.json (the fallback source this provider already
-    // reads) gives gpt-6-astra `context_window: 272000`, `max_context_window:
-    // 872000` and efforts low/medium/high/xhigh/max/ultra, i.e. byte-for-byte
-    // the same profile as gpt-5.6-sol and gpt-5.6-terra. The six tiers below
-    // are that effort list, not a guess.
-    // ⚠️ Not yet exercised end-to-end: codex quota is exhausted until
-    // ~2026-09-26, so no call reaches OpenAI. The FIRST probe (before the quota
-    // gate tripped) is what identified the slug — see the version note above.
-    {
-      id: "gpt-6-astra",
-      name: "GPT-6 Astra",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-astra-ultra",
-      name: "GPT-6 Astra (Ultra)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-astra-max",
-      name: "GPT-6 Astra (Max)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    // Astra shares GPT-5.6's Codex limits: the live OAuth catalog reports
+    // max_context_window=872000 (context_window=272000 is the pricing tier).
+    { id: "gpt-6-astra", name: "GPT 6 Astra", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-astra-ultra", name: "GPT 6 Astra (Ultra)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-astra-max", name: "GPT 6 Astra (Max)", ...GPT_5_6_CODEX_CAPABILITIES },
     {
       id: "gpt-6-astra-xhigh",
-      name: "GPT-6 Astra (xHigh)",
+      name: "GPT 6 Astra (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-6-astra-high",
-      name: "GPT-6 Astra (High)",
+      name: "GPT 6 Astra (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
-    {
-      id: "gpt-6-astra-medium",
-      name: "GPT-6 Astra (Medium)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-astra-low",
-      name: "GPT-6 Astra (Low)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    { id: "gpt-6-astra-medium", name: "GPT 6 Astra (Medium)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-astra-low", name: "GPT 6 Astra (Low)", ...GPT_5_6_CODEX_CAPABILITIES },
     // GPT-6 Sol / GPT-6 Luna — launched 2026-09-23. Ids and capabilities from
     // OpenAI's public manifest (codex-rs/models-manager/models.json): both have
     // context_window 272000 / max_context_window 872000 (the 5.6 profile);
     // Sol exposes low..ultra (6 tiers), Luna low..max (no ultra, like 5.6 Luna).
     // Both need minimal_client_version 0.155.0 — see config/codexClient.ts.
-    {
-      id: "gpt-6.1-sol",
-      name: "GPT-6.1 Sol",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6.1-sol-ultra",
-      name: "GPT-6.1 Sol (Ultra)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6.1-sol-max",
-      name: "GPT-6.1 Sol (Max)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    // Fork order: newest first — GPT-6.1 Sol ahead of GPT-6 Sol (tests/unit/codex-gpt61-sol).
+    // Sol and Luna report the same windows as Astra; the live catalog offers Sol at
+    // low..ultra and Luna at low..max, like the GPT-5.6 Sol/Luna split.
+    { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-ultra", name: "GPT 6.1 Sol (Ultra)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-max", name: "GPT 6.1 Sol (Max)", ...GPT_5_6_CODEX_CAPABILITIES },
     {
       id: "gpt-6.1-sol-xhigh",
-      name: "GPT-6.1 Sol (xHigh)",
+      name: "GPT 6.1 Sol (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-6.1-sol-high",
-      name: "GPT-6.1 Sol (High)",
+      name: "GPT 6.1 Sol (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
-    {
-      id: "gpt-6.1-sol-medium",
-      name: "GPT-6.1 Sol (Medium)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6.1-sol-low",
-      name: "GPT-6.1 Sol (Low)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-sol",
-      name: "GPT-6 Sol",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-sol-ultra",
-      name: "GPT-6 Sol (Ultra)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-sol-max",
-      name: "GPT-6 Sol (Max)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    { id: "gpt-6.1-sol-medium", name: "GPT 6.1 Sol (Medium)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-low", name: "GPT 6.1 Sol (Low)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-sol", name: "GPT 6 Sol", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-sol-ultra", name: "GPT 6 Sol (Ultra)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-sol-max", name: "GPT 6 Sol (Max)", ...GPT_5_6_CODEX_CAPABILITIES },
     {
       id: "gpt-6-sol-xhigh",
-      name: "GPT-6 Sol (xHigh)",
+      name: "GPT 6 Sol (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-6-sol-high",
-      name: "GPT-6 Sol (High)",
+      name: "GPT 6 Sol (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
-    {
-      id: "gpt-6-sol-medium",
-      name: "GPT-6 Sol (Medium)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-sol-low",
-      name: "GPT-6 Sol (Low)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-luna",
-      name: "GPT-6 Luna",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-luna-max",
-      name: "GPT-6 Luna (Max)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    { id: "gpt-6-sol-medium", name: "GPT 6 Sol (Medium)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-sol-low", name: "GPT 6 Sol (Low)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-luna", name: "GPT 6 Luna", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-luna-max", name: "GPT 6 Luna (Max)", ...GPT_5_6_CODEX_CAPABILITIES },
     {
       id: "gpt-6-luna-xhigh",
-      name: "GPT-6 Luna (xHigh)",
+      name: "GPT 6 Luna (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-6-luna-high",
-      name: "GPT-6 Luna (High)",
+      name: "GPT 6 Luna (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      timeoutMs: 1200000,
     },
-    {
-      id: "gpt-6-luna-medium",
-      name: "GPT-6 Luna (Medium)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
-    {
-      id: "gpt-6-luna-low",
-      name: "GPT-6 Luna (Low)",
-      ...GPT_5_6_CODEX_CAPABILITIES,
-    },
+    { id: "gpt-6-luna-medium", name: "GPT 6 Luna (Medium)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6-luna-low", name: "GPT 6 Luna (Low)", ...GPT_5_6_CODEX_CAPABILITIES },
     {
       id: "gpt-5.6-sol",
       name: "GPT 5.6 Sol",
@@ -201,11 +132,15 @@ export const codexProvider: RegistryEntry = {
       id: "gpt-5.6-sol-xhigh",
       name: "GPT 5.6 Sol (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-sol-high",
       name: "GPT 5.6 Sol (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-sol-medium",
@@ -236,11 +171,15 @@ export const codexProvider: RegistryEntry = {
       id: "gpt-5.6-terra-xhigh",
       name: "GPT 5.6 Terra (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-terra-high",
       name: "GPT 5.6 Terra (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-terra-medium",
@@ -266,11 +205,15 @@ export const codexProvider: RegistryEntry = {
       id: "gpt-5.6-luna-xhigh",
       name: "GPT 5.6 Luna (xHigh)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-luna-high",
       name: "GPT 5.6 Luna (High)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.6-luna-medium",
@@ -307,6 +250,8 @@ export const codexProvider: RegistryEntry = {
       // #6191: input cap per reporter; TODO confirm exact value
       maxInputTokens: 272000,
       maxOutputTokens: 128000,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.5-high",
@@ -316,6 +261,8 @@ export const codexProvider: RegistryEntry = {
       // #6191: input cap per reporter; TODO confirm exact value
       maxInputTokens: 272000,
       maxOutputTokens: 128000,
+      // #6354: reasoning-heavy tier — more header-wait room than the global default.
+      timeoutMs: 1200000,
     },
     {
       id: "gpt-5.5-medium",
@@ -335,6 +282,5 @@ export const codexProvider: RegistryEntry = {
       maxInputTokens: 272000,
       maxOutputTokens: 128000,
     },
-    { id: "gpt-5.3-codex-spark", name: "GPT 5.3 Codex Spark" },
   ],
 };

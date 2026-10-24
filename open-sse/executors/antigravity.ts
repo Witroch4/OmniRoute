@@ -1,35 +1,25 @@
 import crypto, { randomUUID } from "crypto";
 import {
   BaseExecutor,
-  mergeAbortSignals,
   mergeUpstreamExtraHeaders,
   type ExecuteInput,
   type ExecutorLog,
   type ProviderCredentials,
 } from "./base.ts";
-import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
+import { PROVIDERS, OAUTH_ENDPOINTS, HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import {
   fitThinkingBudgetIntoOutput,
   reconcileThinkingBudget,
   usesFittedThinkingBudget,
 } from "../config/thinkingBudgetFit.ts";
-import { buildAntigravityUpstreamError } from "./antigravityUpstreamError.ts";
-import { maybeTriggerReactiveModelSync } from "@/lib/providerModels/reactiveModelSync.ts";
-import {
-  PROVIDERS,
-  OAUTH_ENDPOINTS,
-  HTTP_STATUS,
-  STREAM_READINESS_TIMEOUT_MS,
-  ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE,
-} from "../config/constants.ts";
 import { scrubProxyAndFingerprintHeaders } from "../services/antigravityHeaderScrub.ts";
 import {
   getAntigravityCliCloudCodeHeaders,
   getAntigravityCliOAuthTokenHeaders,
 } from "../config/antigravityCliClient.ts";
 import {
-  antigravityNativeOAuthUserAgent,
-  antigravityUserAgent,
+  getAntigravityContentHeaders,
+  getAntigravityOAuthUserAgent,
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
 import {
@@ -39,8 +29,10 @@ import {
   getAntigravity429AttemptBudget,
   rememberAntigravity429Refusal,
 } from "../services/antigravity429Guard.ts";
+import { obfuscateSensitiveWords } from "../services/antigravityObfuscation.ts";
+import { parseRetryFromErrorText, type RetryHintProvenance } from "../services/accountFallback.ts";
+import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import {
-  injectCreditsField,
   shouldRetryWithCredits,
   shouldUseCreditsFirst,
   getCreditsMode,
@@ -48,25 +40,30 @@ import {
 } from "../services/antigravityCredits.ts";
 import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/creditBalance";
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
-import { getMitmAlias } from "@/lib/db/models";
-import { obfuscateSensitiveWords } from "../services/antigravityObfuscation.ts";
-import { resolveAntigravityVersion } from "../services/antigravityVersion.ts";
-import { ensureAntigravityProjectAssigned } from "../services/antigravityProjectBootstrap.ts";
-import {
-  resolveAntigravityModelId,
-  getAntigravityModelFallbacks,
-} from "../config/antigravityModelAliases.ts";
+import { markAntigravityModelQuotaExhausted } from "../services/antigravityFamilyCooldown.ts";
+import { cleanModelName } from "./antigravity/modelResolution.ts";
+export { cleanModelName } from "./antigravity/modelResolution.ts";
+// Upstream's blanket fallback, re-exported for importers; the executor itself caps with
+// the fork's per-model table (antigravityOutputLimits.ts), never this 16384.
+export { MAX_ANTIGRAVITY_OUTPUT_TOKENS } from "./antigravityOutputCap.ts";
 import {
   DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS,
   resolveAntigravityMaxOutputTokens,
 } from "../config/antigravityOutputLimits.ts";
-import { cloakAntigravityToolPayload } from "../config/toolCloaking.ts";
+import {
+  ensureAntigravityProjectAssigned,
+  ANTIGRAVITY_REQUIRES_MANUAL_PROJECT,
+} from "../services/antigravityProjectBootstrap.ts";
+import { persistDiscoveredAntigravityProjectId } from "../services/antigravityProjectPersist.ts";
+import { markAntigravityMissingCloudCodeProject } from "../services/antigravityProjectPersistence.ts";
+import { getAntigravityModelFallbacks } from "../config/antigravityModelAliases.ts";
 import {
   shouldStripCloudCodeThinking,
   stripCloudCodeThinkingConfig,
 } from "../services/cloudCodeThinking.ts";
 import { buildGeminiTools } from "../translator/helpers/geminiToolsSanitizer.ts";
-import { DEFAULT_SAFETY_SETTINGS } from "../translator/helpers/geminiHelper.ts";
+import { sanitizeGeminiPartFunctionResponse } from "../translator/request/openai-to-gemini/helpers.ts";
+import { logger } from "../utils/logger.ts";
 import {
   type AntigravityCollectedStream,
   processAntigravitySSEText,
@@ -75,23 +72,62 @@ import {
 // processAntigravitySSEPayload re-exported for external importers (tests).
 export { processAntigravitySSEPayload } from "./antigravity/sseCollect.ts";
 import {
-  applyAntigravityClientProfileHeaders,
+  createCreditsExtractionTransform as createCreditsExtractionTransformImpl,
+  type SsePassthroughResult,
+} from "./antigravity/streamingPassthrough.ts";
+import {
+  toSafeAntigravityLog,
+  finalizeAntigravityRequestBody,
+  sendAntigravityRequest,
+  tryCreditsRetry,
+  tryEmbedLongRetryAfter,
+  buildFinalAntigravityResult,
+  buildAntigravity429ErrorMessage,
+  markCreditsExhausted,
+  isAbortError,
+  type SafeAntigravityLog,
+} from "./antigravity/executeAttempt.ts";
+import {
+  handleAntigravityFallbackChainError,
+  handleAntigravityFallback400,
+} from "./antigravity/proFallbackChain.ts";
+import {
   getAntigravityClientProfile,
-  removeHeaderCaseInsensitive,
+  resolveAntigravityClientVersion,
 } from "../services/antigravityClientProfile.ts";
 import {
   generateAntigravityRequestId,
   getAntigravityEnvelopeUserAgent,
   getAntigravitySessionId,
 } from "../services/antigravityIdentity.ts";
-import * as prl from "../utils/providerRequestLogging.ts";
+import {
+  isGeminiTrailingModelTurnRejectingModel,
+  stripTrailingGeminiModelTurns,
+} from "../translator/helpers/geminiTrailingModelTurn.ts";
 
 const MAX_RETRY_AFTER_MS = 60_000;
 const LONG_RETRY_THRESHOLD_MS = 60_000;
-const CREDITS_EXHAUSTED_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
 // Cap for transient 5xx backoff — shorter than the 429 cap to avoid long stalls on
 // infra hiccups ("Agent execution terminated", "high traffic", capacity errors).
 const ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS = 15_000;
+// Bounded per-URL auto-retry count for both the Retry-After-driven short retry and
+// the no-Retry-After transient/429 backoff loop in executeOnce().
+const MAX_AUTO_RETRIES = 3;
+
+export function resolveAntigravityBodyRetryHint(
+  body: string,
+  errorMessage: string
+): { retryMs: number; source: RetryHintProvenance } | null {
+  const structured = parseDetailedRetryHintFromJsonBody(body, Number.MAX_SAFE_INTEGER);
+  if (structured) {
+    return {
+      retryMs: structured.retryAfterMs,
+      source: structured.provenance,
+    };
+  }
+  const retryMs = parseRetryFromErrorText(errorMessage);
+  return retryMs ? { retryMs, source: "body" } : null;
+}
 
 const ANTIGRAVITY_TRANSIENT_ERROR_PATTERNS: RegExp[] = [
   /high\s+traffic/i,
@@ -123,7 +159,7 @@ interface AntigravityContent {
   [key: string]: unknown;
 }
 
-type AntigravityCredentials = ProviderCredentials & {
+export type AntigravityCredentials = ProviderCredentials & {
   projectId?: string | null;
   expiresIn?: number;
 };
@@ -141,98 +177,15 @@ type AntigravityChunkContent = Record<string, unknown> & {
   >;
 };
 
-type AntigravityCreditEntry = {
-  creditType?: string;
-  creditAmount?: string;
-};
-
-function getChunkedOrFixedBody(bodyStr: string, stream: boolean): BodyInit {
-  if (stream) {
-    return new ReadableStream(
-      {
-        async start(controller) {
-          controller.enqueue(new TextEncoder().encode(bodyStr));
-          controller.close();
-        },
-      },
-      { highWaterMark: 16384 }
-    );
-  }
-  return bodyStr;
-}
-
-function cloneAntigravityRequestBody(body: unknown): unknown {
-  if (!body || typeof body !== "object") {
-    return body;
-  }
-
-  try {
-    return structuredClone(body);
-  } catch {
-    return JSON.parse(JSON.stringify(body));
-  }
-}
-
-function serializeAntigravityRequest(
-  provider: string,
-  headers: Record<string, string>,
-  body: unknown
-): { headers: Record<string, string>; bodyString: string } {
-  const serializedBody = cloneAntigravityRequestBody(body);
-
-  if (!isCliCompatEnabled(provider)) {
-    return { headers, bodyString: JSON.stringify(serializedBody) };
-  }
-  return applyFingerprint(provider, { ...headers }, serializedBody);
-}
-
 type AntigravityRequestEnvelope = Record<string, unknown> & {
   project: string;
   model?: string;
-  userAgent: "antigravity" | "jetski";
+  userAgent: "antigravity";
   requestType: "agent" | "image_gen";
   requestId: string;
   request: Record<string, unknown>;
   enabledCreditTypes?: string[];
 };
-
-class AntigravityPreResponseTimeoutError extends Error {
-  code = ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE;
-  status = HTTP_STATUS.GATEWAY_TIMEOUT;
-
-  constructor(timeoutMs: number, url: string) {
-    super(`Antigravity upstream did not return response headers within ${timeoutMs}ms: ${url}`);
-    this.name = "TimeoutError";
-  }
-}
-
-function getAbortErrorCode(error: unknown): string | null {
-  if (!error || typeof error !== "object") return null;
-  const value = (error as { code?: unknown }).code;
-  return typeof value === "string" ? value : null;
-}
-
-function isAntigravityPreResponseTimeout(error: unknown): boolean {
-  return getAbortErrorCode(error) === ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE;
-}
-
-/**
- * Per-account GOOGLE_ONE_AI credits-exhausted tracker.
- * Key: accountId (OAuth subject / email). Value: expiry timestamp.
- * When credits hit 0 we skip the credit retry for CREDITS_EXHAUSTED_TTL_MS.
- */
-const MAX_CREDITS_EXHAUSTED_ENTRIES = 50;
-const creditsExhaustedUntil = new Map<string, number>();
-
-const _creditsExhaustedSweep = setInterval(() => {
-  const now = Date.now();
-  for (const [key, until] of creditsExhaustedUntil) {
-    if (now >= until) creditsExhaustedUntil.delete(key);
-  }
-}, 60_000);
-if (typeof _creditsExhaustedSweep === "object" && "unref" in _creditsExhaustedSweep) {
-  (_creditsExhaustedSweep as { unref?: () => void }).unref?.();
-}
 
 const MAX_CREDIT_BALANCE_ENTRIES = 50;
 const CREDIT_BALANCE_TTL_MS = 5 * 60 * 1000;
@@ -293,46 +246,35 @@ export function updateAntigravityRemainingCredits(accountId: string, balance: nu
   } catch {}
 }
 
-function isCreditsExhausted(accountId: string): boolean {
-  const until = creditsExhaustedUntil.get(accountId);
-  if (!until) return false;
-  if (Date.now() >= until) {
-    creditsExhaustedUntil.delete(accountId);
-    return false;
-  }
-  return true;
-}
-
-function markCreditsExhausted(accountId: string): void {
-  if (
-    creditsExhaustedUntil.size >= MAX_CREDITS_EXHAUSTED_ENTRIES &&
-    !creditsExhaustedUntil.has(accountId)
-  ) {
-    const now = Date.now();
-    for (const [key, until] of creditsExhaustedUntil) {
-      if (now >= until) {
-        creditsExhaustedUntil.delete(key);
-      }
-    }
-    if (creditsExhaustedUntil.size >= MAX_CREDITS_EXHAUSTED_ENTRIES) {
-      const oldestKey = creditsExhaustedUntil.keys().next().value;
-      if (oldestKey !== undefined) creditsExhaustedUntil.delete(oldestKey);
-    }
-  }
-  creditsExhaustedUntil.set(accountId, Date.now() + CREDITS_EXHAUSTED_TTL_MS);
-}
-
 /**
- * Persist a quota-exhausted cooldown to the DB for `connectionId` so that
- * cross-request and post-restart routing skips this connection until the
- * cooldown expires. Exported for unit testing. @internal
+ * Pass-through TransformStream that extracts `remainingCredits` from SSE
+ * data without consuming the stream (the downstream client receives the
+ * unmodified bytes). Thin wrapper around the pure implementation in
+ * streamingPassthrough.ts, injecting this executor's credit-balance cache
+ * writer so the two modules don't import each other. See that module's
+ * doc comment for the full parameter behavior.
+ * @internal Exported for unit testing only.
  */
-export function markConnectionQuotaExhausted(connectionId: string, retryAfterMs: number): void {
+export function createCreditsExtractionTransform(
+  accountId: string,
+  bufferSize = 0
+): TransformStream<Uint8Array, Uint8Array> {
+  return createCreditsExtractionTransformImpl(
+    accountId,
+    updateAntigravityRemainingCredits,
+    bufferSize
+  );
+}
+
+export function markConnectionQuotaExhausted(
+  connectionId: string,
+  retryAfterMs: number,
+  model?: string | null
+): void {
   try {
+    if (markAntigravityModelQuotaExhausted(connectionId, retryAfterMs, model)) return;
     setConnectionRateLimitUntil(connectionId, Date.now() + retryAfterMs);
-  } catch {
-    // DB write failure must never crash the request path
-  }
+  } catch {}
 }
 
 /**
@@ -341,74 +283,25 @@ export function markConnectionQuotaExhausted(connectionId: string, retryAfterMs:
  */
 
 /**
- * Strip provider prefixes (e.g. "antigravity/model" → "model").
- * Ensures the model name sent to the upstream API never contains a routing prefix.
- *
- * `modelIdOverride`: when a per-request model-id fallback chain forces a
- * specific upstream id, pass it here. It is an ALREADY-RESOLVED upstream id, so it bypasses
- * the MITM/static alias resolution and is used verbatim (after prefix stripping).
+ * `modelOrCeiling` is either the called upstream model id (the ceiling then comes from
+ * the per-model table in antigravityOutputLimits.ts) or an explicit numeric ceiling
+ * (unit tests); `modelForThinking` names the model for the thinking-budget rule when a
+ * number is passed.
  */
-async function cleanModelName(model: string, modelIdOverride?: string): Promise<string> {
-  if (modelIdOverride) {
-    return modelIdOverride.includes("/") ? modelIdOverride.split("/").pop()! : modelIdOverride;
-  }
-  if (!model) return model;
-  const stripped = model.includes("/") ? model.split("/").pop()! : model;
-  let clean = stripped;
-
-  // 1. Check dynamic MITM aliases first (authoritative after first sync).
-  //    Built during model sync — contains ONLY currently-available models.
-  //    Obsolete/removed models are automatically excluded.
-  try {
-    const mitmAliases = await getMitmAlias("antigravity");
-    if (mitmAliases && typeof mitmAliases === "object") {
-      const aliases = mitmAliases as Record<string, unknown>;
-      const raw = aliases[stripped];
-      // Only honor string aliases; corrupted/non-string DB values fall through
-      // to the static alias resolution below (never return undefined here).
-      if (typeof raw === "string" && raw) {
-        // Strip the "antigravity/" prefix if present; use the raw model ID otherwise.
-        const PREFIX = "antigravity/";
-        clean = raw.startsWith(PREFIX) ? raw.slice(PREFIX.length) : raw;
-      }
-    }
-  } catch {
-    // DB not available (build phase, transient error) — fall through to static aliases
-  }
-
-  // 2. Fall back to static aliases if MITM didn't resolve
-  if (clean === stripped) {
-    clean = resolveAntigravityModelId(clean);
-  }
-
-  return clean;
-}
-
-function attachToolNameMap<T>(payload: T, toolNameMap: Map<string, string> | null): T {
-  if (!toolNameMap?.size || !payload || typeof payload !== "object") {
-    return payload;
-  }
-
-  const copy = Array.isArray(payload) ? ([...payload] as T) : ({ ...(payload as object) } as T);
-  Object.defineProperty(copy, "_toolNameMap", {
-    value: toolNameMap,
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  });
-  return copy;
-}
-
-function getRequestTargetModel(body: Record<string, unknown>): string {
-  const target = body.model;
-  return typeof target === "string" && target.length > 0 ? target : "unknown";
-}
-
 function applyAntigravityGenerationDefaults(
   request: Record<string, unknown>,
-  maxOutputTokensCeiling: number = DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS,
-  model: string | null = null
+  modelOrCeiling?: string | number | null,
+  modelForThinking: string | null = null
 ): void {
+  const model =
+    typeof modelOrCeiling === "string" && modelOrCeiling.trim() ? modelOrCeiling : modelForThinking;
+  const requestedCeiling =
+    typeof modelOrCeiling === "number" ? modelOrCeiling : resolveAntigravityMaxOutputTokens(model);
+  const ceiling =
+    Number.isFinite(requestedCeiling) && requestedCeiling > 0
+      ? requestedCeiling
+      : DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS;
+
   const generationConfig =
     request.generationConfig && typeof request.generationConfig === "object"
       ? (request.generationConfig as Record<string, unknown>)
@@ -434,10 +327,6 @@ function applyAntigravityGenerationDefaults(
   // rejected outright. See antigravityOutputLimits.ts for why this is per-model
   // instead of the blanket 16384 it used to be.
   const finalMax = Number(generationConfig.maxOutputTokens);
-  const ceiling =
-    Number.isFinite(maxOutputTokensCeiling) && maxOutputTokensCeiling > 0
-      ? maxOutputTokensCeiling
-      : DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS;
   if (Number.isFinite(finalMax) && finalMax > ceiling) {
     generationConfig.maxOutputTokens = ceiling;
   }
@@ -457,12 +346,159 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function getAntigravitySafetySettings(safetySettings: unknown): unknown[] {
-  const source = Array.isArray(safetySettings) ? safetySettings : DEFAULT_SAFETY_SETTINGS;
-  return source.filter((setting) => {
+/**
+ * Known competing-agent identity sentences that Antigravity's server-side
+ * filter flags, answering with a 429 RESOURCE_EXHAUSTED (port of
+ * decolua/9router b566b20, generalized). Only the identity sentence is
+ * removed — surrounding instruction text is untouched.
+ */
+const COMPETITIVE_AGENT_PROMPT_PATTERNS: RegExp[] = [
+  /\byou are a claude agent\b[^\n]*/i,
+  /\bbuilt on anthropic's claude agent sdk\b[^\n]*/i,
+  /\byou are claude code\b[^\n]*/i,
+  /\byou are an ai assistant created by anthropic\b[^\n]*/i,
+];
+
+/**
+ * Oh My Pi (OMP) coding-harness markers reported to draw a false 429
+ * RESOURCE_EXHAUSTED from Antigravity on large agent prompts even with quota
+ * left. These are compatibility rewrites, not proof of intentional upstream
+ * blocking: they only neutralize known harness tags/branding, and only inside
+ * systemInstruction text. Order matters ("Oh My Pi coding harness" before
+ * "Oh My Pi").
+ */
+const HARNESS_MARKER_REWRITES: Array<{ from: RegExp; to: string }> = [
+  { from: /<(\/?)system[-_]conventions>/gi, to: "<$1conventions>" },
+  { from: /<(\/?)system[-_]directive>/gi, to: "<$1instructions>" },
+  { from: /<(\/?)critical>/gi, to: "<$1important>" },
+  { from: /Oh My Pi coding harness/gi, to: "AI coding assistant" },
+  { from: /Oh My Pi/gi, to: "coding assistant" },
+  { from: /omp Live/gi, to: "coding assistant live" },
+];
+
+/** Harness telemetry keys stripped from the envelope and from `labels`. */
+const ANTIGRAVITY_HARNESS_TELEMETRY_KEYS = ["used_claude", "used_claude_conservative"] as const;
+
+const promptNormalizeLog = logger("AG_PROMPT_NORMALIZE");
+
+/**
+ * Whether the dispatch path rewrites systemInstruction text (competing-agent identity
+ * sentences + OMP harness markers, below). OFF by default in this fork: rewriting a
+ * client's identity line so Google's filter lets it through is the "Claude Code → agy"
+ * decision the owner has not taken (ban risk on the Google account). Opt in with
+ * OMNIROUTE_ANTIGRAVITY_REWRITE_AGENT_IDENTITY=1. The pure helpers stay exported.
+ */
+function shouldRewriteAntigravityAgentIdentity(): boolean {
+  return process.env.OMNIROUTE_ANTIGRAVITY_REWRITE_AGENT_IDENTITY === "1";
+}
+
+/**
+ * Normalize systemInstruction.parts text before Antigravity dispatch: strip
+ * competing-agent identity sentences (#10420) and rewrite OMP harness markers.
+ * Only string `text` parts are touched; every other part and field is kept.
+ * Returns the original reference when nothing matched (no allocation).
+ */
+export function normalizeAntigravitySystemInstruction(systemInstruction: unknown): unknown {
+  const record = asRecord(systemInstruction);
+  const parts = Array.isArray(record?.parts)
+    ? (record.parts as Array<Record<string, unknown>>)
+    : [];
+  if (parts.length === 0) return systemInstruction;
+
+  let changed = false;
+  const newParts = parts.map((part) => {
+    if (typeof part.text !== "string" || part.text.length === 0) return part;
+    let text = part.text;
+    for (const pattern of COMPETITIVE_AGENT_PROMPT_PATTERNS) {
+      const stripped = text
+        .replace(pattern, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trimStart();
+      if (stripped !== text) {
+        changed = true;
+        text = stripped;
+      }
+    }
+    let rewrites = 0;
+    for (const { from, to } of HARNESS_MARKER_REWRITES) {
+      const rewritten = text.replace(from, to);
+      if (rewritten !== text) {
+        rewrites++;
+        text = rewritten;
+      }
+    }
+    if (rewrites > 0) {
+      changed = true;
+      promptNormalizeLog.debug("Rewrote harness markers in systemInstruction", { rewrites });
+    }
+    return text === part.text ? part : { ...part, text };
+  });
+
+  return changed ? { ...record, parts: newParts } : systemInstruction;
+}
+
+/** Legacy name (#10420) kept for existing importers. */
+export const stripCompetitiveAgentPrompts = normalizeAntigravitySystemInstruction;
+
+/**
+ * Drop OMP harness telemetry keys (`used_claude`, `used_claude_conservative`)
+ * from a record and from its `labels` map. Every other key and label is kept.
+ * Returns the original reference when nothing was removed.
+ */
+function stripAntigravityHarnessTelemetry<T>(value: T): T {
+  const record = asRecord(value);
+  if (!record) return value;
+
+  let changed = false;
+  const cleaned: Record<string, unknown> = { ...record };
+  for (const key of ANTIGRAVITY_HARNESS_TELEMETRY_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(cleaned, key)) {
+      delete cleaned[key];
+      changed = true;
+    }
+  }
+
+  const labels = asRecord(cleaned.labels);
+  if (labels) {
+    const cleanedLabels: Record<string, unknown> = { ...labels };
+    let labelsChanged = false;
+    for (const key of ANTIGRAVITY_HARNESS_TELEMETRY_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(cleanedLabels, key)) {
+        delete cleanedLabels[key];
+        labelsChanged = true;
+      }
+    }
+    if (labelsChanged) {
+      cleaned.labels = cleanedLabels;
+      changed = true;
+    }
+  }
+
+  return changed ? (cleaned as T) : value;
+}
+
+function getAntigravitySafetySettings(safetySettings: unknown): unknown[] | undefined {
+  if (!Array.isArray(safetySettings)) return undefined;
+
+  return safetySettings.filter((setting) => {
     const category = asRecord(setting)?.category;
     return typeof category !== "string" || !ANTIGRAVITY_UNSUPPORTED_SAFETY_CATEGORIES.has(category);
   });
+}
+
+/**
+ * Gemini branch (no field whitelist): apply the same systemInstruction
+ * normalization the Claude branch gets, leaving every other field untouched.
+ */
+function normalizeAntigravityGeminiSystemInstruction<T extends Record<string, unknown>>(
+  request: T
+): T {
+  if (!shouldRewriteAntigravityAgentIdentity()) return request;
+  if (!asRecord(request.systemInstruction)) return request;
+  const systemInstruction = normalizeAntigravitySystemInstruction(request.systemInstruction);
+  return systemInstruction === request.systemInstruction
+    ? request
+    : { ...request, systemInstruction };
 }
 
 function sanitizeAntigravityGeminiRequest(
@@ -475,7 +511,12 @@ function sanitizeAntigravityGeminiRequest(
   }
 
   if (asRecord(request.systemInstruction)) {
-    clean.systemInstruction = request.systemInstruction;
+    // #10420: strip competing-agent identity sentences (e.g. "You are a
+    // Claude agent, built on Anthropic's Claude Agent SDK.") that Antigravity
+    // flags and answers with 429 RESOURCE_EXHAUSTED.
+    clean.systemInstruction = shouldRewriteAntigravityAgentIdentity()
+      ? normalizeAntigravitySystemInstruction(request.systemInstruction)
+      : request.systemInstruction;
   }
 
   clean.generationConfig = asRecord(request.generationConfig)
@@ -494,10 +535,8 @@ function sanitizeAntigravityGeminiRequest(
     clean.sessionId = request.sessionId;
   }
 
-  // #5003: preserve safetySettings through the Claude-path whitelist so the all-OFF
-  // default (or a caller-supplied value) actually reaches Google Cloud Code. Without
-  // this the field is dropped and Google applies its own safety defaults that
-  // false-flag benign technical prompts as `prohibited_content`.
+  // Preserve only caller-supplied safetySettings through the Claude-path whitelist.
+  // Missing settings stay absent so OmniRoute does not silently weaken upstream safety.
   if (Array.isArray(request.safetySettings)) {
     clean.safetySettings = request.safetySettings;
   }
@@ -516,9 +555,10 @@ function sanitizeAntigravityGeminiRequest(
  * `"assistant"`). Mirrors the trailing-strip pop-loop already used for Mistral
  * (#3396), Copilot (#5802), and the CC-bridge in `claudeCodeCompatible.ts`.
  *
- * Scoped strictly to the Claude path by the caller (`isClaude` branch only) — native
- * Gemini models via Antigravity must be unaffected, since Vertex-Claude is the only
- * documented rejection surface.
+ * Wired in by the caller for both the Claude path (`isClaude`) and native Gemini
+ * models (`isGemini`, #10104) — newer Gemini endpoints reject a trailing `model` turn
+ * with the same "ending with a model turn" class of 400 that Claude hits via Vertex.
+ * Other model families routed through Antigravity are left untouched.
  *
  * Guard: never strip `contents` down to empty — an empty `contents` array is itself
  * an invalid request, so at least one entry (even a lone trailing "model" turn) is
@@ -532,22 +572,101 @@ function stripTrailingAntigravityAssistantTurn(
     return request;
   }
 
-  while (
-    contents.length > 1 &&
-    (contents[contents.length - 1] as AntigravityContent)?.role === "model"
-  ) {
-    contents.pop();
-  }
+  stripTrailingGeminiModelTurns(contents);
 
   return request;
+}
+
+/**
+ * Newer Antigravity Gemini chat families reject a request ending on a model turn.
+ * Keep this explicit rather than matching every model containing "gemini": image
+ * generation has a separate request contract, and the older 2.5 family is not part
+ * of the rejection evidence for #10104.
+ */
+function isAntigravityGeminiChatModel(upstreamModel: string): boolean {
+  return isGeminiTrailingModelTurnRejectingModel(upstreamModel);
 }
 
 // Test-only export so the unit suite can exercise the strip logic directly.
 export const __test_stripTrailingAntigravityAssistantTurn = stripTrailingAntigravityAssistantTurn;
 
+type AntigravityCreditsRetryState = { attempted: boolean };
+type AntigravityPhysicalSendCounter = { value: number };
+
+/** Base per-url-index attempt context, before the request has been sent. */
+type AntigravityAttemptContext = {
+  url: string;
+  model: string;
+  /** Pre-serialization headers (built by buildHeaders + mergeUpstreamExtraHeaders) — the
+   * credits-retry re-serializes from these, NOT from `finalHeaders` (already fingerprinted). */
+  headers: Record<string, string>;
+  transformedBody: Record<string, unknown>;
+  credentials: AntigravityCredentials;
+  stream: boolean;
+  signal: AbortSignal | null | undefined;
+  log: SafeAntigravityLog;
+  accountId: string;
+  creditsMode: ReturnType<typeof getCreditsMode>;
+  creditsRetryState: AntigravityCreditsRetryState;
+  urlIndex: number;
+  retryAttemptsByUrl: Record<number, number>;
+  fallbackCount: number;
+  physicalSendCounter: AntigravityPhysicalSendCounter;
+  correlationId: string | null;
+  /** Per-request upstream-429 budget across ALL hosts (antigravity429Guard.ts). */
+  rateLimitBudget: AntigravityRateLimitBudget;
+};
+
+/**
+ * Upstream 429s seen for this request across every host. Once `count` reaches `max`
+ * the 429 goes back to the caller instead of being retried, and the request body
+ * (`fingerprint`) is remembered so an identical re-send is answered locally.
+ */
+type AntigravityRateLimitBudget = {
+  max: number;
+  count: number;
+  fingerprint: string | null;
+};
+
+/** Context threaded through the 429/503 handling helpers — adds the sent response. */
+type AntigravityRateLimitContext = AntigravityAttemptContext & {
+  response: Response;
+  finalHeaders: Record<string, string>;
+  /** This response spent the request's 429 budget: no more retries on any host. */
+  budget429Spent: boolean;
+};
+
+/**
+ * Outcome of handling a 429/503 response — tells executeOnce()'s loop what to do next.
+ * `lastStatus` mirrors the original inline code, which only updated the outer
+ * `lastStatus` variable when NOT retrying the same url (i.e. on retryNextUrl/fallthrough,
+ * never on the bounded-short-retry or transient-auto-retry same-url paths).
+ */
+type AntigravityRateLimitOutcome =
+  | { action: "return"; result: SsePassthroughResult }
+  | { action: "retrySameUrl" }
+  | { action: "retryNextUrl"; lastStatus: number }
+  | { action: "fallthrough"; retryMs: number | null; lastStatus: number };
+
+/** Outcome of one full per-url attempt in executeOnce() — return a result, or retry. */
+type AntigravityAttemptOutcome =
+  | { action: "return"; result: SsePassthroughResult }
+  | { action: "retry"; sameUrl: boolean; lastStatus?: number };
+
 export class AntigravityExecutor extends BaseExecutor {
   constructor() {
     super("antigravity", PROVIDERS.antigravity);
+  }
+
+  override shouldRetry(status: number, urlIndex: number): boolean {
+    return (
+      (status === HTTP_STATUS.RATE_LIMITED ||
+        status === HTTP_STATUS.NOT_FOUND ||
+        status === HTTP_STATUS.BAD_GATEWAY ||
+        status === HTTP_STATUS.SERVICE_UNAVAILABLE ||
+        status === HTTP_STATUS.GATEWAY_TIMEOUT) &&
+      urlIndex + 1 < this.getFallbackCount()
+    );
   }
 
   buildUrl(model: string, _stream: boolean, urlIndex = 0): string {
@@ -563,16 +682,14 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   buildHeaders(credentials: AntigravityCredentials, _stream = true): Record<string, string> {
-    if (getAntigravityClientProfile(credentials) === "cli") {
+    const clientProfile = getAntigravityClientProfile(credentials);
+    if (clientProfile === "cli") {
       // Official CLI replica: nothing but its own wire headers (see antigravityCliClient.ts).
       return getAntigravityCliCloudCodeHeaders(credentials.accessToken);
     }
     const raw = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${credentials.accessToken}`,
-      "User-Agent": antigravityUserAgent(),
+      ...getAntigravityContentHeaders(clientProfile, credentials.accessToken),
       Accept: "text/event-stream",
-      "X-OmniRoute-Source": "omniroute",
     };
     // Scrub proxy/fingerprint headers that reveal non-native traffic
     return scrubProxyAndFingerprintHeaders(raw);
@@ -583,7 +700,8 @@ export class AntigravityExecutor extends BaseExecutor {
     body: unknown,
     _stream: boolean,
     credentials: AntigravityCredentials,
-    modelIdOverride?: string
+    modelIdOverride?: string,
+    signal?: AbortSignal
   ): Promise<AntigravityRequestEnvelope | Response> {
     // Project ID resolution: prefer OAuth-stored projectId over incoming body.project
     // to avoid stale/wrong client-side values causing 404/403 from Cloud Code endpoints.
@@ -591,6 +709,10 @@ export class AntigravityExecutor extends BaseExecutor {
     const normalizeProjectId = (value: unknown): string | null => {
       if (typeof value !== "string") return null;
       const trimmedValue = value.trim();
+      // A row poisoned with the manual-project sentinel must behave as "no project"
+      // so it takes the typed 422 GCP_PROJECT_REQUIRED path (and gets flagged
+      // missing_project_id) instead of sending `projects/__REQUIRES_GCP_PROJECT__`.
+      if (trimmedValue === ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) return null;
       return trimmedValue ? trimmedValue : null;
     };
     const bodyRecord = asRecord(body) ?? {};
@@ -614,16 +736,58 @@ export class AntigravityExecutor extends BaseExecutor {
     // its Google account already owns a Cloud Code project (the OAuth-time loadCodeAssist
     // returned empty/transiently failed). Mirror the Cloud Code bootstrap to recover it
     // here — the helper memoizes per access-token, so this is a one-time round-trip.
+    let requiresManualProject = false;
     if (!projectId && credentials?.accessToken) {
       const discovered = await ensureAntigravityProjectAssigned(
         credentials.accessToken,
         fetch,
-        getAntigravityClientProfile(credentials)
+        getAntigravityClientProfile(credentials),
+        signal
       );
-      if (discovered) projectId = discovered;
+      if (discovered && discovered !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) {
+        projectId = discovered;
+        // #8491: persist the recovered id so it survives the next token refresh
+        // or process restart instead of being silently rediscovered every time.
+        await persistDiscoveredAntigravityProjectId(
+          credentials.connectionId,
+          discovered,
+          credentials.providerSpecificData
+        );
+      }
+      requiresManualProject = discovered === ANTIGRAVITY_REQUIRES_MANUAL_PROJECT;
     }
 
     if (!projectId) {
+      markAntigravityMissingCloudCodeProject(credentials?.connectionId);
+      if (requiresManualProject) {
+        // Google no longer auto-creates GCP projects for standard-tier
+        // accounts (tracked in #8491): fail fast with a clear instruction
+        // instead of the generic 422 — a fabricated/omitted id only earns a
+        // delayed 429 RESOURCE_EXHAUSTED from Google's quota check.
+        const errorBody = {
+          error: {
+            message:
+              "GCP_PROJECT_REQUIRED: Google Antigravity now requires a free GCP Project ID. " +
+              "Create one at console.cloud.google.com and enter it in Providers → Antigravity " +
+              "(connection settings → Project ID). Automatic project creation is no longer " +
+              "available for personal accounts.",
+            type: "gcp_project_required",
+            code: "gcp_project_required",
+          },
+        };
+        // 422, not 403: chatCore's generic "401/403 → refresh credentials and
+        // retry" path would otherwise hit Google's OAuth token endpoint on
+        // every request from an affected account — pointless, since refreshing
+        // the token cannot create a GCP project. 422 also matches the sibling
+        // missing_project_id error, which the client already maps to a clear
+        // "action needed" prompt.
+        const resp = new Response(JSON.stringify(errorBody), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        });
+        // Returning a Response object signals the executor to stop and forward it
+        return resp as unknown as never;
+      }
       // (#489) Return a structured error instead of throwing — gives the client a clear signal
       // to show a "Reconnect OAuth" prompt rather than an opaque "Internal Server Error".
       const errorMsg =
@@ -663,8 +827,21 @@ export class AntigravityExecutor extends BaseExecutor {
       return resp as unknown as never;
     }
 
-    const upstreamModel = await cleanModelName(model, modelIdOverride);
+    const upstreamModel = await cleanModelName(
+      model,
+      modelIdOverride,
+      this.provider,
+      credentials?.connectionId
+    );
     const isClaude = upstreamModel.toLowerCase().includes("claude");
+    // #10104: newer Gemini endpoints reject a request ending on a `model` turn with
+    // HTTP 400 "Requests ending with a model turn are not supported" — the same
+    // rejection surface Claude hits via Vertex (see stripTrailingAntigravityAssistantTurn's
+    // doc comment above). Native Gemini models routed through Antigravity (`agy/gemini-*`,
+    // e.g. the Gemini 3.x Flash/Pro tiers from PR #8013's catalog) need the same guarded
+    // strip. Scoped to models whose id names Gemini so unrelated model families are
+    // untouched; the strip itself never empties `contents` (see the guard above).
+    const isGemini = isAntigravityGeminiChatModel(upstreamModel);
     const baseBody = bodyRecord;
     const normalizedBody = shouldStripCloudCodeThinking(this.provider, upstreamModel)
       ? stripCloudCodeThinkingConfig(baseBody)
@@ -687,19 +864,21 @@ export class AntigravityExecutor extends BaseExecutor {
         const hasFunctionCall = c.parts?.some((p) => p.functionCall) || false;
 
         const parts =
-          c.parts?.filter((p) => {
-            if (typeof p.text === "string" && p.text === "") return false;
-            if (p.functionCall && !p.functionCall.name) return false;
+          c.parts
+            ?.filter((p) => {
+              if (typeof p.text === "string" && p.text === "") return false;
+              if (p.functionCall && !p.functionCall.name) return false;
 
-            // Only strip if it's NOT our bypass sentinel.
-            // Antigravity models (like Gemini) need this sentinel to bypass 400 errors.
-            return (
-              !p.thought &&
-              (hasFunctionCall ||
-                !p.thoughtSignature ||
-                p.thoughtSignature === "skip_thought_signature_validator")
-            );
-          }) || [];
+              // Only strip if it's NOT our bypass sentinel.
+              // Antigravity models (like Gemini) need this sentinel to bypass 400 errors.
+              return (
+                !p.thought &&
+                (hasFunctionCall ||
+                  !p.thoughtSignature ||
+                  p.thoughtSignature === "skip_thought_signature_validator")
+              );
+            })
+            .map(sanitizeGeminiPartFunctionResponse) || [];
         return { ...c, role, parts };
       }) || [];
 
@@ -713,6 +892,7 @@ export class AntigravityExecutor extends BaseExecutor {
       }
     }
 
+    const safetySettings = getAntigravitySafetySettings(normalizedRequest?.safetySettings);
     const rawTransformedRequest = {
       ...normalizedRequest,
       ...(contents.length > 0 && { contents }),
@@ -720,29 +900,33 @@ export class AntigravityExecutor extends BaseExecutor {
         credentials,
         typeof normalizedRequest?.sessionId === "string" ? normalizedRequest.sessionId : undefined
       ),
-      // #5003: send explicit all-OFF safety entries that Cloud Code accepts. Omitting the
-      // field lets Cloud Code apply server-side defaults that false-flag benign technical
-      // prompts as `prohibited_content`.
-      safetySettings: getAntigravitySafetySettings(normalizedRequest?.safetySettings),
+      ...(safetySettings !== undefined && { safetySettings }),
       toolConfig:
         Array.isArray(normalizedRequest?.tools) && normalizedRequest.tools.length > 0
           ? { functionCallingConfig: { mode: "VALIDATED" } }
           : normalizedRequest?.toolConfig,
     };
 
+    // Note: sanitizeAntigravityGeminiRequest() applies a Claude-only field whitelist
+    // (dropping fields native Gemini requests may legitimately carry), so the Gemini
+    // branch only runs the trailing-turn strip — never the sanitize/whitelist step.
     const transformedRequest = isClaude
       ? stripTrailingAntigravityAssistantTurn(
           sanitizeAntigravityGeminiRequest(rawTransformedRequest)
         )
-      : rawTransformedRequest;
+      : isGemini
+        ? stripTrailingAntigravityAssistantTurn(
+            normalizeAntigravityGeminiSystemInstruction(rawTransformedRequest)
+          )
+        : rawTransformedRequest;
 
-    // Obfuscate sensitive client names in user content (e.g. "OpenCode", "Cursor")
+    // Obfuscate sensitive client names in user content (e.g. "OpenCode", "Cursor").
     const requestContents = transformedRequest.contents;
     if (Array.isArray(requestContents)) {
       for (const msg of requestContents) {
-        if (Array.isArray(msg.parts)) {
+        if (Array.isArray(msg?.parts)) {
           for (const part of msg.parts) {
-            if (typeof part.text === "string") {
+            if (part && typeof part.text === "string") {
               part.text = obfuscateSensitiveWords(part.text);
             }
           }
@@ -750,11 +934,7 @@ export class AntigravityExecutor extends BaseExecutor {
       }
     }
 
-    applyAntigravityGenerationDefaults(
-      transformedRequest,
-      resolveAntigravityMaxOutputTokens(upstreamModel),
-      upstreamModel
-    );
+    applyAntigravityGenerationDefaults(transformedRequest, upstreamModel);
 
     const {
       project: _project,
@@ -778,6 +958,8 @@ export class AntigravityExecutor extends BaseExecutor {
       reasoning: _reasoning,
       enable_thinking: _enableThinking,
       thinking_budget: _thinkingBudget,
+      enabledCreditTypes: _enabledCreditTypes,
+      stream: _streamField,
       ...passthroughFields
     } = normalizedBody;
 
@@ -789,12 +971,11 @@ export class AntigravityExecutor extends BaseExecutor {
       model: upstreamModel,
       userAgent: getAntigravityEnvelopeUserAgent(credentials),
       requestType,
-      ...passthroughFields,
+      ...stripAntigravityHarnessTelemetry(passthroughFields),
     };
-
-    if (requestType === "agent" && envelope.enabledCreditTypes === undefined) {
-      envelope.enabledCreditTypes = ["GOOGLE_ONE_AI"];
-    }
+    // Harness telemetry is dropped from the inner request too (the Claude branch's
+    // whitelist already omits it; the Gemini/other branches pass the request through).
+    envelope.request = stripAntigravityHarnessTelemetry(envelope.request);
 
     return envelope;
   }
@@ -815,15 +996,16 @@ export class AntigravityExecutor extends BaseExecutor {
       if (this.config.clientId) bodyParams.client_id = this.config.clientId;
       if (this.config.clientSecret) bodyParams.client_secret = this.config.clientSecret;
 
+      const clientProfile = getAntigravityClientProfile(credentials);
       const response = await fetch(OAUTH_ENDPOINTS.google.token, {
         method: "POST",
         headers:
-          getAntigravityClientProfile(credentials) === "cli"
+          clientProfile === "cli"
             ? getAntigravityCliOAuthTokenHeaders()
             : {
                 "Content-Type": "application/x-www-form-urlencoded",
                 Accept: "application/json",
-                "User-Agent": antigravityNativeOAuthUserAgent(),
+                "User-Agent": getAntigravityOAuthUserAgent(clientProfile),
               },
         body: new URLSearchParams(bodyParams),
       });
@@ -845,14 +1027,50 @@ export class AntigravityExecutor extends BaseExecutor {
       const tokens = (await response.json()) as Record<string, unknown>;
       log?.info?.("TOKEN", "Antigravity refreshed");
 
+      const newAccessToken =
+        typeof tokens.access_token === "string" ? tokens.access_token : undefined;
+
+      // Discover projectId if the stored value is empty. The initial OAuth exchange
+      // may have failed to populate it (network timeout, account not yet onboarded to
+      // Gemini Code Assist). The runtime transformRequest path already does this, but
+      // a proactive discovery here prevents 422 errors on the next request when the
+      // per-token memoization cache is invalidated by the new access token.
+      let projectId = credentials.projectId?.trim() || "";
+      if (projectId === ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) projectId = "";
+      if (!projectId && newAccessToken) {
+        try {
+          const discovered = await ensureAntigravityProjectAssigned(
+            newAccessToken,
+            fetch,
+            getAntigravityClientProfile(credentials),
+            AbortSignal.timeout(8_000)
+          );
+          if (discovered && discovered !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) {
+            projectId = discovered;
+            await persistDiscoveredAntigravityProjectId(
+              credentials.connectionId,
+              discovered,
+              credentials.providerSpecificData
+            );
+            const okMsg = `Antigravity projectId discovered during refresh: ${discovered}`;
+            log?.info?.("TOKEN", okMsg);
+          }
+        } catch (discoveryError) {
+          // Best-effort: if discovery fails, the runtime path will retry on next request.
+          const msg =
+            discoveryError instanceof Error ? discoveryError.message : String(discoveryError);
+          log?.warn?.("TOKEN", `Antigravity projectId discovery during refresh failed: ${msg}`);
+        }
+      }
+
       return {
-        accessToken: typeof tokens.access_token === "string" ? tokens.access_token : undefined,
+        accessToken: newAccessToken,
         refreshToken:
           typeof tokens.refresh_token === "string" && tokens.refresh_token
             ? tokens.refresh_token
             : credentials.refreshToken,
         expiresIn: typeof tokens.expires_in === "number" ? tokens.expires_in : undefined,
-        projectId: credentials.projectId,
+        projectId,
         // Preserve providerSpecificData so a projectId stored there survives the refresh
         // (the onCredentialsRefreshed DB write) instead of being dropped → 422 (#2480).
         providerSpecificData: credentials.providerSpecificData,
@@ -959,6 +1177,10 @@ export class AntigravityExecutor extends BaseExecutor {
    * Collect an SSE streaming response into a single non-streaming JSON response.
    * Parses Gemini-format SSE chunks and assembles text content + usage into one
    * OpenAI-format chat.completion payload.
+   *
+   * @deprecated Use the non-streaming SSE path in chatCore instead, which calls
+   * parseSSEToGeminiResponse() from sseParser/geminiResponse.ts.  This method is
+   * retained only for backward compatibility and may be removed in a future release.
    */
   collectStreamToResponse(
     response: Response,
@@ -977,7 +1199,11 @@ export class AntigravityExecutor extends BaseExecutor {
     const decoder = new TextDecoder();
     const logger = log || undefined;
 
-    const SSE_COLLECT_TIMEOUT_MS = 120_000;
+    // Guard against indefinite hangs when the upstream sends headers but
+    // stalls on the body.  Inherit the global FETCH_TIMEOUT_MS (default 600 s,
+    // overridable via env) so reasoning-heavy models (gemini-3.1-pro-high on
+    // large prompts) are not killed by a hardcoded 120 s ceiling.
+    const SSE_COLLECT_TIMEOUT_MS = FETCH_TIMEOUT_MS;
 
     const collect = async () => {
       const collected: AntigravityCollectedStream = {
@@ -1084,22 +1310,49 @@ export class AntigravityExecutor extends BaseExecutor {
    * exactly the same single call as before (zero extra upstream requests).
    */
   async execute(input: ExecuteInput) {
-    await resolveAntigravityVersion();
+    const physicalSendCounter: AntigravityPhysicalSendCounter = { value: 0 };
+    await resolveAntigravityClientVersion(getAntigravityClientProfile(input.credentials));
 
     // Look up the chain by the NORMALLY-resolved upstream id (honours MITM/static aliases).
     // If a MITM alias remapped the id away from a known chain, no fallback applies → fast path.
-    const resolvedUpstreamId = await cleanModelName(input.model);
+    const resolvedUpstreamId = await cleanModelName(
+      input.model,
+      undefined,
+      this.provider,
+      input.credentials.connectionId
+    );
     const chain = getAntigravityModelFallbacks(resolvedUpstreamId);
 
     if (chain.length <= 1) {
       // No fallback chain → single attempt, unchanged.
-      return this.executeOnce(input);
+      return this.executeOnce(input, undefined, physicalSendCounter);
     }
 
     let firstResult: Awaited<ReturnType<AntigravityExecutor["executeOnce"]>> | null = null;
     for (let i = 0; i < chain.length; i++) {
       const candidate = chain[i];
-      const result = await this.executeOnce(input, candidate);
+      let result: Awaited<ReturnType<AntigravityExecutor["executeOnce"]>>;
+      try {
+        result = await this.executeOnce(input, candidate, physicalSendCounter);
+      } catch (error) {
+        const outcome = handleAntigravityFallbackChainError(
+          input,
+          error,
+          candidate,
+          i,
+          chain,
+          firstResult,
+          resolvedUpstreamId
+        );
+        switch (outcome.action) {
+          case "throw":
+            throw outcome.error;
+          case "return":
+            return outcome.result;
+          default:
+            continue;
+        }
+      }
 
       // Success (or any non-400) on a candidate → return immediately.
       if (result.response.status !== HTTP_STATUS.BAD_REQUEST) {
@@ -1107,27 +1360,22 @@ export class AntigravityExecutor extends BaseExecutor {
       }
 
       // Remember the FIRST 400 so the exhausted-chain case surfaces the original error.
-      if (i === 0) firstResult = result;
+      if (!firstResult) firstResult = result;
 
-      const isLast = i === chain.length - 1;
-      if (!isLast) {
-        input.log?.debug?.(
-          "AG_MODEL_FALLBACK",
-          `400 on "${candidate}" — retrying with next model candidate "${chain[i + 1]}"`
-        );
-        continue;
-      }
-
-      // Chain exhausted: surface the FIRST candidate's sanitized 400.
-      input.log?.warn?.(
-        "AG_MODEL_FALLBACK",
-        `Model fallback chain exhausted (all ${chain.length} candidates 400'd) for "${resolvedUpstreamId}"`
+      const outcome400 = handleAntigravityFallback400(
+        input,
+        result,
+        firstResult,
+        candidate,
+        i,
+        chain,
+        resolvedUpstreamId
       );
-      return firstResult ?? result;
+      if (outcome400.action === "return") return outcome400.result;
     }
 
     // Unreachable (loop always returns), but keeps the type checker happy.
-    return firstResult ?? this.executeOnce(input);
+    return firstResult ?? this.executeOnce(input, undefined, physicalSendCounter);
   }
 
   /**
@@ -1138,20 +1386,25 @@ export class AntigravityExecutor extends BaseExecutor {
    * status of the first response so `execute()` can decide whether to fall through. @internal
    */
   private async executeOnce(
-    { model, body, stream, credentials, signal, log, upstreamExtraHeaders }: ExecuteInput,
-    modelIdOverride?: string
+    {
+      model,
+      body,
+      stream,
+      credentials,
+      signal,
+      log,
+      upstreamExtraHeaders,
+      correlationId = null,
+    }: ExecuteInput,
+    modelIdOverride?: string,
+    physicalSendCounter: AntigravityPhysicalSendCounter = { value: 0 }
   ) {
-    await resolveAntigravityVersion();
+    await resolveAntigravityClientVersion(getAntigravityClientProfile(credentials));
     const fallbackCount = this.getFallbackCount();
+    const l = toSafeAntigravityLog(log);
     let lastError = null;
     let lastStatus = 0;
-    const MAX_AUTO_RETRIES = 3;
     const retryAttemptsByUrl: Record<number, number> = {}; // Track retry attempts per URL
-    // Upstream 429s for this request across ALL hosts; once the budget is spent the 429
-    // goes back to the caller instead of being retried (antigravity429Guard.ts).
-    const max429Attempts = getAntigravity429AttemptBudget();
-    let upstream429Count = 0;
-    let requestFingerprint: string | null = null;
 
     // Always stream upstream — buildUrl always returns the streaming endpoint.
     // For non-streaming clients, we collect the SSE below and return a synthetic
@@ -1169,43 +1422,13 @@ export class AntigravityExecutor extends BaseExecutor {
     // preflight normal call is skipped entirely.
     const creditsMode = getCreditsMode();
     const useCreditsFirst = shouldUseCreditsFirst(credentials?.accessToken || "", creditsMode);
-
-    const fetchWithReadinessTimeout = async (
-      url: string,
-      init: RequestInit,
-      timeoutMs = STREAM_READINESS_TIMEOUT_MS
-    ): Promise<Response> => {
-      const boundedTimeoutMs = Math.max(0, Math.floor(timeoutMs));
-      if (boundedTimeoutMs <= 0) {
-        return fetch(url, init);
-      }
-
-      const timeoutController = new AbortController();
-      let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-        timeoutController.abort(new AntigravityPreResponseTimeoutError(boundedTimeoutMs, url));
-      }, boundedTimeoutMs);
-
-      const existingSignal = init.signal instanceof AbortSignal ? init.signal : null;
-      const combinedSignal = existingSignal
-        ? mergeAbortSignals(existingSignal, timeoutController.signal)
-        : timeoutController.signal;
-
-      try {
-        return await fetch(url, { ...init, signal: combinedSignal });
-      } catch (error) {
-        if (
-          timeoutController.signal.aborted &&
-          isAntigravityPreResponseTimeout(timeoutController.signal.reason)
-        ) {
-          throw timeoutController.signal.reason;
-        }
-        throw error;
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
-      }
+    const creditsRetryState: AntigravityCreditsRetryState = { attempted: false };
+    // Upstream 429s for this request across ALL hosts; once the budget is spent the 429
+    // goes back to the caller instead of being retried (antigravity429Guard.ts).
+    const rateLimitBudget: AntigravityRateLimitBudget = {
+      max: getAntigravity429AttemptBudget(),
+      count: 0,
+      fingerprint: null,
     };
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
@@ -1217,37 +1440,23 @@ export class AntigravityExecutor extends BaseExecutor {
         body,
         upstreamStream,
         credentials,
-        modelIdOverride
+        modelIdOverride,
+        signal ?? undefined
       );
-      let requestToolNameMap: Map<string, string> | null = null;
 
       if (transformed instanceof Response) {
         return { response: transformed, url, headers, transformedBody: body };
       }
 
-      let transformedBody: Record<string, unknown> = transformed;
-
-      if (transformedBody && typeof transformedBody === "object") {
-        const cloaked = cloakAntigravityToolPayload(transformedBody);
-        transformedBody = cloaked.body;
-        requestToolNameMap = cloaked.toolNameMap;
-      }
-
-      // Credits-first: inject GOOGLE_ONE_AI upfront so we never try the normal
-      // quota path. If credits are exhausted / disabled shouldUseCreditsFirst()
-      // returns false and we fall back to the legacy retry-on-429 flow.
-      if (useCreditsFirst) {
-        transformedBody = injectCreditsField(transformedBody);
-        log?.debug?.("AG_CREDITS", "Credits-first enabled (ANTIGRAVITY_CREDITS=always)");
-      }
+      const transformedBody = finalizeAntigravityRequestBody(transformed, useCreditsFirst, l);
 
       // A body that already spent its 429 budget is answered locally until the block
       // expires — the client re-sending it must not reach Google again.
-      if (requestFingerprint === null && transformedBody && typeof transformedBody === "object") {
-        requestFingerprint = fingerprintAntigravityRequest(accountId, transformedBody);
-        const activeRefusal = getActiveAntigravityRefusal(requestFingerprint);
+      if (rateLimitBudget.fingerprint === null) {
+        rateLimitBudget.fingerprint = fingerprintAntigravityRequest(accountId, transformedBody);
+        const activeRefusal = getActiveAntigravityRefusal(rateLimitBudget.fingerprint);
         if (activeRefusal) {
-          log?.warn?.(
+          l.warn(
             "AG_429_BUDGET",
             `Not resending a request Antigravity refused with 429 (repeat ${activeRefusal.strikes}, ${Math.ceil(activeRefusal.remainingMs / 1000)}s left) — answered locally`
           );
@@ -1255,7 +1464,7 @@ export class AntigravityExecutor extends BaseExecutor {
             response: buildAntigravityRefusalReplayResponse(activeRefusal),
             url,
             headers,
-            transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
+            transformedBody,
           };
         }
       }
@@ -1266,535 +1475,54 @@ export class AntigravityExecutor extends BaseExecutor {
       }
 
       try {
-        const serializedRequest = serializeAntigravityRequest(
-          this.provider,
+        const outcome = await this.runAntigravityAttempt({
+          url,
+          model,
           headers,
-          transformedBody
-        );
-        let finalHeaders = serializedRequest.headers;
-        const capture = (h: Record<string, string>, s: string) =>
-          prl.captureCurrentProviderBody(url, h, s, log);
-        const clientProfile = applyAntigravityClientProfileHeaders(
-          finalHeaders,
+          transformedBody,
           credentials,
-          transformedBody
-        );
-
-        log?.debug?.(
-          "TELEMETRY",
-          `[Antigravity] Execute - URL: ${url}, Model: ${model}, Target: ${getRequestTargetModel(transformedBody)}, RetryAttempt: ${retryAttemptsByUrl[urlIndex]}`
-        );
-
-        // Dump outgoing headers (mask Authorization) and envelope shape for debugging
-        if (log?.debug) {
-          const safeHeaders = { ...finalHeaders };
-          if (safeHeaders["Authorization"]) safeHeaders["Authorization"] = "Bearer ***";
-          log.debug("AG_REQUEST_HEADERS", JSON.stringify(safeHeaders));
-
-          const envelope = transformedBody as Record<string, unknown>;
-          const requestInner = envelope.request as Record<string, unknown> | undefined;
-          log.debug(
-            "AG_REQUEST_ENVELOPE",
-            JSON.stringify({
-              fieldOrder: Object.keys(envelope),
-              project: envelope.project,
-              requestId: envelope.requestId,
-              model: envelope.model,
-              userAgent: envelope.userAgent,
-              requestType: envelope.requestType,
-              enabledCreditTypes: envelope.enabledCreditTypes,
-              clientProfile,
-              sessionId: requestInner?.sessionId,
-              generationConfig: requestInner?.generationConfig,
-            })
-          );
-        }
-
-        await capture(finalHeaders, serializedRequest.bodyString);
-        let response = await fetchWithReadinessTimeout(url, {
-          method: "POST",
-          headers: finalHeaders,
-          body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-          ...(stream ? { duplex: "half" } : {}),
+          stream,
           signal,
+          log: l,
+          accountId,
+          creditsMode,
+          creditsRetryState,
+          urlIndex,
+          retryAttemptsByUrl,
+          fallbackCount,
+          physicalSendCounter,
+          correlationId,
+          rateLimitBudget,
         });
 
-        if (response.status === HTTP_STATUS.FORBIDDEN && finalHeaders["x-goog-user-project"]) {
-          const retryHeaders = { ...finalHeaders };
-          removeHeaderCaseInsensitive(retryHeaders, "x-goog-user-project");
-          log?.debug?.("RETRY", "403 with x-goog-user-project, retrying once without it");
-          await capture(retryHeaders, serializedRequest.bodyString);
-          response = await fetchWithReadinessTimeout(url, {
-            method: "POST",
-            headers: retryHeaders,
-            body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-            ...(stream ? { duplex: "half" } : {}),
-            signal,
-          });
-          finalHeaders = retryHeaders;
-        }
-
-        if (!response.ok) {
-          log?.warn?.(
-            "TELEMETRY",
-            `[Antigravity] Error Response - URL: ${url}, Status: ${response.status}, Model: ${model}`
-          );
-          if (response.status === HTTP_STATUS.NOT_FOUND && credentials.connectionId) {
-            // The backend may have shipped/renamed models the synced catalog does not
-            // know yet (pinned-catalog staleness). Kick a discovery sync for this
-            // connection so the fresh list lands in the synced catalog and the next
-            // request can resolve. Cooldown + in-flight dedup live in the trigger.
-            maybeTriggerReactiveModelSync(this.provider, credentials.connectionId);
-          }
-        }
-
-        // Parse retry time for 429/503 responses
-        let retryMs: number | null = null;
-        let budget429Spent = false;
-
-        if (
-          response.status === HTTP_STATUS.RATE_LIMITED ||
-          response.status === HTTP_STATUS.SERVICE_UNAVAILABLE
-        ) {
-          if (response.status === HTTP_STATUS.RATE_LIMITED) {
-            upstream429Count += 1;
-            budget429Spent = upstream429Count >= max429Attempts;
-          }
-          // Try to get retry time from headers first
-          retryMs = this.parseRetryHeaders(response.headers);
-          // What Google itself stated, before decide429 fills in its defaults.
-          let upstreamRetryHintMs: number | null = retryMs;
-
-          // If no retry time in headers, try to parse from error message body
-          if (!retryMs) {
-            try {
-              const errorBody = await response.clone().text();
-              const errorJson = JSON.parse(errorBody);
-              let errorMessage = errorJson?.error?.message || errorJson?.message || "";
-              if (errorJson?.error?.details && Array.isArray(errorJson.error.details)) {
-                for (const detail of errorJson.error.details) {
-                  if (detail?.reason) {
-                    errorMessage += ` ${detail.reason}`;
-                  }
-                }
-              }
-
-              // 1. Try to parse explicit retry time from message
-              const parsedRetryMs = this.parseRetryFromErrorMessage(errorMessage);
-              upstreamRetryHintMs = parsedRetryMs ?? null;
-
-              // 2. Classify 429 (pass header-parsed retry hint as fallback
-              //    signal — multi-hour Retry-After upgrades rate_limited to
-              //    quota_exhausted so the GOOGLE_ONE_AI credits retry fires).
-              const effectiveRetryHintMs = retryMs ?? parsedRetryMs ?? null;
-              const category = classify429(errorMessage);
-
-              // 3. Decide final retry time BEFORE the credits retry so that
-              //    full_quota_exhausted can skip the credits attempt entirely
-              //    (avoids ~41s hold on an already-exhausted account) and
-              //    persist the cooldown to DB for post-restart routing.
-              const decision: Decision = decide429(category, parsedRetryMs);
-              retryMs = decision.retryAfterMs;
-              log?.debug?.(
-                "AG_429",
-                `Category: ${category}, Decision: ${decision.kind} — ${decision.reason}`
-              );
-
-              if (decision.kind === "full_quota_exhausted" && retryMs) {
-                markConnectionQuotaExhausted(accountId, retryMs);
-              }
-
-              const creditsAlreadyInjected =
-                (transformedBody as { enabledCreditTypes?: unknown }).enabledCreditTypes != null;
-
-              if (category === "quota_exhausted" && creditsAlreadyInjected) {
-                handleCreditsFailure(credentials?.accessToken || "");
-                log?.warn?.("AG_CREDITS", "Credits-first request 429'd — credits likely exhausted");
-                markCreditsExhausted(accountId);
-              }
-
-              if (
-                category === "quota_exhausted" &&
-                decision.kind !== "full_quota_exhausted" &&
-                !creditsAlreadyInjected &&
-                shouldRetryWithCredits(credentials?.accessToken || "", creditsMode !== "off")
-              ) {
-                log?.info?.("AG_CREDITS", "Retrying with Google One AI credits");
-                const creditsBody = injectCreditsField(transformedBody);
-                const serializedCreditsRequest = serializeAntigravityRequest(
-                  this.provider,
-                  headers,
-                  creditsBody
-                );
-                const finalCreditsHeaders = serializedCreditsRequest.headers;
-                try {
-                  await capture(finalCreditsHeaders, serializedCreditsRequest.bodyString);
-                  const creditsResp = await fetchWithReadinessTimeout(url, {
-                    method: "POST",
-                    headers: finalCreditsHeaders,
-                    body: getChunkedOrFixedBody(serializedCreditsRequest.bodyString, stream),
-                    ...(stream ? { duplex: "half" } : {}),
-                    signal,
-                  });
-                  if (creditsResp.ok || creditsResp.status !== HTTP_STATUS.RATE_LIMITED) {
-                    log?.info?.("AG_CREDITS", `Credits retry succeeded: ${creditsResp.status}`);
-                    if (!stream) {
-                      const collected = await this.collectStreamToResponse(
-                        creditsResp,
-                        model,
-                        url,
-                        finalCreditsHeaders,
-                        creditsBody,
-                        log,
-                        signal
-                      );
-                      // Parse _remainingCredits from the synthetic response and cache
-                      try {
-                        const syntheticJson = await collected.response.clone().json();
-                        const rc = syntheticJson?._remainingCredits;
-                        if (Array.isArray(rc)) {
-                          const googleCredit = rc.find((c) => c.creditType === "GOOGLE_ONE_AI");
-                          if (googleCredit) {
-                            const balance = parseInt(googleCredit.creditAmount, 10);
-                            if (!isNaN(balance))
-                              updateAntigravityRemainingCredits(accountId, balance);
-                          }
-                        }
-                      } catch {
-                        /**/
-                      }
-                      return {
-                        ...collected,
-                        transformedBody: attachToolNameMap(creditsBody, requestToolNameMap),
-                      };
-                    }
-                    return {
-                      response: creditsResp,
-                      url,
-                      headers: finalCreditsHeaders,
-                      transformedBody: attachToolNameMap(creditsBody, requestToolNameMap),
-                    };
-                  }
-
-                  // Credit retry also 429'd
-                  handleCreditsFailure(credentials?.accessToken || "");
-                  log?.warn?.("AG_CREDITS", "Credits retry also 429'd");
-
-                  // Also mark in our legacy exhaustion map to avoid retrying other routes
-                  markCreditsExhausted(accountId);
-                } catch (creditsErr) {
-                  handleCreditsFailure(credentials?.accessToken || "");
-                  log?.warn?.("AG_CREDITS", `Credits retry failed: ${creditsErr}`);
-                }
-              }
-            } catch (e) {
-              // Ignore parse errors, will fall back to exponential backoff
-            }
-          }
-
-          if (budget429Spent && requestFingerprint) {
-            const refusal = rememberAntigravity429Refusal(requestFingerprint, upstreamRetryHintMs);
-            log?.warn?.(
-              "AG_429_BUDGET",
-              `${upstream429Count} upstream 429s for this request (budget ${max429Attempts}) — returning it; identical re-sends are answered locally for ${Math.ceil(refusal.blockMs / 1000)}s`
-            );
-          }
-
-          // Bounded short-retry: a non-null retryAfterMs ≤ 60s covers nearly every
-          // 429 (decide429 returns 2s/5s/60s defaults), so this branch MUST share the
-          // per-URL attempt counter. Without the bound a persistent 429 loops forever
-          // on the same endpoint/account (urlIndex-- cancels the loop's urlIndex++) and
-          // never returns the 429 to the account-fallback layer in chat.ts.
-          if (
-            !budget429Spent &&
-            retryMs &&
-            retryMs <= LONG_RETRY_THRESHOLD_MS &&
-            retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
-          ) {
-            retryAttemptsByUrl[urlIndex]++;
-            const effectiveRetryMs = Math.min(retryMs, MAX_RETRY_AFTER_MS);
-            log?.debug?.(
-              "RETRY",
-              `${response.status} retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} with Retry-After: ${Math.ceil(effectiveRetryMs / 1000)}s, waiting...`
-            );
-            await new Promise((resolve) => setTimeout(resolve, effectiveRetryMs));
-            urlIndex--;
-            continue;
-          }
-
-          // Auto retry for 429 (no Retry-After) or transient 5xx errors.
-          // For 5xx we read the body to detect known transient patterns
-          // ("Agent execution terminated due to error", "high traffic", "capacity").
-          if (
-            !budget429Spent &&
-            (!retryMs || retryMs === 0) &&
-            retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
-          ) {
-            let shouldAutoRetry = response.status === HTTP_STATUS.RATE_LIMITED;
-            if (!shouldAutoRetry && ANTIGRAVITY_TRANSIENT_STATUSES.has(response.status)) {
-              try {
-                const errBody = await response.clone().text();
-                let errJson: unknown = null;
-                try {
-                  errJson = errBody ? JSON.parse(errBody) : null;
-                } catch {
-                  // non-JSON body — fall through to pattern match against raw text
-                }
-                const errMsg = this.extractErrorMessage(errJson, errBody);
-                shouldAutoRetry = this.isTransientAntigravityError(response.status, errMsg);
-              } catch {
-                // ignore body read errors
-              }
-            }
-            if (shouldAutoRetry) {
-              retryAttemptsByUrl[urlIndex]++;
-              // Exponential backoff: 2s, 4s, 8s… capped per-status
-              const cap =
-                response.status === HTTP_STATUS.RATE_LIMITED
-                  ? MAX_RETRY_AFTER_MS
-                  : ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS;
-              const backoffMs = Math.min(1000 * 2 ** retryAttemptsByUrl[urlIndex], cap);
-              log?.debug?.(
-                "RETRY",
-                `${response.status} transient auto retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} after ${backoffMs / 1000}s`
-              );
-              await new Promise((resolve) => setTimeout(resolve, backoffMs));
-              urlIndex--;
-              continue;
-            }
-          }
-
-          log?.debug?.(
-            "RETRY",
-            `${response.status}, Retry-After ${retryMs ? `too long (${Math.ceil(retryMs / 1000)}s)` : "missing"}, trying fallback`
-          );
-          lastStatus = response.status;
-
-          if (!budget429Spent && urlIndex + 1 < fallbackCount) {
-            continue;
-          }
-        }
-
-        if (!budget429Spent && this.shouldRetry(response.status, urlIndex)) {
-          log?.debug?.("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
-          lastStatus = response.status;
-          continue;
-        }
-
-        // If we have a 429 with long retry time, embed it in response body
-        if (
-          response.status === HTTP_STATUS.RATE_LIMITED &&
-          retryMs &&
-          retryMs > LONG_RETRY_THRESHOLD_MS
-        ) {
-          try {
-            const respBody = await response.clone().text();
-            let obj;
-            try {
-              obj = JSON.parse(respBody);
-            } catch {
-              obj = {};
-            }
-            obj.retryAfterMs = retryMs;
-            const modifiedBody = JSON.stringify(obj);
-            const modifiedResponse = new Response(modifiedBody, {
-              status: response.status,
-              headers: response.headers,
-            });
-            return {
-              response: modifiedResponse,
-              url,
-              headers: finalHeaders,
-              transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
-            };
-          } catch (err) {
-            log?.warn?.("RETRY", `Failed to embed retryAfterMs: ${err}`);
-            // Fall back to original response
-          }
-        }
-
-        // For non-streaming clients, collect the SSE stream and return a synthetic
-        // non-streaming Response so chatCore doesn't need to handle SSE conversion.
-        if (!stream) {
-          // #3229: surface a real upstream error instead of masking a 4xx/5xx as an
-          // empty `chat.completion` envelope (collectStreamToResponse synthesizes a
-          // success-shaped body when the upstream returned no SSE data).
-          if (!response.ok) {
-            const rawBody = await response
-              .clone()
-              .text()
-              .catch(() => "");
-            const errorBody = buildAntigravityUpstreamError(
-              response.status,
-              response.statusText,
-              rawBody
-            );
-            return {
-              response: new Response(JSON.stringify(errorBody), {
-                status: response.status,
-                headers: { "Content-Type": "application/json" },
-              }),
-              url,
-              headers: finalHeaders,
-              transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
-            };
-          }
-          const collected = await this.collectStreamToResponse(
-            response,
-            model,
-            url,
-            finalHeaders,
-            transformedBody,
-            log,
-            signal
-          );
-          // When credits were injected (credits-first or credits-retry), the
-          // synthetic body contains _remainingCredits — mirror it into the
-          // balance cache so the dashboard stays fresh.
-          try {
-            const syntheticJson = await collected.response.clone().json();
-            const rc = syntheticJson?._remainingCredits;
-            if (Array.isArray(rc)) {
-              const googleCredit = rc.find(
-                (c: { creditType?: string }) => c?.creditType === "GOOGLE_ONE_AI"
-              );
-              if (googleCredit) {
-                const balance = parseInt(googleCredit.creditAmount, 10);
-                if (!isNaN(balance)) updateAntigravityRemainingCredits(accountId, balance);
-              }
-            }
-          } catch {
-            /* balance cache is best-effort */
-          }
-          return {
-            ...collected,
-            transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
-          };
-        }
-
-        // Streaming path: wrap the response body in a pass-through TransformStream
-        // that extracts remainingCredits from the final SSE chunk(s) without
-        // consuming the stream. The client receives the unmodified SSE data.
-        if (response.body) {
-          // If the downstream client aborts, cancel the upstream fetch body immediately
-          // to release the socket back to the Undici agent pool and prevent memory leaks.
-          if (signal) {
-            const abortHandler = () => {
-              try {
-                response.body?.cancel().catch(() => {});
-              } catch (_) {}
-            };
-            if (signal.aborted) {
-              abortHandler();
-            } else {
-              signal.addEventListener("abort", abortHandler, { once: true });
-            }
-          }
-
-          let sseBuffer = "";
-          const decoder = new TextDecoder(); // Singleton for correct streaming decode
-          const MAX_BUFFER_SIZE = 16 * 1024; // Limit to prevent OOM on large streams
-
-          const passThrough = new TransformStream(
-            {
-              transform(chunk, controller) {
-                controller.enqueue(chunk);
-                // Accumulate text to scan for remainingCredits
-                try {
-                  const text = decoder.decode(chunk, { stream: true });
-                  sseBuffer += text;
-                  // Limit buffer size to prevent unbounded growth
-                  // Truncate only after a complete newline to avoid splitting SSE lines mid-payload
-                  if (sseBuffer.length > MAX_BUFFER_SIZE) {
-                    const lastNewline = sseBuffer.lastIndexOf(
-                      "\n",
-                      sseBuffer.length - MAX_BUFFER_SIZE
-                    );
-                    if (lastNewline !== -1) {
-                      sseBuffer = sseBuffer.slice(lastNewline + 1);
-                    } else {
-                      // No newline found in discard region — buffer contains an incomplete SSE line.
-                      // Discard it entirely to avoid returning malformed data; the remainingCredits
-                      // parser won't find valid data in a truncated line anyway.
-                      sseBuffer = "";
-                    }
-                  }
-                } catch {
-                  /* decoding best-effort */
-                }
-              },
-              flush() {
-                // Final decode for any remaining bytes
-                try {
-                  const text = decoder.decode(); // Flush pending bytes
-                  sseBuffer += text;
-                } catch {
-                  /* decoding best-effort */
-                }
-
-                // Parse the accumulated SSE data for remainingCredits
-                try {
-                  const lines = sseBuffer.split("\n");
-                  for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed.startsWith("data:")) continue;
-                    const payload = trimmed.slice(5).trim();
-                    if (!payload || payload === "[DONE]") continue;
-                    try {
-                      const parsed = JSON.parse(payload);
-                      if (Array.isArray(parsed?.remainingCredits)) {
-                        const googleCredit = parsed.remainingCredits.find((c: unknown) => {
-                          const credit = asRecord(c);
-                          return credit?.creditType === "GOOGLE_ONE_AI";
-                        }) as AntigravityCreditEntry | undefined;
-                        if (googleCredit) {
-                          const balance = parseInt(String(googleCredit.creditAmount ?? ""), 10);
-                          if (!isNaN(balance)) {
-                            updateAntigravityRemainingCredits(accountId, balance);
-                          }
-                        }
-                      }
-                    } catch {
-                      /* skip malformed lines */
-                    }
-                  }
-                } catch {
-                  /* credits extraction is best-effort */
-                }
-                sseBuffer = "";
-              },
-            },
-            { highWaterMark: 16384 },
-            { highWaterMark: 16384 }
-          );
-          const tappedBody = response.body.pipeThrough(passThrough);
-          const tappedResponse = new Response(tappedBody, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-          });
-          return {
-            response: tappedResponse,
-            url,
-            headers: finalHeaders,
-            transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
-          };
-        }
-
-        return {
-          response,
-          url,
-          headers: finalHeaders,
-          transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
-        };
+        if (outcome.action === "return") return outcome.result;
+        if (outcome.lastStatus !== undefined) lastStatus = outcome.lastStatus;
+        if (outcome.sameUrl) urlIndex--;
+        continue;
       } catch (error) {
+        if (signal?.aborted || isAbortError(error)) {
+          throw signal?.reason ?? error;
+        }
         lastError = error;
-        log?.error?.(
+        // A fetch failure on a URL that still has a fallback is a retry, not a
+        // failed request: the loop continues and the client gets the next
+        // URL's answer. Logging it at error floods the error stream with
+        // requests that succeeded. Only the last URL, which is rethrown below,
+        // is a real failure. Node hides the socket reason (ECONNRESET and
+        // friends) on error.cause, so surface that code instead of the bare
+        // "fetch failed".
+        const cause =
+          error instanceof Error && error.cause instanceof Error
+            ? (error.cause as NodeJS.ErrnoException).code || error.cause.message
+            : "";
+        const detail = `${error instanceof Error ? error.message : String(error)}${cause ? ` (cause: ${cause})` : ""}`;
+        const hasFallback = urlIndex + 1 < this.getFallbackCount();
+        l[hasFallback ? "warn" : "error"](
           "TELEMETRY",
-          `[Antigravity] Network/Fetch Error - URL: ${url}, Model: ${model}, Error: ${error instanceof Error ? error.message : String(error)}`
+          `[Antigravity] Network/Fetch Error - URL: ${url}, Model: ${model}, Error: ${detail}`
         );
-        if (urlIndex + 1 < fallbackCount) {
-          log?.debug?.("RETRY", `Error on ${url}, trying fallback ${urlIndex + 1}`);
+        if (hasFallback) {
+          l.debug("RETRY", `Error on ${url}, trying fallback ${urlIndex + 1}`);
           continue;
         }
         throw error;
@@ -1802,6 +1530,371 @@ export class AntigravityExecutor extends BaseExecutor {
     }
 
     throw lastError || new Error(`All ${fallbackCount} URLs failed with status ${lastStatus}`);
+  }
+
+  /**
+   * Run one full per-url-index attempt: send the request, handle a 429/503 (retry
+   * same/next url, or a Google One AI credits retry), fall back on other retryable
+   * statuses, optionally embed a long Retry-After, then build the final non-streaming
+   * or streaming result. Returns a result to hand back from execute(), or a retry
+   * instruction for executeOnce()'s loop to act on (continue, optionally urlIndex--).
+   */
+  private async runAntigravityAttempt(
+    ctx: AntigravityAttemptContext
+  ): Promise<AntigravityAttemptOutcome> {
+    const {
+      url,
+      model,
+      headers,
+      transformedBody,
+      credentials,
+      stream,
+      signal,
+      log,
+      accountId,
+      urlIndex,
+      retryAttemptsByUrl,
+      physicalSendCounter,
+      correlationId,
+      rateLimitBudget,
+    } = ctx;
+
+    const { response, finalHeaders } = await sendAntigravityRequest(
+      this.provider,
+      url,
+      model,
+      headers,
+      transformedBody,
+      credentials,
+      stream,
+      signal,
+      log,
+      retryAttemptsByUrl[urlIndex],
+      physicalSendCounter,
+      correlationId
+    );
+
+    let retryMs: number | null = null;
+    let budget429Spent = false;
+
+    if (
+      response.status === HTTP_STATUS.RATE_LIMITED ||
+      response.status === HTTP_STATUS.SERVICE_UNAVAILABLE
+    ) {
+      if (response.status === HTTP_STATUS.RATE_LIMITED) {
+        rateLimitBudget.count += 1;
+        budget429Spent = rateLimitBudget.count >= rateLimitBudget.max;
+      }
+      const rateLimitOutcome = await this.handleAntigravityRateLimit({
+        ...ctx,
+        response,
+        finalHeaders,
+        budget429Spent,
+      });
+
+      if (rateLimitOutcome.action === "return") {
+        return { action: "return", result: rateLimitOutcome.result };
+      }
+      if (rateLimitOutcome.action === "retrySameUrl") return { action: "retry", sameUrl: true };
+      if (rateLimitOutcome.action === "retryNextUrl") {
+        return { action: "retry", sameUrl: false, lastStatus: rateLimitOutcome.lastStatus };
+      }
+      // Only "fallthrough" remains: last url, no more retries — proceed below with
+      // the resolved retryMs so a long Retry-After can still be embedded in the body.
+      retryMs = rateLimitOutcome.retryMs;
+    }
+
+    if (!budget429Spent && this.shouldRetry(response.status, urlIndex)) {
+      log.debug("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
+      return { action: "retry", sameUrl: false, lastStatus: response.status };
+    }
+
+    // If we have a 429 with long retry time, embed it in response body
+    const embedded = await tryEmbedLongRetryAfter(
+      response,
+      retryMs,
+      url,
+      finalHeaders,
+      transformedBody,
+      log
+    );
+    if (embedded) return { action: "return", result: embedded };
+
+    const result = await this.buildAntigravityAttemptResult(
+      model,
+      stream,
+      response,
+      url,
+      finalHeaders,
+      transformedBody,
+      accountId,
+      signal,
+      log
+    );
+    return { action: "return", result };
+  }
+
+  /**
+   * #3786 — Non-streaming callers (stream: false) keep the buffered
+   * collect-to-JSON contract: `execute()` (including the Pro-family
+   * fallback-chain retry loop) inspects `result.response` directly and
+   * expects a synthesized `chat.completion` JSON body, not a raw SSE
+   * pass-through. Passthrough is reserved for actual streaming clients
+   * (buildFinalAntigravityResult's stream:true branch), where the client
+   * itself drains the SSE bytes — collectStreamToResponse already uses
+   * FETCH_TIMEOUT_MS (no hardcoded 120s ceiling), so long-thinking models
+   * are not penalized by buffering here.
+   */
+  private async buildAntigravityAttemptResult(
+    model: string,
+    stream: boolean,
+    response: Response,
+    url: string,
+    finalHeaders: Record<string, string>,
+    transformedBody: Record<string, unknown>,
+    accountId: string,
+    signal: AbortSignal | null | undefined,
+    log: SafeAntigravityLog
+  ): Promise<SsePassthroughResult> {
+    if (!stream && response.ok && response.body) {
+      return this.collectStreamToResponse(
+        response,
+        model,
+        url,
+        finalHeaders,
+        transformedBody,
+        log,
+        signal
+      );
+    }
+
+    return buildFinalAntigravityResult(
+      stream,
+      response,
+      url,
+      finalHeaders,
+      transformedBody,
+      accountId,
+      signal,
+      updateAntigravityRemainingCredits
+    );
+  }
+
+  /**
+   * Handle a 429/503 response for one URL-index attempt: resolve the retry-after
+   * time (headers, then error-body classification + Google-One-AI credits retry),
+   * then decide whether to retry the SAME url, fall back to the NEXT url, or (on
+   * the last url with no more retries left) fall through with the resolved retryMs
+   * so the caller can still embed a long Retry-After in the final response body.
+   */
+  async handleAntigravityRateLimit(
+    ctx: AntigravityRateLimitContext
+  ): Promise<AntigravityRateLimitOutcome> {
+    const { response, log, urlIndex, retryAttemptsByUrl, fallbackCount, budget429Spent } = ctx;
+    const { rateLimitBudget } = ctx;
+
+    // Try to get retry time from headers first
+    let retryMs: number | null = this.parseRetryHeaders(response.headers);
+    // What Google itself stated, before decide429 fills in its defaults.
+    let upstreamRetryHintMs: number | null = retryMs;
+
+    // If no retry time in headers, try to parse from error message body
+    let switchAuth = false;
+    if (!retryMs) {
+      const resolved = await this.tryResolveRetryFromErrorBody(ctx);
+      if (resolved.kind === "return") return { action: "return", result: resolved.result };
+      retryMs = resolved.retryMs;
+      switchAuth = resolved.switchAuth;
+      upstreamRetryHintMs = resolved.upstreamRetryHintMs;
+    }
+
+    if (budget429Spent) {
+      if (rateLimitBudget.fingerprint) {
+        const refusal = rememberAntigravity429Refusal(
+          rateLimitBudget.fingerprint,
+          upstreamRetryHintMs
+        );
+        log.warn(
+          "AG_429_BUDGET",
+          `${rateLimitBudget.count} upstream 429s for this request (budget ${rateLimitBudget.max}) — returning it; identical re-sends are answered locally for ${Math.ceil(refusal.blockMs / 1000)}s`
+        );
+      }
+      // No same-host retry, no next host: the 429 goes back to the caller.
+      return { action: "fallthrough", retryMs, lastStatus: response.status };
+    }
+
+    // Bounded short-retry: a non-null retryAfterMs ≤ 60s covers nearly every
+    // 429 (decide429 returns 2s/5s/60s defaults), so this branch MUST share the
+    // per-URL attempt counter. Without the bound a persistent 429 loops forever
+    // on the same endpoint/account (urlIndex-- cancels the loop's urlIndex++) and
+    // never returns the 429 to the account-fallback layer in chat.ts.
+    if (
+      retryMs &&
+      retryMs <= LONG_RETRY_THRESHOLD_MS &&
+      !switchAuth &&
+      retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
+    ) {
+      retryAttemptsByUrl[urlIndex]++;
+      const effectiveRetryMs = Math.min(retryMs, MAX_RETRY_AFTER_MS);
+      log.debug(
+        "RETRY",
+        `${response.status} retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} with Retry-After: ${Math.ceil(effectiveRetryMs / 1000)}s, waiting...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, effectiveRetryMs));
+      return { action: "retrySameUrl" };
+    }
+
+    // Auto retry for 429 (no Retry-After) or transient 5xx errors.
+    // For 5xx we read the body to detect known transient patterns
+    // ("Agent execution terminated due to error", "high traffic", "capacity").
+    if ((!retryMs || retryMs === 0) && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
+      const shouldAutoRetry = await this.shouldAutoRetryTransient(response);
+      if (shouldAutoRetry) {
+        retryAttemptsByUrl[urlIndex]++;
+        // Exponential backoff: 2s, 4s, 8s… capped per-status
+        const cap =
+          response.status === HTTP_STATUS.RATE_LIMITED
+            ? MAX_RETRY_AFTER_MS
+            : ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS;
+        const backoffMs = Math.min(1000 * 2 ** retryAttemptsByUrl[urlIndex], cap);
+        log.debug(
+          "RETRY",
+          `${response.status} transient auto retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} after ${backoffMs / 1000}s`
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        return { action: "retrySameUrl" };
+      }
+    }
+
+    log.debug(
+      "RETRY",
+      `${response.status}, Retry-After ${retryMs ? `too long (${Math.ceil(retryMs / 1000)}s)` : "missing"}, trying fallback`
+    );
+
+    if (urlIndex + 1 < fallbackCount) {
+      return { action: "retryNextUrl", lastStatus: response.status };
+    }
+
+    return { action: "fallthrough", retryMs, lastStatus: response.status };
+  }
+
+  /**
+   * Parse the 429/503 response body to classify the failure and (for
+   * quota_exhausted, non-full-exhaustion cases) attempt a Google One AI
+   * credits retry. Returns the resolved retryMs, or an early "return" result
+   * when the credits retry itself produced a response to hand back to the client.
+   */
+  private async tryResolveRetryFromErrorBody(ctx: AntigravityRateLimitContext): Promise<
+    | { kind: "return"; result: SsePassthroughResult }
+    | {
+        kind: "resolved";
+        retryMs: number | null;
+        switchAuth: boolean;
+        /** Retry hint parsed from the body, before decide429 applied its defaults. */
+        upstreamRetryHintMs: number | null;
+      }
+  > {
+    const {
+      response,
+      url,
+      headers,
+      transformedBody,
+      credentials,
+      stream,
+      signal,
+      log,
+      accountId,
+      creditsMode,
+      creditsRetryState,
+    } = ctx;
+
+    try {
+      const errorBody = await response.clone().text();
+      const errorJson = JSON.parse(errorBody);
+      const errorMessage = buildAntigravity429ErrorMessage(errorJson);
+
+      // 1. Try to parse explicit retry time from message
+      const bodyRetryHint = resolveAntigravityBodyRetryHint(errorBody, errorMessage);
+      const parsedRetryMs = bodyRetryHint?.retryMs ?? null;
+
+      // 2. Classify 429, then decide the final retry time BEFORE the credits retry so
+      //    full_quota_exhausted can skip the credits attempt entirely (avoids ~41s hold
+      //    on an already-exhausted account) and locks only this exact model.
+      const category = classify429(errorMessage);
+      const decision: Decision = decide429(category, parsedRetryMs);
+      const retryMs = decision.retryAfterMs;
+      log.debug("AG_429", `Category: ${category}, Decision: ${decision.kind} — ${decision.reason}`);
+
+      const creditsAlreadyInjected =
+        (transformedBody as { enabledCreditTypes?: unknown }).enabledCreditTypes != null;
+      const creditsRetryEligible =
+        category === "quota_exhausted" &&
+        !creditsAlreadyInjected &&
+        !creditsRetryState.attempted &&
+        shouldRetryWithCredits(credentials?.accessToken || "", creditsMode);
+
+      if (category === "quota_exhausted" && creditsAlreadyInjected) {
+        handleCreditsFailure(credentials?.accessToken || "");
+        log.warn("AG_CREDITS", "Credits-first request 429'd — credits likely exhausted");
+        markCreditsExhausted(accountId);
+      }
+
+      if (creditsRetryEligible) {
+        creditsRetryState.attempted = true;
+        const creditsResult = await tryCreditsRetry(
+          this.provider,
+          url,
+          headers,
+          transformedBody,
+          credentials,
+          stream,
+          signal,
+          log,
+          accountId,
+          updateAntigravityRemainingCredits,
+          ctx.physicalSendCounter,
+          ctx.correlationId
+        );
+        if (creditsResult) return { kind: "return", result: creditsResult };
+        if (retryMs) markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
+      }
+
+      return {
+        kind: "resolved",
+        retryMs,
+        switchAuth: decision.kind === "short_cooldown_switch_auth",
+        upstreamRetryHintMs: parsedRetryMs,
+      };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) {
+        throw signal?.reason ?? error;
+      }
+      // Ignore parse errors, will fall back to exponential backoff
+      return { kind: "resolved", retryMs: null, switchAuth: false, upstreamRetryHintMs: null };
+    }
+  }
+
+  /**
+   * True for 429 always; for transient 5xx (500/502/503/504) only when the body
+   * matches a known capacity/traffic/agent-terminated pattern.
+   */
+  private async shouldAutoRetryTransient(response: Response): Promise<boolean> {
+    if (response.status === HTTP_STATUS.RATE_LIMITED) return true;
+    if (!ANTIGRAVITY_TRANSIENT_STATUSES.has(response.status)) return false;
+    try {
+      const errBody = await response.clone().text();
+      let errJson: unknown = null;
+      try {
+        errJson = errBody ? JSON.parse(errBody) : null;
+      } catch {
+        // non-JSON body — fall through to pattern match against raw text
+      }
+      const errMsg = this.extractErrorMessage(errJson, errBody);
+      return this.isTransientAntigravityError(response.status, errMsg);
+    } catch {
+      // ignore body read errors
+      return false;
+    }
   }
 }
 

@@ -4,8 +4,10 @@ import Database from "better-sqlite3";
 
 import {
   LONG_CONTEXT_PROMPT_THRESHOLD_TOKENS,
+  LONG_CONTEXT_SQL_THRESHOLDS,
   computeCostFromPricing,
   isLongContextPrompt,
+  longContextTierKey,
 } from "../../src/lib/usage/costCalculator.ts";
 import {
   longContextSumColumns,
@@ -62,8 +64,7 @@ test("the whole long request is repriced — input, output, cache read and cache
     30_000 * 0.5e-6 + // non-cached input
     100_000 * 0.05e-6 + // cache read
     20_000 * 0.625e-6 + // cache write
-    4_000 * 2.5e-6 + // output
-    1_000 * 2.5e-6; // reasoning
+    4_000 * 2.5e-6; // output — reasoning (1K) is inside it and the tier has no premium (#15496)
   near(computeCostFromPricing(TIERED, request, { requestScoped: true }), expected);
 });
 
@@ -168,14 +169,53 @@ test("Haiku 5.5 carries the tier in both catalogs and resolves it exactly", () =
   }
 });
 
-test("only Haiku 5.5 carries a long_context block", () => {
+test("every default long_context tier can be split per request by the grouped SQL", () => {
+  // Grouped cost paths (key spend, analytics) only bill a tier whose threshold has a
+  // per-request SQL bucket; any other threshold would silently fall back to base rates.
+  const bucketed = new Set(LONG_CONTEXT_SQL_THRESHOLDS.map(longContextTierKey));
   const withTier: string[] = [];
   for (const [provider, models] of Object.entries(getDefaultPricing())) {
     for (const [model, row] of Object.entries(models as Record<string, Record<string, unknown>>)) {
-      if (row.long_context) withTier.push(`${provider}/${model}`);
+      const tier = row.long_context as Record<string, unknown> | undefined;
+      if (!tier) continue;
+      withTier.push(`${provider}/${model}`);
+      const key =
+        typeof tier.threshold === "number"
+          ? longContextTierKey({ threshold: tier.threshold, inclusive: tier.inclusive === true })
+          : longContextTierKey(LONG_CONTEXT_SQL_THRESHOLDS[0]);
+      assert.ok(bucketed.has(key), `${provider}/${model}: threshold ${key} has no SQL bucket`);
     }
   }
-  assert.deepEqual(withTier.sort(), ["anthropic/claude-haiku-5-5", "cc/claude-haiku-5-5"]);
+  // Haiku 5.5 keeps the fork's rates-only block (published 100K threshold).
+  for (const id of ["anthropic/claude-haiku-5-5", "cc/claude-haiku-5-5"]) {
+    assert.ok(withTier.includes(id), id);
+  }
+});
+
+test("a grouped bucket uses the split for the row's own threshold, never the default one", () => {
+  const openAiLike = {
+    input: 2.5,
+    output: 15,
+    long_context: { threshold: 272_000, input: 5, output: 22.5 },
+  };
+  // Two requests: 150K (over 100K, under 272K) and 300K (over both).
+  const tokens = {
+    input: 450_000,
+    output: 2_000,
+    lcInput: 450_000, // default (100K) bucket: both requests
+    lcOutput: 2_000,
+    lcTiers: { "272000": { lcInput: 300_000, lcOutput: 1_000 } },
+  };
+  const perRequest =
+    computeCostFromPricing(openAiLike, { input: 150_000, output: 1_000 }, { requestScoped: true }) +
+    computeCostFromPricing(openAiLike, { input: 300_000, output: 1_000 }, { requestScoped: true });
+  near(computeCostFromPricing(openAiLike, tokens), perRequest, "272K split");
+  // Without the matching split the bucket bills at base — never at a tier decided on sums.
+  near(
+    computeCostFromPricing(openAiLike, { input: 450_000, output: 2_000, lcInput: 450_000 }),
+    450_000 * 2.5e-6 + 2_000 * 15e-6,
+    "no 272K split"
+  );
 });
 
 test("the pricing editor can post a row that carries the tier back", () => {
@@ -236,4 +276,67 @@ test("SQL buckets split per request exactly like the per-request pricing", () =>
     ) + computeCostFromPricing(TIERED, { output: 50 }, { requestScoped: true });
   near(grouped, perRequest, "SQL buckets reproduce per-request pricing");
   assert.equal(row.lcPromptTokens, T + 1 + 400_000);
+});
+
+test("SQL buckets for an explicit threshold (OpenAI >272K, xAI >=200K) match per-request pricing", () => {
+  const db = new Database(":memory:");
+  db.exec(`CREATE TABLE usage_history (
+    model TEXT, tokens_input INTEGER, tokens_output INTEGER,
+    tokens_cache_read INTEGER, tokens_cache_creation INTEGER, tokens_reasoning INTEGER)`);
+  const insert = db.prepare("INSERT INTO usage_history VALUES (?,?,?,?,?,?)");
+  const requests = [
+    { input: 50_000, output: 500, cacheRead: 0, cacheCreation: 0, reasoning: 0 },
+    { input: 150_000, output: 700, cacheRead: 100_000, cacheCreation: 0, reasoning: 0 },
+    { input: 200_000, output: 800, cacheRead: 0, cacheCreation: 0, reasoning: 0 },
+    { input: 272_000, output: 900, cacheRead: 0, cacheCreation: 0, reasoning: 0 },
+    { input: 300_000, output: 1_000, cacheRead: 200_000, cacheCreation: 0, reasoning: 0 },
+  ];
+  for (const r of requests) {
+    insert.run("m", r.input, r.output, r.cacheRead, r.cacheCreation, r.reasoning);
+  }
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(tokens_input), 0) as promptTokens,
+         COALESCE(SUM(tokens_output), 0) as completionTokens,
+         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
+         COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
+         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+         ${longContextSumColumns()}
+       FROM usage_history GROUP BY model`
+    )
+    .get() as Record<string, number>;
+  const grouped = {
+    input: row.promptTokens,
+    output: row.completionTokens,
+    cacheRead: row.cacheReadTokens,
+    cacheCreation: row.cacheCreationTokens,
+    reasoning: row.reasoningTokens,
+    ...readLongContextColumns(row),
+  };
+  const rows = [
+    {
+      input: 2.5,
+      output: 15,
+      cached: 0.25,
+      long_context: { threshold: 272_000, input: 5, output: 22.5, cached: 0.5 },
+    },
+    {
+      input: 2,
+      output: 6,
+      cached: 0.5,
+      long_context: { threshold: 200_000, inclusive: true, input: 4, output: 12, cached: 1 },
+    },
+  ];
+  for (const pricing of rows) {
+    const perRequest = requests.reduce(
+      (sum, r) => sum + computeCostFromPricing(pricing, r, { requestScoped: true }),
+      0
+    );
+    near(
+      computeCostFromPricing(pricing, grouped),
+      perRequest,
+      JSON.stringify(pricing.long_context)
+    );
+  }
 });

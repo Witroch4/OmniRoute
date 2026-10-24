@@ -42,28 +42,34 @@ export const KNOWN_DUPLICATE_VERSIONS = new Set([
 
 // ---------------------------------------------------------------------------
 // ALLOWLIST 2 — gaps de sequência CONHECIDOS.
-// Fonte: auditoria do disco (src/lib/db/migrations/) — a sequência pula 026 e 055.
-// Estes números nunca tiveram arquivo físico (slots legados que viraram outros
-// números via RENAMED_MIGRATION_COMPATIBILITY em migrationRunner.ts). Congelados
-// para que o gate bloqueie apenas NOVOS buracos inexplicados na sequência.
+// Fonte: auditoria do disco (src/lib/db/migrations/). Além dos slots legados,
+// As migrations Radar 144–145, a migration 143 e a 147 já aterrissaram. O job
+// registry foi promovido de 139 para 146 pela tabela
+// RENAMED_MIGRATION_COMPATIBILITY. A 148 aterrissou nesta branch
+// (148_provider_quota_state.sql) e a 149 aterrissou junto com #10066
+// (149_api_key_combo_access.sql) — nenhuma das duas é mais um gap. O
+// stale-enforcement exige que cada reserva seja removida quando os arquivos
+// correspondentes aterrissarem na release.
+// #15564 landed 197 and 198. 199 (#15314), 200, and 201 (#15354) also exist.
+// None of 197–201 is a gap.
 // ---------------------------------------------------------------------------
-// 123–163: faixa RESERVADA para as migrations do upstream. Em 2026-09-01 (5b4a6ac30c) o
-// fork renumerou as suas sete migrations 123–129 → 164–170 porque o upstream usa 123–129
-// para outras sete (e já ia até 163); RENAMED_MIGRATION_COMPATIBILITY em
-// migrationRunner/constants.ts move o ledger de produção 123→164 … 129→170 no boot. O
-// merge do upstream que preencheria 123–163 ainda não aterrissou no fork, então a faixa
-// fica vazia no disco. NUNCA preencher esses números com migrations do fork nem renumerar
-// 164+ (já aplicadas em produção). O stale-enforcement (6A.3) obriga a remover cada número
-// daqui assim que o arquivo do upstream entrar.
-// ⚠️ Em 2026-10-20 o upstream já estava em 212 e usa 164–172 para migrations diferentes
-// das do fork — o próximo merge do upstream colide de novo em 164–171.
-const UPSTREAM_RESERVED_GAPS = Array.from({ length: 163 - 123 + 1 }, (_, i) =>
-  String(123 + i).padStart(3, "0")
+// 213–899: faixa RESERVADA para as migrations do upstream. As migrations próprias do fork
+// moram num bloco à parte, 900+ (sync com o upstream 3.8.53, 2026-10-24): antes estavam em
+// 123–129 e depois em 164–171, e o upstream reutilizou as duas faixas para outras migrations.
+// RENAMED_MIGRATION_COMPATIBILITY em src/lib/db/migrationRunner/constants.ts move o ledger de
+// produção para 900–907 no boot. NUNCA preencher números < 900 com migrations do fork. O
+// stale-enforcement (6A.3) obriga a subir o início da faixa (UPSTREAM_RESERVED_FROM) assim que o
+// arquivo do upstream entrar em cada número.
+const UPSTREAM_RESERVED_FROM = 213;
+const FORK_BLOCK_START = 900;
+const UPSTREAM_RESERVED_GAPS = Array.from(
+  { length: FORK_BLOCK_START - UPSTREAM_RESERVED_FROM },
+  (_, i) => String(UPSTREAM_RESERVED_FROM + i).padStart(3, "0")
 );
 export const KNOWN_GAPS = new Set([
   "026",
   "055",
-  "121", // número queimado no ciclo v3.8.47 — 122 (#6909) mergeou antes e 121 nunca aterrissou (validação e2e 2026-07-12)
+  "121", // número queimado no ciclo v3.8.47 — 122 (#6909) mergeou antes e 121 nunca aterrissou (validação e2e 2026-07-12); 144/145 aterrissaram na release (radar offers/intel cache), 148/149 aterrissaram (provider_quota_state, api_key_combo_access); 197–201 exist on disk and are not gaps
   ...UPSTREAM_RESERVED_GAPS,
 ]);
 

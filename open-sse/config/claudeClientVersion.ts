@@ -33,28 +33,24 @@
 // answered "Claude Code 2.1.259 does not support this model; version 2.1.280 or
 // newer is required" — third model launch gated on this string. Verified live
 // with CLAUDE_CODE_VERSION=2.1.281: Opus 5.5 and every existing cc/* id answer.
-const DEFAULT_CLAUDE_CODE_VERSION = "2.1.281";
-const CLAUDE_CODE_VERSION_OVERRIDE_ENV = "CLAUDE_CODE_VERSION";
-
-// Deliberately stricter than codexClient's token pattern: the identity guards
-// assert the canonical value matches /^\d+\.\d+\.\d+$/, so an override that is
-// not a plain three-part version would break that invariant at runtime while
-// the test suite kept passing on the default.
-const SAFE_CLAUDE_VERSION_PATTERN = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+//
+// 3.8.53 sync: upstream grew its own single source for the same purpose
+// (`src/shared/constants/claudeCodeClient.ts`, #12417: env override, call-time
+// getters, build revision, npm "latest" cache). Two sources would reintroduce the
+// split fingerprint this module exists to prevent, so this file is now a facade
+// over that one. The fork's contract is kept there: pin = max(fork, upstream),
+// `CLAUDE_CODE_VERSION` still wins (checked before upstream's
+// `CLAUDE_CODE_CLIENT_VERSION`), and both overrides are strict N.N.N.
+import {
+  CLAUDE_CODE_CLIENT_VERSION,
+  getClaudeCodeClientVersion,
+} from "../../src/shared/constants/claudeCodeClient.ts";
 
 /**
  * Canonical impersonated claude-cli version. Every module that advertises a
  * Claude Code identity derives from this so the wire fingerprint cannot drift
  * apart (guarded by tests/unit/claude-identity-version-sync.test.ts).
  */
-export function getClaudeCodeClientVersion(): string {
-  const raw = process.env[CLAUDE_CODE_VERSION_OVERRIDE_ENV];
-  if (typeof raw !== "string") return DEFAULT_CLAUDE_CODE_VERSION;
-  const normalized = raw.trim();
-  if (!normalized || !SAFE_CLAUDE_VERSION_PATTERN.test(normalized)) {
-    return DEFAULT_CLAUDE_CODE_VERSION;
-  }
-  return normalized;
-}
+export { getClaudeCodeClientVersion };
 
-export { DEFAULT_CLAUDE_CODE_VERSION as PINNED_CLAUDE_CODE_VERSION };
+export { CLAUDE_CODE_CLIENT_VERSION as PINNED_CLAUDE_CODE_VERSION };

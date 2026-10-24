@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Card } from "@/shared/components";
+import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Button, Card, Input, Toggle } from "@/shared/components";
+import Icon from "@/shared/components/Icon";
 
 export interface ApiKeyUsageLimitPayload {
   key: {
@@ -47,25 +49,31 @@ function parseUsdInput(value: string): number | null {
 }
 
 /**
- * Exported so other cost-dashboard surfaces (e.g. the Cost Explorer "since
+ * Exported (fork) so other cost-dashboard surfaces (e.g. the Cost Explorer "since
  * reset" range) can render reset countdowns in the same "resets in 6d" style
- * as this card instead of introducing a second format.
+ * as this card instead of introducing a second format. `t` is a
+ * `useTranslations("usageLimits")` translator.
  */
-export function formatResetHint(resetAtIso: string | null): string {
-  if (!resetAtIso) return "fallback: rolling 7 days";
+export function formatResetHint(
+  resetAtIso: string | null,
+  t: ReturnType<typeof useTranslations>
+): string {
+  if (!resetAtIso) return t("fallbackRollingDays", { days: 7 });
   const resetMs = Date.parse(resetAtIso);
-  if (!Number.isFinite(resetMs)) return "fallback: rolling 7 days";
+  if (!Number.isFinite(resetMs)) return t("fallbackRollingDays", { days: 7 });
   const deltaMs = resetMs - Date.now();
-  if (deltaMs <= 0) return "reset due now";
+  if (deltaMs <= 0) return t("resetDueNow");
   const hourMs = 60 * 60 * 1000;
   const dayMs = 24 * hourMs;
-  if (deltaMs < dayMs) return `resets in ${Math.max(1, Math.ceil(deltaMs / hourMs))}h`;
-  return `resets in ${Math.max(1, Math.ceil(deltaMs / dayMs))}d`;
+  if (deltaMs < dayMs) {
+    return t("resetsInHours", { count: Math.max(1, Math.ceil(deltaMs / hourMs)) });
+  }
+  return t("resetsInDays", { count: Math.max(1, Math.ceil(deltaMs / dayMs)) });
 }
 
 function UsageQuotaMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
+    <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
       <p className="text-xs uppercase tracking-wide text-text-muted font-semibold">{label}</p>
       <p className="text-lg font-semibold text-text-main mt-1">{value}</p>
     </div>
@@ -83,14 +91,18 @@ export function ApiKeyUsageLimitCard({
   locale: string;
   onSave: (next: ApiKeyUsageLimitSavePayload) => Promise<void>;
 }) {
+  const t = useTranslations("usageLimits");
   const [enabled, setEnabled] = useState(false);
   const [dailyLimit, setDailyLimit] = useState("");
   const [weeklyLimit, setWeeklyLimit] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!payload) return;
+  // Reset the form when a new payload arrives — state adjustment during render
+  // (react-hooks/set-state-in-effect; see react.dev "adjusting state when a prop changes").
+  const [prevPayload, setPrevPayload] = useState<typeof payload>(null);
+  if (payload && payload !== prevPayload) {
+    setPrevPayload(payload);
     setEnabled(payload.key.usageLimitEnabled);
     setDailyLimit(
       typeof payload.key.dailyUsageLimitUsd === "number"
@@ -103,7 +115,7 @@ export function ApiKeyUsageLimitCard({
         : ""
     );
     setError(null);
-  }, [payload]);
+  }
 
   const formatter = useMemo(() => createCurrencyFormatter(locale), [locale]);
   const status = payload?.status;
@@ -118,105 +130,88 @@ export function ApiKeyUsageLimitCard({
         weeklyUsageLimitUsd: parseUsdInput(weeklyLimit),
       });
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save usage limits");
+      setError(saveError instanceof Error ? saveError.message : t("saveFailed"));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Card className="p-5 border-emerald-500/20">
+    <Card className="p-5 border-success/20">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-emerald-400 text-lg">paid</span>
-            <h3 className="text-sm font-semibold text-text-main">API key USD quota</h3>
+            <Icon name="paid" size={18} className="text-success" />
+            <h3 className="text-sm font-semibold text-text-main">{t("apiKeyUsdQuota")}</h3>
             {payload?.key.name && (
-              <span className="truncate rounded bg-surface px-2 py-0.5 text-xs text-text-muted">
+              <span className="truncate rounded bg-bg-subtle px-2 py-0.5 text-xs text-text-muted">
                 {payload.key.name}
               </span>
             )}
           </div>
-          <p className="mt-1 text-xs text-text-muted">
-            When enabled, @@om-usage returns daily quota, weekly quota, daily spend, and weekly
-            spend in USD. Weekly follows the cached Claude reset when available.
-          </p>
+          <p className="mt-1 text-xs text-text-muted">{t("apiKeyUsdQuotaDescription")}</p>
           <p className="mt-1 text-xs text-text-muted">
             Spend shown is normalized (priced at the requested model).
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
+        <Toggle
+          checked={enabled}
+          onChange={(next) => setEnabled(next)}
           disabled={loading || !payload}
-          onClick={() => setEnabled((prev) => !prev)}
-          className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-semibold transition-colors ${
-            enabled
-              ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-              : "border-border bg-black/5 text-text-muted dark:bg-white/5"
-          } ${loading || !payload ? "opacity-50" : ""}`}
-        >
-          <span className="material-symbols-outlined text-[14px]">paid</span>
-          {enabled ? "Enabled" : "Disabled"}
-        </button>
+          label={enabled ? t("enabled") : t("disabled")}
+          className="shrink-0"
+        />
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <UsageQuotaMetric
-          label="Daily spend"
+          label={t("dailySpend")}
           value={loading || !status ? "..." : formatter.format(status.dailySpentUsd)}
         />
         <UsageQuotaMetric
-          label="Weekly spend"
+          label={t("weeklySpend")}
           value={loading || !status ? "..." : formatter.format(status.weeklySpentUsd)}
         />
-        <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
-          <label className="text-xs uppercase tracking-wide text-text-muted font-semibold">
-            Daily quota
-          </label>
-          <input
+        <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
+          <Input
             type="number"
             min={0}
             step="0.01"
+            label={t("dailyQuota")}
             value={dailyLimit}
             onChange={(event) => setDailyLimit(event.target.value)}
-            className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-text-main"
             placeholder="0.00"
           />
         </div>
-        <div className="rounded-lg border border-border/20 bg-surface/20 px-4 py-3">
-          <label className="text-xs uppercase tracking-wide text-text-muted font-semibold">
-            Weekly quota
-          </label>
-          <input
+        <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
+          <Input
             type="number"
             min={0}
             step="0.01"
+            label={t("weeklyQuota")}
             value={weeklyLimit}
             onChange={(event) => setWeeklyLimit(event.target.value)}
-            className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-text-main"
             placeholder="0.00"
+            hint={formatResetHint(status?.weeklyResetAtIso ?? null, t)}
           />
-          <p className="mt-1 text-[10px] text-text-muted">
-            {formatResetHint(status?.weeklyResetAtIso ?? null)}
-          </p>
         </div>
       </div>
 
-      {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
+      {error && (
+        <p className="mt-3 text-xs text-error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="mt-4 flex justify-end">
-        <button
-          type="button"
+        <Button
+          size="sm"
+          icon="save"
           onClick={handleSave}
+          loading={saving}
           disabled={saving || loading || !payload}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
-          <span className="material-symbols-outlined text-[14px]">
-            {saving ? "hourglass_empty" : "save"}
-          </span>
-          {saving ? "Saving..." : "Save quota"}
-        </button>
+          {saving ? t("saving") : t("saveQuota")}
+        </Button>
       </div>
     </Card>
   );

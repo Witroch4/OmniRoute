@@ -44,9 +44,13 @@ test("both ids are on the allowlist and in the gh registry, in the same order", 
   assert.deepEqual(registryIds, [...GITHUB_COPILOT_MODEL_ALLOWLIST]);
 });
 
-test("GPT-6 Luna is /responses-only on Copilot, Claude Haiku 5.5 stays on chat/completions", () => {
+// 3.8.53 sync: Claude on Copilot now uses the native /v1/messages shim (upstream
+// #7223 / 9router#2608); the account lists Haiku 5.5 with supported_endpoints
+// ["/v1/messages", "/chat/completions"]. What this pinned before still holds:
+// Claude never goes to /responses.
+test("GPT-6 Luna is /responses-only on Copilot, Claude Haiku 5.5 uses the native Messages shim", () => {
   assert.equal(getModelTargetFormat("gh", "gpt-6-luna"), "openai-responses");
-  assert.equal(getModelTargetFormat("gh", "claude-haiku-5.5"), null);
+  assert.equal(getModelTargetFormat("gh", "claude-haiku-5.5"), "claude");
 
   const executor = new GithubExecutor();
   assert.equal(
@@ -56,7 +60,7 @@ test("GPT-6 Luna is /responses-only on Copilot, Claude Haiku 5.5 stays on chat/c
   );
   assert.equal(
     executor.buildUrl("claude-haiku-5.5", true),
-    "https://api.githubcopilot.com/chat/completions",
+    "https://api.githubcopilot.com/v1/messages",
     "Claude on Copilot never goes to /responses (400 unsupported_api_for_model)"
   );
 });
@@ -121,16 +125,16 @@ test("live discovery keeps the second batch and still drops policy-disabled ids"
   assert.deepEqual(ids, ["claude-sonnet-5.5", "grok-4.7", "gpt-4.1"]);
 });
 
-test("Grok 4.7 is /responses-only, Sonnet 5.5 and GPT-4.1 use chat/completions", () => {
+test("Grok 4.7 is /responses-only, Sonnet 5.5 uses Messages and GPT-4.1 chat/completions", () => {
   assert.equal(getModelTargetFormat("gh", "grok-4.7"), "openai-responses");
-  assert.equal(getModelTargetFormat("gh", "claude-sonnet-5.5"), null);
+  assert.equal(getModelTargetFormat("gh", "claude-sonnet-5.5"), "claude");
   assert.equal(getModelTargetFormat("gh", "gpt-4.1"), null);
 
   const executor = new GithubExecutor();
   assert.equal(executor.buildUrl("grok-4.7", true), "https://api.githubcopilot.com/responses");
   assert.equal(
     executor.buildUrl("claude-sonnet-5.5", true),
-    "https://api.githubcopilot.com/chat/completions"
+    "https://api.githubcopilot.com/v1/messages"
   );
   assert.equal(
     executor.buildUrl("gpt-4.1", true),

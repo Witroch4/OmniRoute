@@ -23,7 +23,7 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-budget-ca
 process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../../src/lib/db/core.ts");
-const { updatePricing } = await import("../../../src/lib/localDb.ts");
+const { updatePricing } = await import("../../../src/lib/db/settings.ts");
 const { clearCache } = await import("../../../src/lib/semanticCache.ts");
 const { clearIdempotency } = await import("../../../src/lib/idempotencyLayer.ts");
 const { handleChatCore } = await import("../../../open-sse/handlers/chatCore.ts");

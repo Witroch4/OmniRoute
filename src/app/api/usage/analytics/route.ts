@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
+import { getProviderById } from "@/shared/constants/providers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { serveAnalyticsCached } from "@/lib/usage/analyticsResponseCache";
 import { readLongContextColumns } from "@/lib/usage/longContextSql";
-import { getApiKeyById, getApiKeys } from "@/lib/db/apiKeys";
+import { getApiKeys } from "@/lib/db/apiKeys";
 import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import {
-  resolveApiKeyWeeklyWindow,
-  type ApiKeyUsageLimitMetadata,
-} from "@/lib/usage/apiKeyUsageLimits";
+  parseCostBasis,
+  resolveRowPricingPair,
+  resolveSinceResetRangeWindow,
+} from "@/lib/usage/analyticsCostBasis";
 import {
   buildUnifiedSource,
   buildPresetUnifiedSource,
@@ -20,12 +24,20 @@ import {
   getAccountCostRows,
   getAccountUsageRows,
   getApiKeyUsageRows,
+  getApiKeyTotalsRows,
+  type ApiKeyTotalsRow,
   getServiceTierUsageRows,
   getApiKeyMetadataRows,
   getWeeklyPatternRows,
   getPresetCostModelRows,
 } from "@/lib/db/usageAnalytics";
-import { getFallbackStats } from "@/lib/db/callLogStats";
+import { getFallbackStats, getErrorTypeBreakdown } from "@/lib/db/callLogStats";
+import {
+  buildByProviderRows,
+  getProviderDisplayNameResolver,
+} from "@/lib/usage/providerDisplayNames";
+import { isFlatRateProvider } from "@/lib/usage/flatRateProviders";
+import { toNumber } from "@/shared/utils/numeric";
 import {
   collectPricingGaps,
   reportMissingPricing,
@@ -55,6 +67,12 @@ function getRangeStartIso(range: string): string | null {
     case "90d":
       start.setDate(start.getDate() - 90);
       break;
+    case "180d":
+      start.setDate(start.getDate() - 180);
+      break;
+    case "365d":
+      start.setDate(start.getDate() - 365);
+      break;
     case "ytd":
       start.setMonth(0, 1);
       start.setHours(0, 0, 0, 0);
@@ -67,84 +85,16 @@ function getRangeStartIso(range: string): string | null {
   return start.toISOString();
 }
 
-/**
- * Window resolution for `range=sinceReset` — deliberately NOT a case inside
- * `getRangeStartIso` above. That function is pure day arithmetic and is on
- * the hot path for every other range (including the `presets` recompute
- * loop), so it must stay synchronous and DB-free. "Since reset" instead
- * resolves through `resolveApiKeyWeeklyWindow` (the same helper the API key
- * USD quota is measured against), which is async and hits `provider_limits_cache`
- * / `quota_snapshots` — only this one range pays for that lookup.
- *
- * Scope follows the `apiKeyIds` filter already on the request:
- *   - exactly one key -> that key's own window (its `allowedConnections`,
- *     mirroring `keys/[id]/usage-limits/route.ts`);
- *   - zero or several keys -> the window over all active connections
- *     (`resolveApiKeyWeeklyWindow` already falls back to that when
- *     `allowedConnections` is empty). The provider reset is a property of the
- *     connection/account, not of any one key, so this is the same instant in
- *     practice for a single-connection deployment.
- */
-async function resolveSinceResetRangeWindow(apiKeyIds: string[]): Promise<{
-  windowStartIso: string;
-  resetAtIso: string | null;
-  isObserved: boolean;
-  /**
-   * False when the caller asked for a single-key-scoped window
-   * (`apiKeyIds.length === 1`) but that id didn't resolve to a real key —
-   * e.g. `apiKeyIds` held a legacy display name instead of an id
-   * (`apiKeyWhere` accepts both: `api_key_name IN (...) OR api_key_id IN
-   * (...)`). Previously this silently fell through to the same
-   * all-active-connections window a genuinely unscoped request gets, with no
-   * signal that the requested scope was never actually honored (final-review
-   * Minor 5 — same "explicit flag over silent fallback" class as Finding 2).
-   * True whenever the filter is scoped-and-resolved OR genuinely unscoped
-   * (0 or 2+ keys, where "all connections" is the correct, intended answer).
-   */
-  scopeResolved: boolean;
-}> {
-  let metadata: ApiKeyUsageLimitMetadata = { id: "", allowedConnections: [] };
-  let scopeResolved = true;
-
-  if (apiKeyIds.length === 1) {
-    const key = await getApiKeyById(apiKeyIds[0]);
-    if (key && typeof key.id === "string") {
-      metadata = {
-        id: key.id,
-        allowedModels: Array.isArray(key.allowedModels) ? key.allowedModels : [],
-        allowedConnections: Array.isArray(key.allowedConnections) ? key.allowedConnections : [],
-      };
-    } else {
-      scopeResolved = false;
-    }
-  }
-
-  const resolved = await resolveApiKeyWeeklyWindow(metadata);
-  return { ...resolved, scopeResolved };
-}
-
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type PricingByProvider = Record<string, Record<string, Record<string, unknown>>>;
-type ComputeCostFromPricing = (
-  pricing: Record<string, unknown> | null | undefined,
-  tokens: Record<string, number | undefined> | null | undefined,
-  options?: Record<string, unknown>
-) => number;
+type UsageRows = Array<Record<string, unknown>>;
+type ComputeCostFromPricing = typeof import("@/lib/usage/costCalculator").computeCostFromPricing;
 type GetCodexFastCostMultiplier = (
   provider: string | null | undefined,
   model: string | null | undefined,
   serviceTier: string | null | undefined
 ) => number;
-
-function toNumber(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
 
 function toStringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim().length > 0 ? value : fallback;
@@ -179,6 +129,75 @@ function addApiKeyAlias(target: Set<string>, value: unknown): void {
   if (trimmed) target.add(trimmed);
 }
 
+type ApiKeyTotals = {
+  apiKeyId: string;
+  apiKeyName: string;
+  requests: number;
+  cost: number;
+  lastUsed: string | null;
+};
+
+/**
+ * Lifetime totals for each current API key. Rows recorded before per-key ids
+ * existed carry only a key name: they count toward last use, matched by name,
+ * but not toward requests or cost.
+ */
+function buildApiKeyTotals(
+  rows: ApiKeyTotalsRow[],
+  apiKeys: Array<{ id?: unknown; name?: unknown }>,
+  rowCost: (row: ApiKeyTotalsRow) => number
+): ApiKeyTotals[] {
+  const totalsById = new Map<string, ApiKeyTotals>();
+  const totalsByName = new Map<string, ApiKeyTotals[]>();
+  for (const apiKey of apiKeys) {
+    if (typeof apiKey.id !== "string" || typeof apiKey.name !== "string") continue;
+    const totals: ApiKeyTotals = {
+      apiKeyId: apiKey.id,
+      apiKeyName: apiKey.name,
+      requests: 0,
+      cost: 0,
+      lastUsed: null,
+    };
+    totalsById.set(apiKey.id, totals);
+    totalsByName.set(apiKey.name, [...(totalsByName.get(apiKey.name) || []), totals]);
+  }
+
+  const noteLastUsed = (totals: ApiKeyTotals, lastUsed: string | null) => {
+    if (lastUsed && (!totals.lastUsed || lastUsed > totals.lastUsed)) totals.lastUsed = lastUsed;
+  };
+  for (const row of rows) {
+    if (!row.apiKeyId) {
+      for (const totals of totalsByName.get(row.apiKeyName || "") || []) {
+        noteLastUsed(totals, row.lastUsed);
+      }
+      continue;
+    }
+    const totals = totalsById.get(row.apiKeyId);
+    if (!totals) continue;
+    totals.requests += Number(row.requests) || 0;
+    totals.cost += rowCost(row);
+    noteLastUsed(totals, row.lastUsed);
+  }
+
+  return Array.from(totalsById.values(), (totals) => ({
+    ...totals,
+    cost: roundCost(totals.cost),
+  }));
+}
+
+/**
+ * Per-request pricing memo (upstream #pricing-memoization): one resolution per
+ * (provider, model, serviceTier) per response, counted in `misses` for tests.
+ */
+type PricingResolutionContext = {
+  cache: Map<string, Record<string, unknown> | null>;
+  misses?: { count: number };
+};
+
+function buildPricingCacheKey(provider: string, model: string, serviceTier: string): string {
+  return `${provider}\n${model}\n${serviceTier}`;
+}
+
 /**
  * Resolve pricing for a usage row via the shared resolver, so this dashboard
  * and `getPricingForModel` (cost modal, USD quota) can never disagree.
@@ -189,93 +208,95 @@ function addApiKeyAlias(target: Set<string>, value: unknown): void {
  * uncataloged `claude-opus-5` was billed at Fable rates, exactly 2x Opus,
  * reporting $1.1k for a day that actually cost $576. A wrong number that looks
  * plausible is worse than a visible gap: the shared resolver only ever returns
- * the same model's rates, plus a Claude tier anchor, and reports the rest.
+ * the same model's rates, plus a Claude tier anchor, and reports the rest
+ * (a `:free` id without its own row therefore resolves to null, #9054).
  */
 function resolveModelPricingForRow(
   pricingByProvider: PricingByProvider,
   providerRaw: string,
-  model: string
+  model: string,
+  serviceTier: string,
+  context?: PricingResolutionContext
 ): Record<string, unknown> | null {
+  const key = buildPricingCacheKey(providerRaw, model, serviceTier);
+  if (context?.cache.has(key)) return context.cache.get(key) ?? null;
   const resolution = resolveModelPricing(pricingByProvider, providerRaw, model);
   reportMissingPricing(providerRaw, model, resolution.source);
+  if (context) {
+    context.cache.set(key, resolution.pricing);
+    if (context.misses) context.misses.count += 1;
+  }
   return resolution.pricing;
 }
 
-/**
- * Resolve the (provider, model) pair a row should be priced at.
- *
- * `normalized: false` (default) uses the REAL pair — the model that actually
- * served the request. `normalized: true` uses `billed_provider`/`billed_model`
- * — the model the client asked for — falling back to the real pair when a row
- * was never redirected (NULL billed columns). Same COALESCE semantics as
- * `getApiKeyUsdSpendSince`'s `basis` option, so the dashboard and the USD
- * quota can never disagree about what "normalized" means.
- */
-function resolveRowPricingPair(
-  row: Record<string, unknown>,
-  normalized: boolean
-): { provider: string; model: string } {
-  if (!normalized) {
-    return { provider: toStringValue(row.provider), model: toStringValue(row.model) };
-  }
-  return {
-    provider: toStringValue(row.billedProvider) || toStringValue(row.provider),
-    model: toStringValue(row.billedModel) || toStringValue(row.model),
-  };
-}
-
-/**
- * `costBasis` query param — grouping mode for the Cost Explorer table
- * (`/dashboard/costs`), not a pricing change. `real` (default, unchanged
- * behavior) groups byModel/byProvider by the model that actually SERVED the
- * request. `billed` groups them by what the client ASKED for — the pair a
- * model-budget rule redirected FROM — via `COALESCE(billed*, *)`, same basis
- * `computeUsageRowNormalizedCost`/`getApiKeyUsdSpendSince` already use.
- *
- * Only byModel and byProvider bucket identity is actually provider/model —
- * byAccount (bucketed by connection_id) and byServiceTier (bucketed by
- * service_tier) are basis-invariant: which physical account/tier served a
- * request never depends on what the client asked for, so those two already
- * expose both `cost` and `normalizedCost` per bucket with no regrouping
- * needed (Task 11). byApiKey is bucketed by API key identity, also
- * basis-invariant, for the same reason.
- */
-function parseCostBasis(value: string | null): "real" | "billed" {
-  return value === "billed" ? "billed" : "real";
-}
+type UsageRowCostOptions = {
+  /** Price at the billed (requested) pair instead of the served one. */
+  normalized?: boolean;
+  /** The row's own key's model-family multipliers; only scale the normalized figure. */
+  multiplierRules?: FamilyMultiplierRule[];
+  /** Billed-cost views show flat-rate providers as $0 (default true). */
+  flatRateAsZero?: boolean;
+  pricingContext?: PricingResolutionContext;
+};
 
 function computeUsageRowCost(
   row: Record<string, unknown>,
   pricingByProvider: PricingByProvider,
   computeCostFromPricing: ComputeCostFromPricing,
-  options: { normalized?: boolean; multiplierRules?: FamilyMultiplierRule[] } = {}
+  options: UsageRowCostOptions = {}
 ): number {
   const { provider, model } = resolveRowPricingPair(row, options.normalized ?? false);
   if (!provider || !model) return 0;
+  const flatRateAsZero = options.flatRateAsZero ?? true;
   const serviceTier = normalizeServiceTier(row.serviceTier ?? row.service_tier);
+  const isAggregated = toNumber(row.isAggregated ?? row.is_aggregated) > 0;
+  const storedCost = toNumber(row.storedCost ?? row.stored_cost);
 
-  const pricing = resolveModelPricingForRow(pricingByProvider, provider, model);
-  if (!pricing) return 0;
+  // Billed-cost views show flat-rate providers as $0, whatever was stored.
+  if (flatRateAsZero && isFlatRateProvider(provider)) return 0;
 
-  const cost = computeCostFromPricing(
-    pricing,
-    {
-      input: toNumber(row.promptTokens),
-      output: toNumber(row.completionTokens),
-      cacheRead: toNumber(row.cacheReadTokens),
-      cacheCreation: toNumber(row.cacheCreationTokens),
-      reasoning: toNumber(row.reasoningTokens),
-      // Share of these sums that came from long-context requests (per-request SQL
-      // buckets); the tier is never inferred from the sums themselves.
-      ...readLongContextColumns(row),
-    },
-    {
+  let cost: number;
+  if (isAggregated && storedCost > 0) {
+    // New rollups preserve the exact API-equivalent value calculated before
+    // cache/reasoning token dimensions are discarded. Legacy zero-cost rows
+    // fall through to the best available input/output-token estimate.
+    cost = storedCost;
+  } else {
+    // Raw rows: `storedCost` is the provider-reported exact cost of the rows that
+    // carry one, and the `cost*Tokens` sums exclude those rows' tokens, so a
+    // request with a reported cost is never priced a second time from its tokens.
+    const rawStoredCost = isAggregated ? 0 : storedCost;
+    const pricing = resolveModelPricingForRow(
+      pricingByProvider,
       provider,
       model,
       serviceTier,
-      flatRateAsZero: true,
-    }
-  );
+      options.pricingContext
+    );
+    cost = pricing
+      ? rawStoredCost +
+        computeCostFromPricing(
+          pricing,
+          {
+            input: toNumber(row.costPromptTokens ?? row.promptTokens),
+            output: toNumber(row.costCompletionTokens ?? row.completionTokens),
+            cacheRead: toNumber(row.costCacheReadTokens ?? row.cacheReadTokens),
+            cacheCreation: toNumber(row.costCacheCreationTokens ?? row.cacheCreationTokens),
+            reasoning: toNumber(row.costReasoningTokens ?? row.reasoningTokens),
+            // Share of these sums that came from long-context requests (per-request SQL
+            // buckets over the same priceable rows); the tier is never inferred from the
+            // sums themselves.
+            ...readLongContextColumns(row),
+          },
+          {
+            provider,
+            model,
+            serviceTier,
+            flatRateAsZero,
+          }
+        )
+      : rawStoredCost;
+  }
 
   // The multiplier only ever scales the NORMALIZED figure, and only when the
   // caller actually resolved a rule set for this row's owning key — never the
@@ -319,9 +340,11 @@ function computeUsageRowNormalizedCost(
   row: Record<string, unknown>,
   pricingByProvider: PricingByProvider,
   computeCostFromPricing: ComputeCostFromPricing,
-  multiplierRules: FamilyMultiplierRule[] = []
+  multiplierRules: FamilyMultiplierRule[] = [],
+  options: Omit<UsageRowCostOptions, "normalized" | "multiplierRules"> = {}
 ): number {
   return computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, {
+    ...options,
     normalized: true,
     multiplierRules,
   });
@@ -330,12 +353,27 @@ function computeUsageRowNormalizedCost(
 function computeUsageRowStandardCost(
   row: Record<string, unknown>,
   pricingByProvider: PricingByProvider,
-  computeCostFromPricing: ComputeCostFromPricing
+  computeCostFromPricing: ComputeCostFromPricing,
+  options: Omit<UsageRowCostOptions, "normalized" | "multiplierRules"> = {}
 ): number {
+  // A raw row's provider-reported cost has no standard-tier alternative to compare
+  // against, so it counts the same on both sides and yields no savings. A rollup's
+  // stored cost is tier-specific and is re-priced from its tokens instead.
+  const keepsReportedCost = toNumber(row.isAggregated ?? row.is_aggregated) === 0;
+  const reportedCost = keepsReportedCost ? toNumber(row.storedCost ?? row.stored_cost) : 0;
   return computeUsageRowCost(
-    { ...row, serviceTier: "standard", service_tier: "standard" },
+    {
+      ...row,
+      serviceTier: "standard",
+      service_tier: "standard",
+      storedCost: reportedCost,
+      stored_cost: reportedCost,
+      isAggregated: 0,
+      is_aggregated: 0,
+    },
     pricingByProvider,
-    computeCostFromPricing
+    computeCostFromPricing,
+    options
   );
 }
 
@@ -362,7 +400,8 @@ function buildBilledProviderRows(
   modelRows: Array<Record<string, unknown>>,
   pricingByProvider: PricingByProvider,
   computeCostFromPricing: ComputeCostFromPricing,
-  multiplierRulesForRow: (row: Record<string, unknown>) => FamilyMultiplierRule[]
+  multiplierRulesForRow: (row: Record<string, unknown>) => FamilyMultiplierRule[],
+  costOptions: Omit<UsageRowCostOptions, "normalized" | "multiplierRules"> = {}
 ): BilledProviderRow[] {
   const providerMap = new Map<
     string,
@@ -406,12 +445,18 @@ function buildBilledProviderRows(
     // Real cost is always priced at the model that actually ran, regardless
     // of which bucket the row lands in — same contract as `computeUsageRowCost`
     // everywhere else in this route.
-    existing.cost += computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+    existing.cost += computeUsageRowCost(
+      row,
+      pricingByProvider,
+      computeCostFromPricing,
+      costOptions
+    );
     existing.normalizedCost += computeUsageRowNormalizedCost(
       row,
       pricingByProvider,
       computeCostFromPricing,
-      multiplierRulesForRow(row)
+      multiplierRulesForRow(row),
+      costOptions
     );
     providerMap.set(billedProvider, existing);
   }
@@ -466,10 +511,27 @@ function computeActivityStreak(activityMap: Record<string, number>): number {
   return streak;
 }
 
-export async function GET(request: Request) {
+export async function GET(request: Request, testContext?: unknown) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
 
+  const misses =
+    typeof testContext === "object" &&
+    testContext !== null &&
+    "misses" in testContext &&
+    typeof (testContext as { misses?: unknown }).misses === "object" &&
+    (testContext as { misses?: unknown }).misses !== null
+      ? (testContext as { misses: { count: number } }).misses
+      : undefined;
+  return serveAnalyticsCached(new URL(request.url).search, () =>
+    computeAnalyticsResponse(request, misses)
+  );
+}
+
+async function computeAnalyticsResponse(
+  request: Request,
+  misses?: { count: number }
+): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
     const range = searchParams.get("range") || "30d";
@@ -477,6 +539,10 @@ export async function GET(request: Request) {
     const endDate = searchParams.get("endDate") || undefined;
     const apiKeyIdsParam = searchParams.get("apiKeyIds") || "";
     const apiKeyIds = apiKeyIdsParam ? apiKeyIdsParam.split(",").filter(Boolean) : [];
+    // Flat-rate subscriptions are $0 in billed-cost analytics by default. The
+    // dedicated costs page opts into their token-price equivalent so subscription
+    // consumption can be compared with metered providers without changing budgets.
+    const includeFlatRateEstimates = searchParams.get("includeFlatRateEstimates") === "true";
     const costBasis = parseCostBasis(searchParams.get("costBasis"));
 
     // Explicit startDate (custom date-range picker) always wins, same as before.
@@ -518,10 +584,10 @@ export async function GET(request: Request) {
       }
     }
 
-    // Compute the raw-data cutoff: rows older than this may have been rolled up to
-    // daily_usage_summary and deleted from usage_history.
+    // Raw-data cutoff: must match cleanupUsageHistory's rollup/delete boundary —
+    // retention.usageHistory (src/lib/db/cleanup.ts), NOT aggregation.rawDataRetentionDays.
     const dbSettings = getUserDatabaseSettings();
-    const rawRetentionDays = dbSettings.aggregation?.rawDataRetentionDays ?? 30;
+    const rawRetentionDays = dbSettings.retention?.usageHistory ?? 30;
     const rawCutoff = new Date();
     rawCutoff.setDate(rawCutoff.getDate() - rawRetentionDays);
     const rawCutoffIso = rawCutoff.toISOString();
@@ -581,14 +647,40 @@ export async function GET(request: Request) {
     }
     const { computeCostFromPricing, getCodexFastCostMultiplier, normalizeModelName } =
       await import("@/lib/usage/costCalculator");
+    const pricingContext: PricingResolutionContext = {
+      cache: new Map(),
+      ...(misses ? { misses } : {}),
+    };
+    // Shared by every cost computation below: flat-rate providers are $0 unless the
+    // costs page asked for their estimates, and pricing is memoized per response.
+    const costOptions = { flatRateAsZero: !includeFlatRateEstimates, pricingContext };
+
+    const apiKeyWhereClause = appendWhereCondition(
+      whereClause,
+      "(api_key_id IS NOT NULL AND api_key_id != '') OR (api_key_name IS NOT NULL AND api_key_name != '')"
+    );
+
+    // The API Manager key list needs only per-key totals. Skip the full report,
+    // whose queries hold the event loop for seconds on large usage_history tables.
+    if (searchParams.get("view") === "apiKeys") {
+      const byApiKey = buildApiKeyTotals(
+        getApiKeyTotalsRows(apiKeyWhereClause, params),
+        apiKeys,
+        (row) =>
+          computeUsageRowCost(
+            row as unknown as Record<string, unknown>,
+            pricingByProvider,
+            computeCostFromPricing,
+            costOptions
+          )
+      );
+      return NextResponse.json({ byApiKey });
+    }
 
     const summaryRow = getUsageSummary(unifiedSource, unifiedParams) as Record<string, unknown>;
 
-    const dailyRows = getDailyUsage(unifiedSource, unifiedParams) as Array<Record<string, unknown>>;
-
-    const dailyCostRows = getDailyCostRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const dailyRows = getDailyUsage(unifiedSource, unifiedParams) as UsageRows;
+    const dailyCostRows = getDailyCostRows(unifiedSource, unifiedParams) as UsageRows;
 
     const heatmapStart = new Date();
     heatmapStart.setUTCDate(heatmapStart.getUTCDate() - 364);
@@ -610,44 +702,24 @@ export async function GET(request: Request) {
       });
     }
 
-    const heatmapRows = getHeatmapRows(heatmapConditions, heatmapParams) as Array<
-      Record<string, unknown>
-    >;
+    const heatmapRows = getHeatmapRows(heatmapConditions, heatmapParams) as UsageRows;
 
-    const modelRows = getModelUsageRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const modelRows = getModelUsageRows(unifiedSource, unifiedParams) as UsageRows;
 
-    const providerCostRows = getProviderCostRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const providerCostRows = getProviderCostRows(unifiedSource, unifiedParams) as UsageRows;
 
-    const providerRows = getProviderUsageRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const providerRows = getProviderUsageRows(unifiedSource, unifiedParams) as UsageRows;
 
     const accountCostWhereClause = whereClause
       .replace(/timestamp/g, "usage_history.timestamp")
       .replace(/api_key_/g, "usage_history.api_key_");
-    const accountCostRows = getAccountCostRows(accountCostWhereClause, params) as Array<
-      Record<string, unknown>
-    >;
+    const accountCostRows = getAccountCostRows(accountCostWhereClause, params) as UsageRows;
 
-    const accountRows = getAccountUsageRows(accountCostWhereClause, params) as Array<
-      Record<string, unknown>
-    >;
+    const accountRows = getAccountUsageRows(accountCostWhereClause, params) as UsageRows;
 
-    const apiKeyWhereClause = appendWhereCondition(
-      whereClause,
-      "(api_key_id IS NOT NULL AND api_key_id != '') OR (api_key_name IS NOT NULL AND api_key_name != '')"
-    );
-    const apiKeyRows = getApiKeyUsageRows(apiKeyWhereClause, params) as Array<
-      Record<string, unknown>
-    >;
+    const apiKeyRows = getApiKeyUsageRows(apiKeyWhereClause, params) as UsageRows;
 
-    const serviceTierRows = getServiceTierUsageRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const serviceTierRows = getServiceTierUsageRows(unifiedSource, unifiedParams) as UsageRows;
 
     // Model-family multiplier (migration 128) is per-API-KEY-ID. Every row set fetched
     // above now carries its OWN api_key_id (final-review Finding 2 fix) — except rows
@@ -695,9 +767,7 @@ export async function GET(request: Request) {
       return rows.every(rowHasKeyAttribution);
     }
 
-    const apiKeyMetadataRows = getApiKeyMetadataRows(apiKeyWhereClause, params) as Array<
-      Record<string, unknown>
-    >;
+    const apiKeyMetadataRows = getApiKeyMetadataRows(apiKeyWhereClause, params) as UsageRows;
 
     const apiKeyMetadata = new Map<string, { latestName: string; aliases: Set<string> }>();
     for (const row of apiKeyMetadataRows) {
@@ -714,11 +784,10 @@ export async function GET(request: Request) {
       apiKeyMetadata.set(groupKey, existing);
     }
 
-    const weeklyRows = getWeeklyPatternRows(unifiedSource, unifiedParams) as Array<
-      Record<string, unknown>
-    >;
+    const weeklyRows = getWeeklyPatternRows(unifiedSource, unifiedParams) as UsageRows;
 
     const fallbackRow = getFallbackStats(whereClause, params) as Record<string, unknown>;
+    const errorBreakdown = getErrorTypeBreakdown(whereClause, params);
 
     const summary = {
       totalRequests: Number(summaryRow?.totalRequests || 0),
@@ -784,7 +853,7 @@ export async function GET(request: Request) {
       if (!date) continue;
 
       // Calculate costs
-      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, costOptions);
       dailyCostByDate.set(date, (dailyCostByDate.get(date) || 0) + cost);
 
       // Group tokens by model for the day
@@ -818,21 +887,20 @@ export async function GET(request: Request) {
     // row visible only by flipping the toggle and diffing two screens by hand. These
     // two maps let a single row carry both, so `claude-sonnet-5` can read
     // "721 served / 286 requested" without changing view. Keyed the same way the
-    // bucket is (`provider::model`), so the lookup is exact rather than by label.
+    // bucket is (normalized model name), so the lookup is exact rather than by label.
     const servedVolumeByKey = new Map<string, { requests: number; totalTokens: number }>();
     const requestedVolumeByKey = new Map<string, { requests: number; totalTokens: number }>();
     for (const row of modelRows) {
       const realModel = row.model as string;
       const realProvider = row.provider as string;
       if (!realModel || !realProvider) continue;
-      const requestedProvider = toStringValue(row.billedProvider) || realProvider;
       const requestedModel = toStringValue(row.billedModel) || realModel;
       const requests = Number(row.requests) || 0;
       const totalTokens = Number(row.totalTokens) || 0;
 
       for (const [map, key] of [
-        [servedVolumeByKey, `${realProvider}::${realModel}`],
-        [requestedVolumeByKey, `${requestedProvider}::${requestedModel}`],
+        [servedVolumeByKey, normalizeModelName(realModel)],
+        [requestedVolumeByKey, normalizeModelName(requestedModel)],
       ] as const) {
         const bucket = map.get(key) || { requests: 0, totalTokens: 0 };
         bucket.requests += requests;
@@ -845,23 +913,27 @@ export async function GET(request: Request) {
     for (const row of modelRows) {
       const realModel = row.model as string;
       const realProvider = row.provider as string;
-      // `costBasis=real` (default) groups by the served pair — byte-identical
-      // to pre-costBasis behavior. `costBasis=billed` groups by what the
-      // client asked for, so a redirected row's requests/tokens/cost land in
-      // the REQUESTED family's bucket instead of the family that actually ran.
+      // `costBasis=real` (default) groups by the served pair. `costBasis=billed`
+      // groups by what the client asked for, so a redirected row's
+      // requests/tokens/cost land in the REQUESTED family's bucket instead of the
+      // family that actually ran.
       const groupProvider =
         costBasis === "billed" ? toStringValue(row.billedProvider) || realProvider : realProvider;
       const groupModel =
         costBasis === "billed" ? toStringValue(row.billedModel) || realModel : realModel;
       const short = normalizeModelName(groupModel);
-      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, costOptions);
       const normalizedCost = computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing,
-        multiplierRulesForRow(row)
+        multiplierRulesForRow(row),
+        costOptions
       );
-      const key = `${groupProvider}::${groupModel}`;
+      // Keyed by model name alone (not provider) — the table renders one row per
+      // model, so the same model served via multiple provider connections/accounts
+      // must be merged here rather than producing duplicate `key={m.model}` rows.
+      const key = short;
       const existing = modelMap.get(key) || {
         model: short,
         provider: groupProvider,
@@ -896,7 +968,7 @@ export async function GET(request: Request) {
 
     const byModel = Array.from(modelMap.values())
       .map((row) => {
-        const volumeKey = `${toStringValue(row.provider)}::${toStringValue(row.rawModel)}`;
+        const volumeKey = toStringValue(row.model);
         const served = servedVolumeByKey.get(volumeKey);
         const requested = requestedVolumeByKey.get(volumeKey);
         return {
@@ -939,12 +1011,13 @@ export async function GET(request: Request) {
     for (const row of providerCostRows) {
       const provider = toStringValue(row.provider);
       if (!provider) continue;
-      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, costOptions);
       const normalizedCost = computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing,
-        multiplierRulesForRow(row)
+        multiplierRulesForRow(row),
+        costOptions
       );
       providerCostByProvider.set(provider, (providerCostByProvider.get(provider) || 0) + cost);
       providerNormalizedCostByProvider.set(
@@ -962,52 +1035,45 @@ export async function GET(request: Request) {
     // it carries no billed_provider dimension, so it can't answer "how many
     // requests did the client BILL to provider X" (a rule can redirect across
     // providers, not just families within one). costBasis=real reuses it
-    // unchanged (zero behavior change from before this param existed).
-    // costBasis=billed instead re-derives provider-level requests/tokens/
-    // latency/success from `modelRows`, which already carries billed_provider
-    // per row (Task 11) at a finer grain than provider-only — summing it back
-    // up to provider level is a strict coarsening of the same rows, so it's
-    // exact, not an approximation.
-    const byProvider =
-      costBasis === "billed"
-        ? buildBilledProviderRows(
-            modelRows,
-            pricingByProvider,
-            computeCostFromPricing,
-            multiplierRulesForRow
-          )
-        : providerRows.map((row) => ({
-            provider: row.provider,
-            requests: Number(row.requests),
-            promptTokens: Number(row.promptTokens),
-            completionTokens: Number(row.completionTokens),
-            totalTokens: Number(row.totalTokens),
-            avgLatencyMs: Math.round(Number(row.avgLatencyMs)),
-            successRatePct:
-              Number(row.requests) > 0
-                ? Number((Number(row.successfulRequests) / Number(row.requests)) * 100).toFixed(2)
-                : 0,
-            cost: roundCost(providerCostByProvider.get(toStringValue(row.provider)) || 0),
-            normalizedCost: roundCost(
-              providerNormalizedCostByProvider.get(toStringValue(row.provider)) || 0
-            ),
-          }));
+    // unchanged. costBasis=billed instead re-derives provider-level requests/
+    // tokens/latency/success from `modelRows`, which already carries
+    // billed_provider per row at a finer grain than provider-only — summing it
+    // back up to provider level is a strict coarsening of the same rows, so it's
+    // exact, not an approximation. Both carry the display name in `provider`
+    // (#7534) and the raw id in `providerId`.
+    let byProvider: Array<Record<string, unknown>>;
+    if (costBasis === "billed") {
+      const displayName = await getProviderDisplayNameResolver();
+      byProvider = buildBilledProviderRows(
+        modelRows,
+        pricingByProvider,
+        computeCostFromPricing,
+        multiplierRulesForRow,
+        costOptions
+      ).map((row) => ({ ...row, provider: displayName(row.provider), providerId: row.provider }));
+    } else {
+      byProvider = (await buildByProviderRows(providerRows, providerCostByProvider)).map((row) => ({
+        ...row,
+        normalizedCost: roundCost(providerNormalizedCostByProvider.get(row.providerId) || 0),
+      }));
+    }
 
     const accountCostByAccount = new Map<string, number>();
     const accountNormalizedCostByAccount = new Map<string, number>();
     for (const row of accountCostRows) {
-      const account = toStringValue(row.account, "unknown");
-      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const accountKey = toStringValue(row.accountKey, "unknown");
+      const cost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing, costOptions);
       const normalizedCost = computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing,
-        multiplierRulesForRow(row)
+        multiplierRulesForRow(row),
+        costOptions
       );
-      accountCostByAccount.set(account, (accountCostByAccount.get(account) || 0) + cost);
+      accountCostByAccount.set(accountKey, (accountCostByAccount.get(accountKey) || 0) + cost);
       accountNormalizedCostByAccount.set(
-        account,
-        (accountNormalizedCostByAccount.get(account) || 0) + normalizedCost
+        accountKey,
+        (accountNormalizedCostByAccount.get(accountKey) || 0) + normalizedCost
       );
     }
 
@@ -1019,9 +1085,9 @@ export async function GET(request: Request) {
       totalTokens: Number(row.totalTokens),
       avgLatencyMs: Math.round(Number(row.avgLatencyMs)),
       lastUsed: row.lastUsed,
-      cost: roundCost(accountCostByAccount.get(toStringValue(row.account, "unknown")) || 0),
+      cost: roundCost(accountCostByAccount.get(toStringValue(row.accountKey, "unknown")) || 0),
       normalizedCost: roundCost(
-        accountNormalizedCostByAccount.get(toStringValue(row.account, "unknown")) || 0
+        accountNormalizedCostByAccount.get(toStringValue(row.accountKey, "unknown")) || 0
       ),
     }));
 
@@ -1068,12 +1134,18 @@ export async function GET(request: Request) {
       existing.promptTokens += Number(row.promptTokens);
       existing.completionTokens += Number(row.completionTokens);
       existing.totalTokens += Number(row.totalTokens);
-      existing.cost += computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      existing.cost += computeUsageRowCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing,
+        costOptions
+      );
       existing.normalizedCost += computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing,
-        multiplierRulesForRow(row)
+        multiplierRulesForRow(row),
+        costOptions
       );
       apiKeyMap.set(key, existing);
     }
@@ -1118,19 +1190,26 @@ export async function GET(request: Request) {
       existing.promptTokens += Number(row.promptTokens || 0);
       existing.completionTokens += Number(row.completionTokens || 0);
       existing.totalTokens += Number(row.totalTokens || 0);
-      const actualCost = computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+      const actualCost = computeUsageRowCost(
+        row,
+        pricingByProvider,
+        computeCostFromPricing,
+        costOptions
+      );
       existing.cost += actualCost;
       existing.normalizedCost += computeUsageRowNormalizedCost(
         row,
         pricingByProvider,
         computeCostFromPricing,
-        multiplierRulesForRow(row)
+        multiplierRulesForRow(row),
+        costOptions
       );
       if (serviceTier === "flex") {
         const standardCost = computeUsageRowStandardCost(
           row,
           pricingByProvider,
-          computeCostFromPricing
+          computeCostFromPricing,
+          costOptions
         );
         existing.savings += Math.max(0, standardCost - actualCost);
         existing.usageSavingsTokens += computeUsageSavingsTokens(
@@ -1191,10 +1270,15 @@ export async function GET(request: Request) {
       }
     }
 
+    const modelNames = Array.from(allModels);
     const dailyByModel = Object.keys(dailyByModelMap)
       .sort()
-      .map((date) => ({ date, ...dailyByModelMap[date] }));
-    const modelNames = Array.from(allModels);
+      .map((date) => ({
+        date,
+        ...Object.fromEntries(
+          modelNames.map((model) => [model, dailyByModelMap[date][model] || 0])
+        ),
+      }));
 
     // Final-review Finding 2: explicit, per-bucket signal for whether EVERY row behind
     // that bucket's normalizedCost had real key attribution (so the multiplier could be
@@ -1227,7 +1311,9 @@ export async function GET(request: Request) {
       weeklyCounts,
       dailyByModel,
       modelNames,
+      errorBreakdown,
       range,
+      includesFlatRateEstimates: includeFlatRateEstimates,
       // Only set for range=sinceReset — see resolveSinceResetRangeWindow. The
       // UI must not present a `!isObserved` window as "since the provider
       // reset"; it is a rolling-7d fallback wearing that range's clothes.
@@ -1252,22 +1338,24 @@ export async function GET(request: Request) {
         }
 
         const presetSinceIso = getRangeStartIso(presetRange);
-        const { unifiedSource: presetUnifiedSource, unifiedParams: presetParams } =
-          buildPresetUnifiedSource({
-            sinceIso: presetSinceIso ?? null,
-            untilIso: null,
-            rawCutoffDate,
-            apiKeyWhere,
-            apiKeyParams: apiKeyParamEntries,
-          });
+        const { unifiedSource: pSrc, unifiedParams: pParams } = buildPresetUnifiedSource({
+          sinceIso: presetSinceIso ?? null,
+          untilIso: null,
+          rawCutoffDate,
+          apiKeyWhere,
+          apiKeyParams: apiKeyParamEntries,
+        });
 
-        const presetModelRows = getPresetCostModelRows(presetUnifiedSource, presetParams) as Array<
-          Record<string, unknown>
-        >;
+        const presetModelRows = getPresetCostModelRows(pSrc, pParams) as UsageRows;
 
         let presetTotalCost = 0;
         for (const row of presetModelRows) {
-          presetTotalCost += computeUsageRowCost(row, pricingByProvider, computeCostFromPricing);
+          presetTotalCost += computeUsageRowCost(
+            row,
+            pricingByProvider,
+            computeCostFromPricing,
+            costOptions
+          );
         }
 
         presetSummaries[presetRange] = {

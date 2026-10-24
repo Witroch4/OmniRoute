@@ -1,5 +1,8 @@
 type JsonRecord = Record<string, unknown>;
 
+// Fork: Antigravity tool cloaking (suffix + decoy declarations) is kept — upstream #8013
+// removed it in favour of `sanitizeAntigravityToolPayload` (schema cleanup only). The
+// executor runs both: cloak, then sanitize (antigravity/executeAttempt.ts).
 export const AG_TOOL_SUFFIX = "_ide";
 
 const AG_DEFAULT_TOOL_NAMES = [
@@ -57,8 +60,8 @@ function toToolName(value: unknown): string {
  *
  * VSCode Copilot emits `enumDescriptions` inside tool parameter schemas, but the
  * Antigravity API rejects any request carrying that field with HTTP 400. Walk the
- * schema's `properties` and `items` so the field is removed at every nesting level
- * before the declaration is sent upstream.
+ * entire value tree so the field is removed from composition keywords (`anyOf`,
+ * `allOf`, `oneOf`), `$defs`, `additionalProperties`, and future schema shapes too.
  */
 export function stripEnumDescriptions(schema: unknown): unknown {
   if (!schema || typeof schema !== "object") return schema;
@@ -67,23 +70,69 @@ export function stripEnumDescriptions(schema: unknown): unknown {
     return schema.map((entry) => stripEnumDescriptions(entry));
   }
 
-  const result: JsonRecord = { ...(schema as JsonRecord) };
-  delete result.enumDescriptions;
-
-  const properties = asRecord(result.properties);
-  if (properties) {
-    const nextProperties: JsonRecord = {};
-    for (const key of Object.keys(properties)) {
-      nextProperties[key] = stripEnumDescriptions(properties[key]);
+  const result: JsonRecord = {};
+  for (const [key, value] of Object.entries(schema as JsonRecord)) {
+    if (key !== "enumDescriptions") {
+      result[key] = stripEnumDescriptions(value);
     }
-    result.properties = nextProperties;
-  }
-
-  if (result.items !== undefined) {
-    result.items = stripEnumDescriptions(result.items);
   }
 
   return result;
+}
+
+/**
+ * Sanitize Antigravity tool schemas without changing client-declared tool identity.
+ *
+ * Declaration order, declaration names, historical function calls, function responses,
+ * tool configuration, and non-function tools are preserved. Only schema fields rejected
+ * by Cloud Code are removed.
+ */
+export function sanitizeAntigravityToolPayload<T extends JsonRecord>(body: T): T {
+  const request = asRecord(body.request);
+  if (!request || !Array.isArray(request.tools)) {
+    return body;
+  }
+
+  let changed = false;
+  const tools = request.tools.map((toolValue) => {
+    const tool = asRecord(toolValue);
+    if (!tool || !Array.isArray(tool.functionDeclarations)) {
+      return toolValue;
+    }
+
+    let declarationsChanged = false;
+    const functionDeclarations = tool.functionDeclarations.map((declarationValue) => {
+      const declaration = asRecord(declarationValue);
+      if (!declaration || declaration.parameters === undefined) {
+        return declarationValue;
+      }
+
+      declarationsChanged = true;
+      return {
+        ...declaration,
+        parameters: stripEnumDescriptions(declaration.parameters),
+      };
+    });
+
+    if (!declarationsChanged) {
+      return toolValue;
+    }
+
+    changed = true;
+    return { ...tool, functionDeclarations };
+  });
+
+  if (!changed) {
+    return body;
+  }
+
+  return {
+    ...body,
+    request: {
+      ...request,
+      tools,
+    },
+  };
 }
 
 export function shouldCloakAntigravityTool(toolName: string): boolean {

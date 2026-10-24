@@ -55,12 +55,15 @@ const { default: CliAgentsPageClient } =
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 /**
- * Agent tool ids (category: "agent" in src/shared/constants/cliTools.ts).
- * Derived from the catalog instead of hand-written: the old hardcoded list of
- * 6 (§3.2 of plan-14) drifted when omp and letta were added, and an agent
- * missing here is left out of the batch-status map, falls back to
- * not_installed and pollutes the count/filter cases with an extra card.
+ * Agent tool ids from the catalog (§3.2 of plan-14, category: "agent" in
+ * src/shared/constants/cliTools.ts). "omp" and "letta" were added to the
+ * catalog after plan-14 shipped, bringing the count from 6 to 8.
  */
+// Derivado do catalogo, NAO escrito a mao. A lista hardcoded anterior ja tinha
+// derivado duas vezes (6 -> 8 com omp/letta, depois 8 -> 9 com prime-agent), e a
+// consequencia nao e obvia: um agente ausente daqui nao entra no mapa de status,
+// cai no default not_installed e contamina os testes de filtro/contagem com um
+// card extra. Derivar mantem o fixture em sincronia com a fonte por construcao.
 const AGENT_IDS = Object.values(CLI_TOOLS)
   .filter((tool) => tool.category === "agent")
   .map((tool) => tool.id);

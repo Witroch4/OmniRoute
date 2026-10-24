@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useTranslations } from "next-intl";
+import { PageHeader } from "@omniroute/ui-kit/page-header";
+import { Button, EmptyState, Input, SegmentedControl, Select, Skeleton } from "@/shared/components";
+import Icon from "@/shared/components/Icon";
 import { matchesSearch } from "@/shared/utils/turkishText";
 import FeatureFlagCard from "./FeatureFlagCard";
 
@@ -37,24 +41,30 @@ interface FlagUpdateResult {
 
 const ACTIVE_VALUES = new Set(["true", "1", "yes"]);
 
+// How card descriptions are displayed. "clamp" keeps cards compact and reveals
+// the full text on hover; "full" always shows the complete description.
+type DescriptionMode = "clamp" | "full";
+const DESCRIPTION_MODE_STORAGE_KEY = "ff-card-description-mode";
+
 function isActiveFlagValue(value: string): boolean {
   return ACTIVE_VALUES.has(value);
 }
 
 const CATEGORIES = [
-  { value: "all", label: "All" },
-  { value: "security", label: "Security" },
-  { value: "network", label: "Network" },
-  { value: "policies", label: "Policies" },
-  { value: "runtime", label: "Runtime" },
-  { value: "cli", label: "CLI" },
-  { value: "health", label: "Health" },
+  { value: "all", labelKey: "all" },
+  { value: "security", labelKey: "security" },
+  { value: "network", labelKey: "network" },
+  { value: "policies", labelKey: "policies" },
+  { value: "runtime", labelKey: "runtime" },
+  { value: "cli", labelKey: "cli" },
+  { value: "health", labelKey: "health" },
   // Synthetic "category" that filters by requiresRestart=true regardless of
   // real category — surfaces flags that need a process restart to take effect.
-  { value: "__restart", label: "Requires Restart" },
+  { value: "__restart", labelKey: "requiresRestart" },
 ];
 
 export default function FeatureFlagsGrid() {
+  const t = useTranslations("featureFlags");
   const [flags, setFlags] = useState<FlagData[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +75,7 @@ export default function FeatureFlagsGrid() {
   const [resettingAll, setResettingAll] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [descriptionMode, setDescriptionMode] = useState<DescriptionMode>("clamp");
   // Set of flag keys whose DB override was changed in this session without
   // a subsequent restart. Used to surface the restart banner.
   const [pendingRestartKeys, setPendingRestartKeys] = useState<Set<string>>(new Set());
@@ -81,20 +92,43 @@ export default function FeatureFlagsGrid() {
       setFlags(data.flags);
       setSummary(data.summary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load feature flags");
+      setError(err instanceof Error ? err.message : t("loadFailed"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
-    loadFlags();
+    const timer = window.setTimeout(() => void loadFlags(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadFlags]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Read the persisted preference after hydration — reading localStorage in the
+  // useState initializer would make the first client render differ from the SSR
+  // HTML (hydration mismatch), leaving the active pill stale.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(DESCRIPTION_MODE_STORAGE_KEY) === "full") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage hydration, runs once
+        setDescriptionMode("full");
+      }
+    } catch {
+      // localStorage unavailable — keep the default.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DESCRIPTION_MODE_STORAGE_KEY, descriptionMode);
+    } catch {
+      // localStorage unavailable — the mode just won't persist across reloads.
+    }
+  }, [descriptionMode]);
 
   const applyFlagResult = useCallback((key: string, result: FlagUpdateResult) => {
     const wasActive = isActiveFlagValue(result.previousValue);
@@ -133,9 +167,11 @@ export default function FeatureFlagsGrid() {
         (f) =>
           debouncedSearch === "" ||
           matchesSearch(f.key, debouncedSearch) ||
-          matchesSearch(f.description, debouncedSearch)
+          matchesSearch(f.description, debouncedSearch) ||
+          (t.has(`definitions.${f.key}.description`) &&
+            matchesSearch(t(`definitions.${f.key}.description`), debouncedSearch))
       );
-  }, [flags, debouncedSearch, category]);
+  }, [flags, debouncedSearch, category, t]);
 
   const handleToggle = useCallback(
     async (key: string, newValue: string) => {
@@ -147,7 +183,7 @@ export default function FeatureFlagsGrid() {
           body: JSON.stringify({ key, value: newValue }),
         });
         if (!res.ok) {
-          setError(`Failed to update flag: HTTP ${res.status}`);
+          setError(t("updateFailedHttp", { status: res.status }));
           return;
         }
         const result = (await res.json()) as FlagUpdateResult;
@@ -156,7 +192,7 @@ export default function FeatureFlagsGrid() {
           setPendingRestartKeys((prev) => new Set(prev).add(key));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to update flag");
+        setError(err instanceof Error ? err.message : t("updateFailed"));
       } finally {
         setSavingKeys((prev) => {
           const next = new Set(prev);
@@ -165,7 +201,7 @@ export default function FeatureFlagsGrid() {
         });
       }
     },
-    [applyFlagResult]
+    [applyFlagResult, t]
   );
 
   const handleReset = useCallback(
@@ -178,7 +214,7 @@ export default function FeatureFlagsGrid() {
           body: JSON.stringify({ key }), // no value = remove override
         });
         if (!res.ok) {
-          setError(`Failed to update flag: HTTP ${res.status}`);
+          setError(t("updateFailedHttp", { status: res.status }));
           return;
         }
         const result = (await res.json()) as FlagUpdateResult;
@@ -187,7 +223,7 @@ export default function FeatureFlagsGrid() {
           setPendingRestartKeys((prev) => new Set(prev).add(key));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to update flag");
+        setError(err instanceof Error ? err.message : t("updateFailed"));
       } finally {
         setSavingKeys((prev) => {
           const next = new Set(prev);
@@ -196,7 +232,7 @@ export default function FeatureFlagsGrid() {
         });
       }
     },
-    [applyFlagResult]
+    [applyFlagResult, t]
   );
 
   const handleRestart = useCallback(async () => {
@@ -204,7 +240,7 @@ export default function FeatureFlagsGrid() {
     try {
       const res = await fetch("/api/restart", { method: "POST" });
       if (!res.ok) {
-        setError(`Restart failed: HTTP ${res.status}`);
+        setError(t("restartFailedHttp", { status: res.status }));
         setShowRestartConfirm(false);
         setRestarting(false);
         return;
@@ -231,126 +267,130 @@ export default function FeatureFlagsGrid() {
         }
       }, 500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Restart failed");
+      setError(err instanceof Error ? err.message : t("restartFailed"));
       setShowRestartConfirm(false);
       setRestarting(false);
     }
-  }, []);
+  }, [t]);
 
   const handleResetAll = useCallback(async () => {
     setResettingAll(true);
     try {
       const res = await fetch("/api/settings/feature-flags", { method: "DELETE" });
       if (!res.ok) {
-        setError(`Failed to reset overrides: HTTP ${res.status}`);
+        setError(t("resetOverridesFailedHttp", { status: res.status }));
         setShowResetConfirm(false);
         return;
       }
       await loadFlags();
       setShowResetConfirm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reset overrides");
+      setError(err instanceof Error ? err.message : t("resetOverridesFailed"));
       setShowResetConfirm(false);
     } finally {
       setResettingAll(false);
     }
-  }, [loadFlags]);
+  }, [loadFlags, t]);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-text-primary">Feature Flags</h1>
-          {summary && (
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <span className="font-medium text-emerald-700 dark:text-emerald-300">
-                {summary.active} active
+      <PageHeader
+        compact
+        title={t("title")}
+        description={
+          summary ? (
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-success">
+                {t("activeCount", { count: summary.active })}
               </span>
-              <span className="text-text-muted/60">·</span>
-              <span className="text-text-muted">{summary.inactive} inactive</span>
-              <span className="text-text-muted/60">·</span>
-              <span className="font-medium text-sky-700 dark:text-sky-300">
-                {summary.overriddenByDb} DB overrides
+              <span aria-hidden="true">·</span>
+              <span>{t("inactiveCount", { count: summary.inactive })}</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-medium text-info">
+                {t("dbOverrideCount", { count: summary.overriddenByDb })}
               </span>
-            </div>
-          )}
-        </div>
-
-        {/* Search + Filter */}
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-          {/* Search input with search icon */}
-          <div className="relative">
-            <span className="material-symbols-outlined absolute left-2.5 top-2 text-sm text-text-muted">
-              search
             </span>
-            <input
-              type="text"
-              placeholder="Search flags..."
+          ) : undefined
+        }
+        actions={
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            {/* Description view: compact with hover tooltip vs always full text */}
+            <div title={t("descriptionModeHint")}>
+              <SegmentedControl
+                size="sm"
+                aria-label={t("descriptionModeLabel")}
+                value={descriptionMode}
+                onChange={(next) => setDescriptionMode(next as DescriptionMode)}
+                options={[
+                  { value: "clamp", label: t("descriptionModeHover") },
+                  { value: "full", label: t("descriptionModeFull") },
+                ]}
+              />
+            </div>
+
+            <Input
+              type="search"
+              icon="search"
+              aria-label={t("searchPlaceholder")}
+              placeholder={t("searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-border bg-bg-subtle py-1.5 pl-8 pr-4 text-sm text-text-primary placeholder:text-text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 sm:w-64"
+              className="w-full sm:w-64"
+            />
+
+            <Select
+              compact
+              aria-label={t("categoryLabel", {
+                category: t(
+                  `categories.${CATEGORIES.find((cat) => cat.value === category)?.labelKey ?? "all"}`
+                ),
+              })}
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              options={CATEGORIES.map((cat) => ({
+                value: cat.value,
+                label: t(`categories.${cat.labelKey}`),
+              }))}
+              className="w-full sm:w-auto"
             />
           </div>
-
-          {/* Category filter */}
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="w-full rounded-lg border border-border bg-bg-subtle px-3 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 sm:w-auto"
-          >
-            {CATEGORIES.map((cat) => (
-              <option key={cat.value} value={cat.value} className="bg-card text-text-primary">
-                {cat.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+        }
+      />
 
       {/* Pending-restart banner — shown when at least one requiresRestart flag
           was toggled in this session. */}
       {pendingRestartKeys.size > 0 && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-500/10">
-          <div className="flex items-center justify-between gap-4">
+        <div className="rounded-card border border-warning/40 bg-warning-bg p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div className="flex items-start gap-3">
-              <span className="material-symbols-outlined text-amber-600 dark:text-amber-300">
-                restart_alt
-              </span>
+              <Icon name="restart_alt" className="text-warning" />
               <div>
-                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                  {pendingRestartKeys.size} change{pendingRestartKeys.size === 1 ? "" : "s"} require
-                  a server restart to take effect.
+                <p className="text-sm font-medium text-text-main">
+                  {t("restartRequiredCount", { count: pendingRestartKeys.size })}
                 </p>
-                <p className="mt-0.5 text-xs text-amber-800/80 dark:text-amber-200/80">
-                  These flags only apply after the process reloads. Restart now or continue editing
-                  — pending flags stay queued until you confirm.
-                </p>
+                <p className="mt-0.5 text-xs text-text-muted">{t("restartRequiredDescription")}</p>
               </div>
             </div>
             {!showRestartConfirm ? (
-              <button
+              <Button
+                variant="warning"
+                className="shrink-0"
                 onClick={() => setShowRestartConfirm(true)}
-                className="shrink-0 rounded-lg border border-amber-300 bg-white/70 px-4 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-400/40 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/20"
               >
-                Restart Server
-              </button>
+                {t("restartServer")}
+              </Button>
             ) : (
               <div className="flex items-center gap-3">
-                <button
+                <Button
+                  variant="ghost"
                   onClick={() => setShowRestartConfirm(false)}
-                  className="text-sm text-amber-800/80 hover:text-amber-950 dark:text-amber-300/80 dark:hover:text-amber-200"
                   disabled={restarting}
                 >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRestart}
-                  disabled={restarting}
-                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50 dark:bg-amber-500/30 dark:text-amber-200 dark:hover:bg-amber-500/40"
-                >
-                  {restarting ? "Restarting…" : "Confirm Restart"}
-                </button>
+                  {t("cancel")}
+                </Button>
+                <Button variant="warning" onClick={handleRestart} disabled={restarting}>
+                  {restarting ? t("restarting") : t("confirmRestart")}
+                </Button>
               </div>
             )}
           </div>
@@ -359,13 +399,11 @@ export default function FeatureFlagsGrid() {
 
       {/* Explanation banner for the synthetic "Requires Restart" view */}
       {category === "__restart" && (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+        <div className="rounded-card border border-info/30 bg-info-bg p-3 text-sm text-text-main">
           <div className="flex items-start gap-2">
-            <span className="material-symbols-outlined text-sky-600 dark:text-blue-300">info</span>
+            <Icon name="info" className="text-info" />
             <p>
-              These flags only take effect after the server restarts. Toggle them like any other
-              flag — the change is persisted immediately, but the new value is only read at process
-              startup. Use the <strong>Restart Server</strong> banner above to apply.
+              {t.rich("restartViewDescription", { strong: (chunks) => <strong>{chunks}</strong> })}
             </p>
           </div>
         </div>
@@ -378,24 +416,21 @@ export default function FeatureFlagsGrid() {
           style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))" }}
         >
           {Array.from({ length: 9 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-36 animate-pulse rounded-xl bg-black/[0.04] dark:bg-white/5"
-            />
+            <Skeleton key={i} className="h-36 w-full rounded-card" />
           ))}
         </div>
       )}
 
       {/* Error state */}
       {!loading && error && (
-        <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-500/30 dark:bg-red-500/10">
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
-          <button
-            onClick={loadFlags}
-            className="text-sm font-medium text-red-700 underline hover:no-underline dark:text-red-300"
-          >
-            Retry
-          </button>
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-card border border-error/30 bg-error-bg p-4"
+        >
+          <p className="text-sm text-error">{error}</p>
+          <Button variant="outline" size="sm" icon="refresh" onClick={loadFlags}>
+            {t("retry")}
+          </Button>
         </div>
       )}
 
@@ -403,10 +438,7 @@ export default function FeatureFlagsGrid() {
       {!loading && !error && (
         <>
           {filteredFlags.length === 0 ? (
-            <div className="py-16 text-center text-text-muted">
-              <span className="material-symbols-outlined text-4xl">search_off</span>
-              <p className="mt-2 text-sm">No flags match your search</p>
-            </div>
+            <EmptyState icon="search_off" title={t("noSearchResults")} />
           ) : (
             <div
               className="grid gap-4"
@@ -415,10 +447,19 @@ export default function FeatureFlagsGrid() {
               {filteredFlags.map((flag) => (
                 <FeatureFlagCard
                   key={flag.key}
-                  flag={flag}
+                  flag={{
+                    ...flag,
+                    label: t.has(`definitions.${flag.key}.label`)
+                      ? t(`definitions.${flag.key}.label`)
+                      : flag.label,
+                    description: t.has(`definitions.${flag.key}.description`)
+                      ? t(`definitions.${flag.key}.description`)
+                      : flag.description,
+                  }}
                   onToggle={handleToggle}
                   onReset={handleReset}
                   saving={savingKeys.has(flag.key)}
+                  descriptionMode={descriptionMode}
                 />
               ))}
             </div>
@@ -428,30 +469,20 @@ export default function FeatureFlagsGrid() {
           {summary && summary.overriddenByDb > 0 && (
             <div className="flex justify-end border-t border-border pt-4">
               {!showResetConfirm ? (
-                <button
-                  onClick={() => setShowResetConfirm(true)}
-                  className="rounded-lg border border-red-200 bg-red-50/60 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 dark:border-red-500/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/10"
-                >
-                  Reset All Overrides
-                </button>
+                <Button variant="danger" onClick={() => setShowResetConfirm(true)}>
+                  {t("resetAllOverrides")}
+                </Button>
               ) : (
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-end gap-3">
                   <p className="text-sm text-text-muted">
-                    Reset all {summary.overriddenByDb} DB override(s)?
+                    {t("confirmResetOverrides", { count: summary.overriddenByDb })}
                   </p>
-                  <button
-                    onClick={() => setShowResetConfirm(false)}
-                    className="text-sm text-text-muted hover:text-text-primary"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleResetAll}
-                    disabled={resettingAll}
-                    className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50 dark:bg-red-500/20 dark:text-red-300 dark:hover:bg-red-500/30"
-                  >
-                    {resettingAll ? "Resetting..." : "Confirm Reset"}
-                  </button>
+                  <Button variant="ghost" onClick={() => setShowResetConfirm(false)}>
+                    {t("cancel")}
+                  </Button>
+                  <Button variant="danger" onClick={handleResetAll} loading={resettingAll}>
+                    {resettingAll ? t("resetting") : t("confirmReset")}
+                  </Button>
                 </div>
               )}
             </div>

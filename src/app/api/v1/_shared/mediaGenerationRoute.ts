@@ -3,6 +3,7 @@ import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
+import { recordModalCallCost } from "@/domain/costRules";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { v1ImageGenerationSchema } from "@/shared/validation/schemas";
@@ -14,8 +15,22 @@ type MediaModelListEntry = {
 };
 
 type MediaGenerationResult =
-  | { success: true; data: unknown }
-  | { success: false; error: unknown; status: number };
+  { success: true; data: unknown } | { success: false; error: unknown; status: number };
+
+type MediaGenerationFailure = Extract<MediaGenerationResult, { success: false }>;
+
+export type MediaGenerationResultLike = {
+  success: boolean;
+  data?: unknown;
+  error?: unknown;
+  status?: number;
+};
+
+export function isMediaGenerationFailure(
+  result: MediaGenerationResultLike
+): result is MediaGenerationFailure {
+  return result.success === false && "error" in result && typeof result.status === "number";
+}
 
 type MediaGenerationBody = {
   model: string;
@@ -24,8 +39,7 @@ type MediaGenerationBody = {
 } & Record<string, unknown>;
 
 type ValidatedMediaGenerationBody =
-  | { ok: true; body: MediaGenerationBody }
-  | { ok: false; response: Response };
+  { state: "ok"; body: MediaGenerationBody } | { state: "invalid"; response: Response };
 
 export function mediaGenerationOptionsResponse() {
   return new Response(null, {
@@ -67,18 +81,21 @@ export async function readMediaGenerationBody(
     rawBody = await request.json();
   } catch {
     log.warn(logScope, "Invalid JSON body");
-    return { ok: false, response: errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body") };
+    return {
+      state: "invalid",
+      response: errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body"),
+    };
   }
 
   const validation = validateBody(v1ImageGenerationSchema, rawBody);
   if (isValidationFailure(validation)) {
     return {
-      ok: false,
+      state: "invalid",
       response: errorResponse(HTTP_STATUS.BAD_REQUEST, validation.error.message),
     };
   }
 
-  return { ok: true, body: validation.data as MediaGenerationBody };
+  return { state: "ok", body: validation.data as MediaGenerationBody };
 }
 
 export function promptRequiredResponse(body: { prompt?: unknown }) {
@@ -96,6 +113,9 @@ export async function successfulMediaGenerationResponse({
   model,
   startTime,
   duration,
+  strategy,
+  fallbackAttempts,
+  apiKeyId,
 }: {
   result: { data: unknown };
   billingMode: "audio" | "video";
@@ -103,9 +123,17 @@ export async function successfulMediaGenerationResponse({
   model: string;
   startTime: number;
   duration: unknown;
+  // Set by combo execution so the response reports which strategy picked the
+  // target and how many earlier targets were skipped. Omitted on the direct
+  // single-model path, where neither is meaningful.
+  strategy?: string;
+  fallbackAttempts?: number;
+  /** The caller's API key: the priced call is charged to its dollar budget. */
+  apiKeyId?: string | null;
 }) {
   const seconds = Number(duration) || 0;
   const costUsd = await calculateModalCost(billingMode, provider, model, { seconds });
+  recordModalCallCost(apiKeyId, { provider, model, costUsd });
   const headers = new Headers({ "Content-Type": "application/json" });
   attachOmniRouteMetaHeaders(headers, {
     provider,
@@ -113,6 +141,8 @@ export async function successfulMediaGenerationResponse({
     costUsd,
     latencyMs: Date.now() - startTime,
     requestId: generateRequestId(),
+    ...(strategy ? { strategy } : {}),
+    ...(fallbackAttempts !== undefined ? { fallbackAttempts } : {}),
   });
 
   return new Response(JSON.stringify(result.data), {
@@ -125,6 +155,12 @@ export function failedMediaGenerationResponse(
   result: MediaGenerationResult,
   fallbackMessage: string
 ) {
+  if (!isMediaGenerationFailure(result)) {
+    return new Response(JSON.stringify(toJsonErrorPayload(undefined, fallbackMessage)), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const errorPayload = toJsonErrorPayload(result.error, fallbackMessage);
   return new Response(JSON.stringify(errorPayload), {
     status: result.status,

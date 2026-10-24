@@ -14,7 +14,6 @@ import {
 } from "@/shared/constants/upstreamHeaders";
 import { MAX_TIMER_TIMEOUT_MS } from "@/shared/utils/runtimeTimeouts";
 
-
 const pricingRatesShape = {
   input: z.number().min(0).optional(),
   output: z.number().min(0).optional(),
@@ -23,13 +22,47 @@ const pricingRatesShape = {
   cache_creation: z.number().min(0).optional(),
 };
 
+// Rates for requests whose prompt exceeds the long-context threshold, applied per REQUEST
+// (never on token sums — see costCalculator/longContextSql). Two shapes round-trip:
+// upstream's `{ threshold, inclusive?, ...rates }` (#12494: OpenAI >272K, xAI >=200K; rates
+// it omits keep the flat value) and the fork's rates-only block (Claude Haiku 5.5, published
+// 100K threshold), which must then carry both an input and an output rate.
+const longContextTierSchema = z
+  .object({
+    threshold: z.number().positive().optional(),
+    inclusive: z.boolean().optional(),
+    ...pricingRatesShape,
+  })
+  .strict()
+  .refine(
+    (tier) =>
+      tier.threshold !== undefined || (tier.input !== undefined && tier.output !== undefined),
+    { message: "long_context needs a threshold, or both an input and an output rate" }
+  );
+
 export const pricingFieldsSchema = z
   .object({
     ...pricingRatesShape,
-    // Rates for requests whose prompt exceeds the long-context threshold. The pricing
-    // editor loads the merged catalog and posts it back whole, so a row that carries
-    // this block must round-trip instead of failing the strict key check.
-    long_context: z.object(pricingRatesShape).strict().optional(),
+    // Long-context tier carried by default rows and echoed back by the dashboard's
+    // GET → PATCH round-trip (#12494), so a row that carries it must not fail the
+    // strict key check.
+    long_context: longContextTierSchema.optional(),
+    // Written by pricingSync alongside the token fields and echoed back by the
+    // dashboard's GET → PATCH round-trip; strict() would otherwise reject the
+    // API's own output with an unrecognized-keys 400 (#12494).
+    mode: z.string().min(1).optional(),
+    input_cost_per_second: z.number().min(0).optional(),
+    output_cost_per_second: z.number().min(0).optional(),
+    input_cost_per_image: z.number().min(0).optional(),
+    output_cost_per_image: z.number().min(0).optional(),
+    input_cost_per_pixel: z.number().min(0).optional(),
+    output_cost_per_pixel: z.number().min(0).optional(),
+    input_cost_per_character: z.number().min(0).optional(),
+    output_cost_per_character: z.number().min(0).optional(),
+    input_cost_per_video_per_second: z.number().min(0).optional(),
+    output_cost_per_video_per_second: z.number().min(0).optional(),
+    search_unit_cost: z.number().min(0).optional(),
+    ocr_cost_per_page: z.number().min(0).optional(),
   })
   .strict();
 

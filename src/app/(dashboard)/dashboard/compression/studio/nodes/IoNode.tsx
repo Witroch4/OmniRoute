@@ -50,12 +50,12 @@ export function IoNode({ data }: NodeProps) {
       <div className="text-base font-bold" style={{ color }}>
         {(tokens as number).toLocaleString()}
       </div>
-      <div className="text-[10px] text-muted">tokens</div>
+      <div className="text-[10px] text-text-muted">tokens</div>
 
       {!isInput && savingsPercent != null && (
         <div
           className="mt-1 text-[11px] font-semibold"
-          style={{ color: "#22c55e" }}
+          style={{ color: "var(--orch-status-success)" }}
           data-testid="io-savings-percent"
         >
           {`-${(savingsPercent as number).toFixed(1)}%`}

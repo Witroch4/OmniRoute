@@ -14,15 +14,12 @@ interface DbLike {
 }
 
 /**
- * Merge a patch into a connection's `provider_specific_data` in one transaction,
- * without the full-row rewrite (and DB backup) of `updateProviderConnection()`.
- * ONLY for non-structural account-state patches on registry providers; a
- * compatible node's providerSpecificData can carry model lists and must go
- * through `updateProviderConnection()`.
- *
- * Ported from upstream (#16532). Upstream invalidates with
- * `{ skipModelCatalog: true }` (#13389); the fork's read cache has no such
- * option yet, so the whole connections scope is invalidated.
+ * Merge a patch into a connection's `provider_specific_data` WITHOUT dropping
+ * the model catalog cache (`skipModelCatalog`, #13389) — the /v1/models
+ * builder never reads account-state keys like `alibabaFreeDrainedModels`.
+ * ONLY for non-structural patches on registry providers; a compatible node's
+ * providerSpecificData can carry model lists and must go through
+ * `updateProviderConnection()` so the catalog sees them.
  */
 export async function mergeConnectionProviderSpecificData(
   id: string,
@@ -49,6 +46,6 @@ export async function mergeConnectionProviderSpecificData(
     db.prepare(
       "UPDATE provider_connections SET provider_specific_data = ?, updated_at = ? WHERE id = ?"
     ).run(JSON.stringify(stored), new Date().toISOString(), id);
-    invalidateDbCache("connections");
+    invalidateDbCache("connections", id, { skipModelCatalog: true });
   })();
 }

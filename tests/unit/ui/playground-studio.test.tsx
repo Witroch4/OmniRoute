@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // The next/dynamic mock below starts each tab's import without awaiting it. A
-// tab module graph (BuildTab → useStructuredOutput → ...) can still be loading
+// tab module graph (BuildTab → useToolsBuilder → schemas) can still be loading
 // when the synchronous tests finish, and vitest then reports an unhandled
 // EnvironmentTeardownError ("Cannot load … after the environment was torn
 // down"). Every started import is tracked and awaited in afterAll.
@@ -246,7 +246,9 @@ describe("PlaygroundStudio", () => {
     const el = renderStudio();
 
     // Verify config pane is rendered
-    const configPaneLabel = el.querySelector("[aria-label='Config pane']");
+    // This file's next-intl mock renders raw translation keys (see the `vi.mock`
+    // above), matching the rest of this file's assertions ("tabChat", "tabApi", ...).
+    const configPaneLabel = el.querySelector("[aria-label='configPane']");
     expect(configPaneLabel).toBeTruthy();
 
     // Switch to API tab
@@ -258,7 +260,7 @@ describe("PlaygroundStudio", () => {
     });
 
     // Config pane should still be visible
-    const configPaneAfterSwitch = el.querySelector("[aria-label='Config pane']");
+    const configPaneAfterSwitch = el.querySelector("[aria-label='configPane']");
     expect(configPaneAfterSwitch).toBeTruthy();
   });
 
@@ -278,8 +280,9 @@ describe("PlaygroundStudio", () => {
       exportBtn?.click();
     });
 
-    // mock returns i18n key as text — assert on the key
-    expect(el.textContent).toContain("exportCode");
+    // mock returns i18n key as text — assert on the key. KEA-7886: the modal is the kit Dialog,
+    // portaled to document.body.
+    expect(document.querySelector("[role='dialog']")?.textContent).toContain("exportCode");
   });
 });
 

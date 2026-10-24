@@ -1,15 +1,29 @@
 import { getDbInstance } from "@/lib/db/core";
 import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
-import { calculateCost } from "./costCalculator";
-import { longContextSumColumns, readLongContextColumns } from "./longContextSql";
+import { sumSearchLedgerSpendSince } from "@/lib/db/costLedger";
+import { calculateCostDetailed } from "./costCalculator";
+import {
+  PRICED_FROM_TOKENS_SQL,
+  longContextSumColumns,
+  readLongContextColumns,
+} from "./longContextSql";
 import {
   applyFamilyMultiplier,
   loadFamilyMultiplierRules,
   resolveFamilyMultiplier,
   type FamilyMultiplierRule,
 } from "./modelFamilyMultiplier";
-import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
+import {
+  calendarWeekWindowMs,
+  isValidIanaTimeZone,
+} from "@omniroute/open-sse/services/dailyQuotaReset.ts";
+import {
+  errorResponse,
+  resolveRetryAfterInstant,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/error.ts";
 import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
 import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
 import { resolveProviderQuotaResetReference } from "./quotaResetReference";
@@ -41,6 +55,15 @@ export interface ApiKeyUsageLimitStatus {
   weeklyResetAtIso: string | null;
   dailyExceeded: boolean;
   weeklyExceeded: boolean;
+  /**
+   * True when at least one usage_history row in the daily/weekly window could not
+   * be priced at all (no pricing row for the provider+model — e.g. a routing
+   * alias such as `auto`, #12341). Enforcement fails closed on this: an unpriced
+   * row forces `*Exceeded = true` rather than silently contributing $0 to spend,
+   * since a real cost may be hiding behind the alias.
+   */
+  dailyHasUnpricedUsage?: boolean;
+  weeklyHasUnpricedUsage?: boolean;
 }
 
 export interface ApiKeyUsageLimitDeps {
@@ -53,6 +76,14 @@ export interface ApiKeyUsageLimitDeps {
 }
 
 export interface UsageCostRow {
+  /**
+   * Provider-reported exact cost of the rows that carry one (`provider_cost_usd`);
+   * their tokens are excluded from the sums below. Absent for callers that select
+   * plain token sums (the per-device report): those rows are priced from tokens.
+   */
+  storedCost?: number | null;
+  /** Rows WITHOUT a provider-reported cost in this group; 0 means nothing to price. */
+  unmeteredRequests?: number | null;
   provider: string | null;
   model: string | null;
   serviceTier: string | null;
@@ -512,7 +543,113 @@ async function getProviderWeeklyWindow(
   };
 }
 
+export type ApiKeyWeeklyWindowMode = "provider" | "calendar";
+
+export interface ApiKeyWeeklyWindowSetting {
+  mode: ApiKeyWeeklyWindowMode;
+  timeZone: string;
+}
+
+const warnedWeeklyWindowValues = new Set<string>();
+
+function warnWeeklyWindowValueOnce(message: string): void {
+  if (warnedWeeklyWindowValues.has(message)) return;
+  warnedWeeklyWindowValues.add(message);
+  console.warn(`[apiKeyUsageLimits] ${message}`);
+}
+
+function getProcessTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/**
+ * Weekly window used by per-key USD limits.
+ * - `provider` (default): end at the earliest weekly reset among the upstream
+ *   connections the key can reach; rolling 7 days when none is known.
+ * - `calendar`: the local week starting Monday 00:00 in
+ *   OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE, or in the process timezone when unset.
+ */
+export function getApiKeyWeeklyWindowSetting(
+  env: Record<string, string | undefined> = process.env
+): ApiKeyWeeklyWindowSetting {
+  const rawMode = (env.OMNIROUTE_API_KEY_WEEKLY_WINDOW ?? "").trim().toLowerCase();
+  if (rawMode && rawMode !== "provider" && rawMode !== "calendar") {
+    warnWeeklyWindowValueOnce(
+      `OMNIROUTE_API_KEY_WEEKLY_WINDOW="${rawMode}" is not provider|calendar; using provider`
+    );
+  }
+  const rawTimeZone = (env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE ?? "").trim();
+  if (rawTimeZone && !isValidIanaTimeZone(rawTimeZone)) {
+    warnWeeklyWindowValueOnce(
+      `OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE="${rawTimeZone}" is not an IANA timezone; using the process timezone`
+    );
+  }
+  return {
+    mode: rawMode === "calendar" ? "calendar" : "provider",
+    timeZone: rawTimeZone && isValidIanaTimeZone(rawTimeZone) ? rawTimeZone : getProcessTimeZone(),
+  };
+}
+
+function getCalendarWeeklyWindow(
+  timeZone: string,
+  nowMs: number
+): { resetAtIso: string; windowStartIso: string } {
+  const { startMs, resetMs } = calendarWeekWindowMs(timeZone, nowMs);
+  return {
+    resetAtIso: new Date(resetMs).toISOString(),
+    windowStartIso: new Date(startMs).toISOString(),
+  };
+}
+
+/**
+ * The key's weekly window per the configured mode (`getApiKeyWeeklyWindowSetting`):
+ * the calendar week, or the window anchored on the provider's weekly reset. Every
+ * weekly consumer (USD quota, model budget rules, the Cost Explorer "since reset"
+ * range) goes through here so they all reset as a single event.
+ */
+async function getKeyWeeklyWindow(
+  metadata: ApiKeyUsageLimitMetadata,
+  deps: Required<ApiKeyUsageLimitDeps>,
+  nowMs: number
+): Promise<{ resetAtIso: string | null; windowStartIso: string | null }> {
+  const setting = getApiKeyWeeklyWindowSetting();
+  return setting.mode === "calendar"
+    ? getCalendarWeeklyWindow(setting.timeZone, nowMs)
+    : getProviderWeeklyWindow(metadata, deps, nowMs);
+}
+
 export type SpendBasis = "normalized" | "real";
+
+interface ApiKeyUsdSpend {
+  totalUsd: number;
+  /** True when at least one (provider, model) group had no pricing row at all (#12341). */
+  hasUnpricedUsage: boolean;
+}
+
+/**
+ * Priceable-token sums plus the provider-reported cost of each group: a row carrying
+ * `provider_cost_usd` (credit-metered providers, xAI) is billed by that cost and its
+ * tokens are never priced again, and the long-context split only covers the rows
+ * priced from tokens.
+ */
+const SPEND_COST_COLUMNS = `
+        COALESCE(SUM(provider_cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN 1 ELSE 0 END), 0) as unmeteredRequests,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as promptTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as completionTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as cacheReadTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as cacheCreationTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as reasoningTokens,
+        ${longContextSumColumns("", undefined, undefined, PRICED_FROM_TOKENS_SQL)}`;
+
+/**
+ * Real USD cost of grouped usage rows (provider/model/tier + token sums), priced
+ * exactly like the per-key quota and the budget ladder. Exported for the
+ * per-device usage report so its dollars agree with every other cost figure.
+ */
+export async function priceUsageRows(rows: UsageCostRow[]): Promise<number> {
+  return (await sumUsageCostRows(rows)).totalUsd;
+}
 
 /**
  * `multiplierRules` is non-null only for `basis: "normalized"` callers (see
@@ -525,38 +662,49 @@ export type SpendBasis = "normalized" | "real";
  * COALESCE in the caller), so resolving the multiplier directly off them is
  * correct — no separate billed-vs-served split needed at this layer.
  */
-/**
- * Real USD cost of grouped usage rows (provider/model/tier + token sums), priced
- * exactly like the per-key quota and the budget ladder. Exported for the
- * per-device usage report so its dollars agree with every other cost figure.
- */
-export async function priceUsageRows(rows: UsageCostRow[]): Promise<number> {
-  return sumUsageCostRows(rows);
-}
-
 async function sumUsageCostRows(
   rows: UsageCostRow[],
   multiplierRules: FamilyMultiplierRule[] | null = null
-): Promise<number> {
+): Promise<ApiKeyUsdSpend> {
   let total = 0;
+  let hasUnpricedUsage = false;
   for (const row of rows) {
     const provider = typeof row.provider === "string" ? row.provider : "";
     const model = typeof row.model === "string" ? row.model : "";
     if (!provider || !model) continue;
 
-    let rowCost = await calculateCost(
-      provider,
-      model,
-      {
-        input: toNumber(row.promptTokens),
-        output: toNumber(row.completionTokens),
-        cacheRead: toNumber(row.cacheReadTokens),
-        cacheCreation: toNumber(row.cacheCreationTokens),
-        reasoning: toNumber(row.reasoningTokens),
-        ...readLongContextColumns(row as unknown as Record<string, unknown>),
-      },
-      { provider, model, serviceTier: row.serviceTier || "standard" }
-    );
+    // A provider-reported exact cost is the billed amount (credit-metered providers,
+    // xAI). Those rows' tokens are excluded from the sums, and they never make the
+    // group unpriced: only rows without a stored cost are priced from tokens.
+    let rowCost = toNumber(row.storedCost);
+    const hasTokenPricedRows =
+      row.unmeteredRequests === undefined ||
+      row.unmeteredRequests === null ||
+      toNumber(row.unmeteredRequests) > 0;
+    if (hasTokenPricedRows) {
+      const { costUsd, priced } = await calculateCostDetailed(
+        provider,
+        model,
+        {
+          input: toNumber(row.promptTokens),
+          output: toNumber(row.completionTokens),
+          cacheRead: toNumber(row.cacheReadTokens),
+          cacheCreation: toNumber(row.cacheCreationTokens),
+          reasoning: toNumber(row.reasoningTokens),
+          ...readLongContextColumns(row as unknown as Record<string, unknown>),
+        },
+        { provider, model, serviceTier: row.serviceTier || "standard" }
+      );
+      if (!priced) {
+        hasUnpricedUsage = true;
+        console.warn(
+          `[apiKeyUsageLimits] no pricing found for ${provider}/${model} — usage counted as $0; ` +
+            "a configured USD quota fails closed for this window unless " +
+            "USAGE_LIMIT_IGNORE_UNPRICED is on (#12341)"
+        );
+      }
+      rowCost += costUsd;
+    }
 
     if (multiplierRules) {
       const multiplier = resolveFamilyMultiplier(multiplierRules, provider, model);
@@ -565,11 +713,12 @@ async function sumUsageCostRows(
 
     total += rowCost;
   }
-  return roundUsd(total);
+  return { totalUsd: roundUsd(total), hasUnpricedUsage };
 }
 
 /**
- * Sum an API key's USD spend since `sinceIso`.
+ * Sum an API key's USD spend since `sinceIso`, reporting whether any of it could not
+ * be priced (#12341).
  *
  * `basis: "normalized"` (the default) prices each row by the model the CLIENT
  * asked for — `billed_provider`/`billed_model` when a model budget rule
@@ -589,13 +738,17 @@ async function sumUsageCostRows(
  * pair, so its family multiplier (if any) scales that row's cost before the
  * sum. `basis: "real"` never loads multiplier rules at all, since the
  * multiplier must never touch what OmniRoute actually paid upstream.
+ *
+ * Web search spend is not in usage_history; it lives in request_cost_ledger
+ * under the search-only service_tier marker (never re-counting chat rows) and is
+ * added on both bases, unscaled.
  */
-export async function getApiKeyUsdSpendSince(
+async function getApiKeyUsdSpendDetailedSince(
   apiKeyId: string,
   sinceIso: string,
   options: { basis?: SpendBasis } = {}
-): Promise<number> {
-  if (!apiKeyId) return 0;
+): Promise<ApiKeyUsdSpend> {
+  if (!apiKeyId) return { totalUsd: 0, hasUnpricedUsage: false };
   const basis = options.basis ?? "normalized";
   const providerExpr =
     basis === "normalized" ? "COALESCE(NULLIF(billed_provider, ''), provider)" : "provider";
@@ -609,23 +762,31 @@ export async function getApiKeyUsdSpendSince(
         LOWER(${providerExpr}) as provider,
         LOWER(${modelExpr}) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-        COALESCE(SUM(tokens_input), 0) as promptTokens,
-        COALESCE(SUM(tokens_output), 0) as completionTokens,
-        COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
-        COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-        ${longContextSumColumns()}
+        ${SPEND_COST_COLUMNS}
       FROM usage_history
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso
-        AND success = 1
+        AND (success = 1 OR provider_cost_usd IS NOT NULL)
       GROUP BY LOWER(${providerExpr}), LOWER(${modelExpr}), serviceTier
     `
     )
     .all({ apiKeyId, sinceIso }) as UsageCostRow[];
 
   const multiplierRules = basis === "normalized" ? await loadFamilyMultiplierRules(apiKeyId) : null;
-  return sumUsageCostRows(rows, multiplierRules);
+  const spend = await sumUsageCostRows(rows, multiplierRules);
+  return {
+    totalUsd: roundUsd(spend.totalUsd + sumSearchLedgerSpendSince(apiKeyId, sinceIso)),
+    hasUnpricedUsage: spend.hasUnpricedUsage,
+  };
+}
+
+/** USD total of {@link getApiKeyUsdSpendDetailedSince} (same `basis` contract). */
+export async function getApiKeyUsdSpendSince(
+  apiKeyId: string,
+  sinceIso: string,
+  options: { basis?: SpendBasis } = {}
+): Promise<number> {
+  return (await getApiKeyUsdSpendDetailedSince(apiKeyId, sinceIso, options)).totalUsd;
 }
 
 const NORMALIZED_SPEND_CACHE_TTL_MS = 60_000;
@@ -694,16 +855,11 @@ export async function getApiKeyFamilyRealSpendSince(
         LOWER(provider) as provider,
         LOWER(model) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-        COALESCE(SUM(tokens_input), 0) as promptTokens,
-        COALESCE(SUM(tokens_output), 0) as completionTokens,
-        COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
-        COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-        ${longContextSumColumns()}
+        ${SPEND_COST_COLUMNS}
       FROM usage_history
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso
-        AND success = 1
+        AND (success = 1 OR provider_cost_usd IS NOT NULL)
         AND LOWER(provider) = @provider
         AND LOWER(model) GLOB @familyGlob
       GROUP BY LOWER(provider), LOWER(model), serviceTier
@@ -716,7 +872,7 @@ export async function getApiKeyFamilyRealSpendSince(
       familyGlob: familyGlob.toLowerCase(),
     }) as UsageCostRow[];
 
-  return sumUsageCostRows(rows);
+  return (await sumUsageCostRows(rows)).totalUsd;
 }
 
 /**
@@ -756,7 +912,7 @@ export async function getApiKeyWeeklyWindowStartIso(
     return resolveWeeklyWindowStartIso(precomputedWeeklyWindow, now);
   }
   const resolvedDeps = await resolveDeps(deps);
-  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  const weeklyWindow = await getKeyWeeklyWindow(metadata, resolvedDeps, now);
   return resolveWeeklyWindowStartIso(weeklyWindow, now);
 }
 
@@ -793,7 +949,7 @@ export async function resolveApiKeyWeeklyWindow(
   now: number = Date.now()
 ): Promise<ApiKeyWeeklyWindowResolution> {
   const resolvedDeps = await resolveDeps(deps);
-  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  const weeklyWindow = await getKeyWeeklyWindow(metadata, resolvedDeps, now);
   const windowStartIso = await getApiKeyWeeklyWindowStartIso(
     metadata,
     resolvedDeps,
@@ -815,7 +971,7 @@ export async function getApiKeyUsageLimitStatus(
   const now = resolvedDeps.now();
   const dailyWindowStartIso = getFortalezaDayStartIso(now);
   const dailyResetAtIso = getFortalezaDayResetIso(now);
-  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  const weeklyWindow = await getKeyWeeklyWindow(metadata, resolvedDeps, now);
   const weeklyResetAtIso = weeklyWindow.resetAtIso;
   const weeklyWindowStartIso = await getApiKeyWeeklyWindowStartIso(
     metadata,
@@ -827,10 +983,30 @@ export async function getApiKeyUsageLimitStatus(
   const weeklyLimitUsd = normalizeLimitUsd(metadata.weeklyUsageLimitUsd);
   const enabled = metadata.usageLimitEnabled === true;
 
-  const [dailySpentUsd, weeklySpentUsd] = await Promise.all([
-    getApiKeyUsdSpendSince(metadata.id, dailyWindowStartIso),
-    getApiKeyUsdSpendSince(metadata.id, weeklyWindowStartIso),
+  const [dailySpend, weeklySpend] = await Promise.all([
+    getApiKeyUsdSpendDetailedSince(metadata.id, dailyWindowStartIso),
+    getApiKeyUsdSpendDetailedSince(metadata.id, weeklyWindowStartIso),
   ]);
+  const dailySpentUsd = dailySpend.totalUsd;
+  const weeklySpentUsd = weeklySpend.totalUsd;
+
+  // Fail closed (#12341): a window with a configured limit that also contains
+  // usage which could not be priced at all (e.g. a provider's `auto` routing
+  // alias with no catalog price) must not let that usage silently pass the cap
+  // as an invisible $0 — treat the limit as exceeded rather than trust an
+  // undercounted spend total. A window with no configured limit was never
+  // enforced, so unpriced usage there is only logged, not blocking.
+  // USAGE_LIMIT_IGNORE_UNPRICED is the operator opt-out: unpriced usage then
+  // stays at $0 and only priced spend counts toward the limit.
+  const failClosedOnUnpriced = !isFeatureFlagEnabled("USAGE_LIMIT_IGNORE_UNPRICED");
+  const dailyExceeded =
+    enabled &&
+    dailyLimitUsd !== null &&
+    (dailySpentUsd >= dailyLimitUsd || (failClosedOnUnpriced && dailySpend.hasUnpricedUsage));
+  const weeklyExceeded =
+    enabled &&
+    weeklyLimitUsd !== null &&
+    (weeklySpentUsd >= weeklyLimitUsd || (failClosedOnUnpriced && weeklySpend.hasUnpricedUsage));
 
   return {
     enabled,
@@ -842,8 +1018,10 @@ export async function getApiKeyUsageLimitStatus(
     dailyResetAtIso,
     weeklyWindowStartIso,
     weeklyResetAtIso,
-    dailyExceeded: enabled && dailyLimitUsd !== null && dailySpentUsd >= dailyLimitUsd,
-    weeklyExceeded: enabled && weeklyLimitUsd !== null && weeklySpentUsd >= weeklyLimitUsd,
+    dailyExceeded,
+    weeklyExceeded,
+    dailyHasUnpricedUsage: dailySpend.hasUnpricedUsage,
+    weeklyHasUnpricedUsage: weeklySpend.hasUnpricedUsage,
   };
 }
 
@@ -953,13 +1131,26 @@ export function buildApiKeyUsageLimitRejection(
   options: { showUsd?: boolean } = {}
 ): Response {
   const message = sanitizeErrorMessage(buildUsageLimitExceededMessage(status, now, options));
+  // Whichever window actually tripped drives the reset timing below (daily is
+  // checked first, matching buildUsageLimitExceededMessage's own precedence).
+  const trippedResetAtIso = status.dailyExceeded
+    ? status.dailyResetAtIso
+    : status.weeklyExceeded
+      ? status.weeklyResetAtIso
+      : null;
   if (isAnthropicMessagesRequest(request)) {
+    // Claude Code treats a non-400 /v1/messages error as an auth failure and triggers
+    // a re-login prompt — this branch's status MUST stay 400 (see the "does not trigger
+    // login" regression test). The reset timing is still worth surfacing, so it rides
+    // along as extra fields on the same Anthropic-shaped error envelope.
+    const resolved = resolveRetryAfterInstant(trippedResetAtIso);
     return new Response(
       JSON.stringify({
         type: "error",
         error: {
           type: "invalid_request_error",
           message,
+          ...resolved,
         },
       }),
       {
@@ -969,9 +1160,11 @@ export function buildApiKeyUsageLimitRejection(
     );
   }
 
-  return new Response(JSON.stringify(buildErrorBody(400, message)), {
-    status: 400,
-    headers: { "Content-Type": "application/json" },
+  // Non-Anthropic clients: 429 is the semantically correct status for a quota/rate
+  // condition (every sibling budget/token/rate-limit check already uses it).
+  return errorResponse(429, message, {
+    code: "usage_limit_exceeded",
+    retryAfter: trippedResetAtIso,
   });
 }
 

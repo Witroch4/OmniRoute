@@ -908,6 +908,10 @@ async function withFakeChromium<T>(
       async type(text: string) {
         probe.typed.push(text);
       },
+      // 3.8.53 sync: the executor types with the atomic insertText() (upstream #13380).
+      async insertText(text: string) {
+        probe.typed.push(text);
+      },
       async press(key: string) {
         if (key !== "Enter" || !onResponse) return;
         await onResponse({

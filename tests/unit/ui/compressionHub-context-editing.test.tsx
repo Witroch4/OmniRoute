@@ -2,6 +2,8 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { NextIntlClientProvider } from "next-intl";
+import messages from "../../../src/i18n/messages/en.json";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -15,7 +17,11 @@ function mountInContainer(ui: React.ReactElement): HTMLElement {
   const root = createRoot(container);
   roots.push(root);
   act(() => {
-    root.render(ui);
+    root.render(
+      <NextIntlClientProvider locale="en" messages={{ contextCombos: messages.contextCombos }}>
+        {ui}
+      </NextIntlClientProvider>
+    );
   });
   return container;
 }
@@ -139,6 +145,9 @@ describe("CompressionHub — Context Editing", () => {
     });
     await flush();
 
+    // CompressionHub deliberately does NOT use useTranslations (see the
+    // hydration note at the top of CompressionHub.tsx) — its strings are
+    // literal English text, exactly like EngineConfigPage.
     const text = container.textContent ?? "";
     expect(text).toContain("Provider-delegated compression");
     expect(text).toContain("Context Editing (Claude)");
@@ -156,7 +165,7 @@ describe("CompressionHub — Context Editing", () => {
     await flush();
 
     const text = container.textContent ?? "";
-    expect(text).toContain("Currently available for Claude (Anthropic) only");
+    expect(text).toContain("available for Claude (Anthropic) only");
     expect(text).toContain("we do not rewrite the message");
   });
 
@@ -172,7 +181,7 @@ describe("CompressionHub — Context Editing", () => {
     await flush();
 
     const toggle = container.querySelector(
-      'button[role="switch"][aria-label="Context Editing"]'
+      '[role="switch"][aria-label="Context Editing"]'
     ) as HTMLButtonElement | null;
     expect(toggle).not.toBeNull();
     expect(toggle?.getAttribute("aria-checked")).toBe("false");

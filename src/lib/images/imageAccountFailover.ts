@@ -100,3 +100,23 @@ export async function retryImageOnOtherAccounts<
 
   return { credentials, result };
 }
+
+/**
+ * 3.8.53 sync: upstream's `executeImageWithCredentialFallback`
+ * (src/sse/services/imageCredentialRetry.ts, #8307) now owns the image account loop on
+ * both image routes — it rotates on 401, on a handler-flagged `retryable` failure and on
+ * an Antigravity exhausted-quota 429, inside the key's connection scope (GHSA-3w2r), and
+ * writes nothing to the connection either. This keeps the fork's class in that ONE loop
+ * instead of a second one on top: a 400 the shared classifier treats as zero-cooldown
+ * account fallback (`model_capacity`, e.g. Codex Sol/Astra on the account that does not
+ * own them, for any provider) is flagged `retryable` so the loop tries the next account.
+ * Everything else is returned untouched.
+ */
+export function markModelUnavailableAsRetryable<
+  TResult extends { success?: boolean; status?: unknown; error?: unknown; retryable?: boolean },
+>(provider: string, result: TResult): TResult {
+  if (!result || result.success === true || result.retryable === true) return result;
+  return isModelUnavailableOnAccount(result.status, result.error, provider)
+    ? { ...result, retryable: true }
+    : result;
+}

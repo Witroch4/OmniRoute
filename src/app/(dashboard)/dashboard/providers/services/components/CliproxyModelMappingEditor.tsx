@@ -5,15 +5,23 @@
  */
 "use client";
 
+import Icon from "@/shared/components/Icon";
+
 import { useState, useEffect, useRef } from "react";
-import { Card } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import { Button, Card, Textarea } from "@/shared/components";
 
 // ── Pure validator (exported for unit tests) ──────────────────────────────────
 
 /** Result of parsing the textarea value. */
 export type MappingParseResult =
   | { ok: true; value: Record<string, string> }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      messageKey: "mappingInvalidJson" | "mappingMustBeObject" | "mappingValueMustBeString";
+      messageValues?: { key: string };
+    };
 
 /**
  * Parse and validate the raw textarea string.
@@ -25,11 +33,15 @@ export function parseMappingJson(raw: string): MappingParseResult {
     parsed = JSON.parse(raw);
   } catch (e) {
     const msg = e instanceof SyntaxError ? e.message : "Invalid JSON";
-    return { ok: false, error: msg };
+    return { ok: false, error: msg, messageKey: "mappingInvalidJson" };
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, error: "Must be a JSON object (not an array or primitive)" };
+    return {
+      ok: false,
+      error: "Must be a JSON object (not an array or primitive)",
+      messageKey: "mappingMustBeObject",
+    };
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -38,6 +50,8 @@ export function parseMappingJson(raw: string): MappingParseResult {
       return {
         ok: false,
         error: `Value for key "${key}" must be a string, got ${Array.isArray(val) ? "array" : typeof val}`,
+        messageKey: "mappingValueMustBeString",
+        messageValues: { key },
       };
     }
   }
@@ -54,7 +68,16 @@ function formatMapping(value: Record<string, string> | null): string {
   return JSON.stringify(value, null, 2);
 }
 
+function getMappingValidationMessage(
+  result: MappingParseResult,
+  t: ReturnType<typeof useTranslations>
+): string | null {
+  if ("messageKey" in result) return t(result.messageKey, result.messageValues);
+  return null;
+}
+
 export function CliproxyModelMappingEditor() {
+  const t = useTranslations("embeddedServices");
   const [rawText, setRawText] = useState<string>(EMPTY_MAPPING);
   const [savedText, setSavedText] = useState<string>(EMPTY_MAPPING);
   const [loaded, setLoaded] = useState(false);
@@ -93,6 +116,7 @@ export function CliproxyModelMappingEditor() {
 
   const parseResult = parseMappingJson(rawText);
   const isValid = parseResult.ok;
+  const validationMessage = getMappingValidationMessage(parseResult, t);
   const isDirty = rawText !== savedText;
   const canSave = isValid && isDirty && !saving;
 
@@ -111,9 +135,9 @@ export function CliproxyModelMappingEditor() {
       const formatted = formatMapping(parseResult.value);
       setSavedText(formatted);
       setRawText(formatted);
-      showMsg(true, "Mapping saved");
+      showMsg(true, t("mappingSaved"));
     } catch {
-      showMsg(false, "Failed to save mapping");
+      showMsg(false, t("mappingSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -124,17 +148,19 @@ export function CliproxyModelMappingEditor() {
   return (
     <Card padding="md">
       <div className="flex items-center gap-3 mb-4">
-        <div className="size-8 rounded-lg flex items-center justify-center bg-violet-500/10">
-          <span className="material-symbols-outlined text-violet-500 text-xl">account_tree</span>
+        <div className="size-8 rounded-lg flex items-center justify-center border border-border bg-bg-subtle text-text-main">
+          <Icon name="account_tree" size={20} />
         </div>
         <div>
-          <h3 className="font-medium text-sm">Model Mapping</h3>
+          <h3 className="font-medium text-sm">{t("modelMapping")}</h3>
           <p className="text-xs text-text-muted">
-            Map OmniRoute model IDs to CLIProxyAPI model IDs (e.g.{" "}
-            <code className="font-mono bg-bg-subtle px-1 rounded">
-              {'"gpt-4o": "openai-gpt-4o"'}
-            </code>
-            )
+            {t.rich("modelMappingDescription", {
+              example: () => (
+                <code className="font-mono bg-bg-subtle px-1 rounded">
+                  {'"gpt-4o": "openai-gpt-4o"'}
+                </code>
+              ),
+            })}
           </p>
         </div>
       </div>
@@ -142,57 +168,37 @@ export function CliproxyModelMappingEditor() {
       {msg && (
         <div
           className={`flex items-center gap-1.5 mb-3 px-2 py-1.5 rounded text-xs ${
-            msg.ok
-              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-              : "bg-red-500/10 text-red-600 dark:text-red-400"
+            msg.ok ? "bg-success/10 text-success" : "bg-error/10 text-error"
           }`}
         >
-          <span className="material-symbols-outlined text-[12px]">
-            {msg.ok ? "check_circle" : "error"}
-          </span>
+          <Icon name={msg.ok ? "check_circle" : "error"} size={12} />
           {msg.text}
         </div>
       )}
 
-      <textarea
-        className={`w-full font-mono text-xs rounded border px-3 py-2 resize-y min-h-[120px] bg-bg-subtle focus:outline-none focus:ring-1 transition-colors ${
-          !isValid && rawText !== EMPTY_MAPPING
-            ? "border-red-400 focus:ring-red-400"
-            : "border-border focus:ring-primary"
-        }`}
+      <Textarea
+        className="min-h-[120px] resize-y font-mono text-xs"
+        error={!isValid && rawText !== EMPTY_MAPPING}
         value={rawText}
         onChange={(e) => {
           setRawText(e.target.value);
           setMsg(null);
         }}
         spellCheck={false}
-        aria-label="Model mapping JSON editor"
+        aria-label={t("modelMappingEditor")}
       />
 
-      {!isValid && rawText !== EMPTY_MAPPING && (
-        <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-start gap-1">
-          <span className="material-symbols-outlined text-[12px] mt-0.5 shrink-0">error</span>
-          {parseResult.error}
+      {validationMessage && rawText !== EMPTY_MAPPING && (
+        <p className="mt-1.5 text-xs text-error flex items-start gap-1">
+          <Icon name="error" size={12} className="mt-0.5" />
+          {validationMessage}
         </p>
       )}
 
       <div className="mt-3 flex justify-end">
-        <button
-          onClick={handleSave}
-          disabled={!canSave}
-          className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
-            canSave
-              ? "bg-primary text-primary-foreground hover:bg-primary/90"
-              : "bg-bg-subtle text-text-muted cursor-not-allowed"
-          }`}
-        >
-          {saving && (
-            <span className="material-symbols-outlined animate-spin text-[14px]">
-              progress_activity
-            </span>
-          )}
-          Save
-        </button>
+        <Button size="sm" onClick={handleSave} disabled={!canSave} loading={saving}>
+          {t("save")}
+        </Button>
       </div>
     </Card>
   );

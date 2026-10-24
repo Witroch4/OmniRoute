@@ -54,28 +54,6 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-vi.mock("next-intl", () => {
-  // Echo the key back so assertions don't depend on a full message catalog.
-  // Real translators also expose rich() (ProviderParamFilterSection's hint) and
-  // has(); rich() echoes the key like t(), and has() reports every key as present.
-  // Like next-intl, return a referentially stable translator per namespace: the
-  // page puts `t` in effect/callback dependency arrays, and a fresh function per
-  // render re-fires those effects forever (the mount test then never settles).
-  const translators = new Map<string, (key: string) => string>();
-  return {
-    useTranslations: (namespace?: string) => {
-      const cacheKey = namespace ?? "";
-      let t = translators.get(cacheKey);
-      if (!t) {
-        const echo = (key: string) => (namespace ? `${namespace}.${key}` : key);
-        t = Object.assign(echo, { rich: echo, has: () => true });
-        translators.set(cacheKey, t);
-      }
-      return t;
-    },
-  };
-});
-
 function renderProviderPage() {
   const container = document.createElement("div");
   document.body.appendChild(container);

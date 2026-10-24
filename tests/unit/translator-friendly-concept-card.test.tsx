@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// KEA-7886: icons are Lucide <svg class="oi-icon" data-icon="<material name>"> via <Icon>.
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Minimal i18n stub — returns the key so tests can assert on fallback rendering
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useLocale: () => "en",
+  useTranslations: () => {
+    const t = (key: string) => key;
+    t.has = () => false;
+    return t;
+  },
 }));
 
 // Minimal shared component stubs — Card wraps children, Tooltip passes through
@@ -64,8 +70,8 @@ describe("TranslatorConceptCard", () => {
     // Card should be in the DOM
     expect(container.querySelector("[data-testid='card']")).toBeTruthy();
     // Info icon should be present
-    const icons = container.querySelectorAll(".material-symbols-outlined");
-    const iconTexts = Array.from(icons).map((el) => el.textContent?.trim());
+    const icons = container.querySelectorAll("svg.oi-icon");
+    const iconTexts = Array.from(icons).map((el) => el.getAttribute("data-icon"));
     expect(iconTexts).toContain("info");
   });
 
@@ -78,8 +84,8 @@ describe("TranslatorConceptCard", () => {
       root.render(<TranslatorConceptCard />);
     });
     // The diagram grid should contain 4 node icons (smart_toy, psychology, hub, auto_awesome)
-    const icons = container.querySelectorAll(".material-symbols-outlined");
-    const iconTexts = Array.from(icons).map((el) => el.textContent?.trim());
+    const icons = container.querySelectorAll("svg.oi-icon");
+    const iconTexts = Array.from(icons).map((el) => el.getAttribute("data-icon"));
     expect(iconTexts).toContain("smart_toy");
     expect(iconTexts).toContain("psychology");
     expect(iconTexts).toContain("hub");
@@ -94,8 +100,8 @@ describe("TranslatorConceptCard", () => {
     await act(async () => {
       root.render(<TranslatorConceptCard />);
     });
-    const icons = container.querySelectorAll(".material-symbols-outlined");
-    const iconTexts = Array.from(icons).map((el) => el.textContent?.trim());
+    const icons = container.querySelectorAll("svg.oi-icon");
+    const iconTexts = Array.from(icons).map((el) => el.getAttribute("data-icon"));
     // Three arrows between 4 nodes
     expect(iconTexts.filter((t) => t === "arrow_forward").length).toBeGreaterThanOrEqual(3);
   });
@@ -180,8 +186,8 @@ describe("TranslatorConceptCard", () => {
     ) as HTMLButtonElement | null;
 
     // Initially collapsed: should show expand_more
-    const btnIcons = toggleBtn?.querySelectorAll(".material-symbols-outlined");
-    const btnIconTexts = Array.from(btnIcons ?? []).map((el) => el.textContent?.trim());
+    const btnIcons = toggleBtn?.querySelectorAll("svg.oi-icon");
+    const btnIconTexts = Array.from(btnIcons ?? []).map((el) => el.getAttribute("data-icon"));
     expect(btnIconTexts).toContain("expand_more");
     expect(btnIconTexts).not.toContain("expand_less");
 
@@ -189,8 +195,10 @@ describe("TranslatorConceptCard", () => {
     await act(async () => {
       toggleBtn?.click();
     });
-    const btnIconsAfter = toggleBtn?.querySelectorAll(".material-symbols-outlined");
-    const btnIconTextsAfter = Array.from(btnIconsAfter ?? []).map((el) => el.textContent?.trim());
+    const btnIconsAfter = toggleBtn?.querySelectorAll("svg.oi-icon");
+    const btnIconTextsAfter = Array.from(btnIconsAfter ?? []).map((el) =>
+      el.getAttribute("data-icon")
+    );
     expect(btnIconTextsAfter).toContain("expand_less");
     expect(btnIconTextsAfter).not.toContain("expand_more");
   });
@@ -224,8 +232,8 @@ describe("TranslateFlowDiagram", () => {
     await act(async () => {
       root.render(<TranslateFlowDiagram />);
     });
-    const icons = container.querySelectorAll(".material-symbols-outlined");
-    const iconTexts = Array.from(icons).map((el) => el.textContent?.trim());
+    const icons = container.querySelectorAll("svg.oi-icon");
+    const iconTexts = Array.from(icons).map((el) => el.getAttribute("data-icon"));
     // 4 nodes: app, source format, OpenAI hub, target provider
     expect(iconTexts).toContain("smart_toy");
     expect(iconTexts).toContain("psychology");
@@ -241,8 +249,8 @@ describe("TranslateFlowDiagram", () => {
     await act(async () => {
       root.render(<TranslateFlowDiagram />);
     });
-    const icons = container.querySelectorAll(".material-symbols-outlined");
-    const iconTexts = Array.from(icons).map((el) => el.textContent?.trim());
+    const icons = container.querySelectorAll("svg.oi-icon");
+    const iconTexts = Array.from(icons).map((el) => el.getAttribute("data-icon"));
     expect(iconTexts.filter((t) => t === "arrow_forward")).toHaveLength(3);
   });
 

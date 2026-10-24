@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Select } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import { Checkbox, Select } from "@/shared/components";
 import type { SearchProviderCatalogItem } from "@/shared/schemas/searchTools";
 import type { ActiveTab } from "./SearchToolsTopBar";
 
@@ -28,6 +29,7 @@ export default function SearchToolsConfigPane({
   activeTab,
   rerankModels = [],
 }: SearchToolsConfigPaneProps) {
+  const t = useTranslations("search");
   const [historyExpanded, setHistoryExpanded] = useState(false);
 
   const searchProviders = providers.filter((p) => p.kind === "search" && p.status !== "missing");
@@ -40,26 +42,24 @@ export default function SearchToolsConfigPane({
     <aside
       className="w-[220px] shrink-0 border-l border-border bg-bg-alt overflow-y-auto flex flex-col"
       data-testid="search-tools-config-pane"
-      aria-label="Configuration pane"
+      aria-label={t("configurationPane")}
     >
       <div className="p-3 border-b border-border">
         <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">
-          Configuration
+          {t("configuration")}
         </span>
       </div>
 
       {/* Provider selector */}
       <div className="p-3 border-b border-border space-y-2">
-        <label className="block text-[10px] text-text-muted uppercase tracking-wider mb-1">
-          Provider
-        </label>
         <Select
+          label={t("provider")}
           value={config.provider}
           onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
             onConfigChange({ provider: e.target.value })
           }
           options={[
-            { value: "auto", label: "Auto (cheapest)" },
+            { value: "auto", label: t("autoProvider") },
             ...relevantProviders.map((p) => ({ value: p.id, label: p.name })),
           ]}
           className="w-full"
@@ -69,14 +69,14 @@ export default function SearchToolsConfigPane({
         {selectedProvider && (
           <div className="text-[10px] text-text-muted space-y-0.5">
             <div>
-              Cost:{" "}
+              {`${t("cost")}: `}
               <span className="text-text-main font-medium">
                 ${selectedProvider.costPerQuery.toFixed(4)}/query
               </span>
             </div>
             {selectedProvider.freeMonthlyQuota > 0 && (
               <div>
-                Free quota:{" "}
+                {`${t("freeQuota")}: `}
                 <span className="text-text-main font-medium">
                   {selectedProvider.freeMonthlyQuota >= 1000
                     ? `${(selectedProvider.freeMonthlyQuota / 1000).toFixed(0)}k`
@@ -86,7 +86,7 @@ export default function SearchToolsConfigPane({
               </div>
             )}
             <div className="flex items-center gap-1">
-              Status:{" "}
+              {`${t("status")}: `}
               <span
                 className={
                   selectedProvider.status === "configured"
@@ -97,10 +97,10 @@ export default function SearchToolsConfigPane({
                 }
               >
                 {selectedProvider.status === "configured"
-                  ? "Configured"
+                  ? t("configuredStatus")
                   : selectedProvider.status === "rate_limited"
-                    ? "Rate limited"
-                    : "Missing credential"}
+                    ? t("rateLimitedStatus")
+                    : t("noCredential")}
               </span>
             </div>
           </div>
@@ -110,17 +110,15 @@ export default function SearchToolsConfigPane({
       {/* Search tab options */}
       {activeTab === "search" && (
         <div className="p-3 border-b border-border space-y-2">
-          <label className="block text-[10px] text-text-muted uppercase tracking-wider mb-1">
-            Search type
-          </label>
           <Select
+            label={t("searchType")}
             value={config.searchType}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
               onConfigChange({ searchType: e.target.value as "web" | "news" })
             }
             options={[
-              { value: "web", label: "Web" },
-              { value: "news", label: "News" },
+              { value: "web", label: t("searchTypeWeb") },
+              { value: "news", label: t("searchTypeNews") },
             ]}
             className="w-full"
           />
@@ -130,54 +128,45 @@ export default function SearchToolsConfigPane({
       {/* Scrape tab options */}
       {activeTab === "scrape" && (
         <div className="p-3 border-b border-border space-y-2">
-          <label className="block text-[10px] text-text-muted uppercase tracking-wider mb-1">
-            Format
-          </label>
           <Select
+            label={t("scrapeFormat")}
             value={config.fetchFormat}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
               onConfigChange({ fetchFormat: e.target.value as ConfigState["fetchFormat"] })
             }
             options={[
-              { value: "markdown", label: "Markdown" },
+              { value: "markdown", label: t("formatMarkdown") },
               { value: "html", label: "HTML" },
-              { value: "text", label: "Text" },
+              { value: "text", label: t("formatText") },
             ]}
             className="w-full"
           />
-          <label className="flex items-center gap-2 cursor-pointer mt-2">
-            <input
-              type="checkbox"
-              checked={config.fullPage}
-              onChange={(e) => onConfigChange({ fullPage: e.target.checked })}
-              className="rounded"
-            />
-            <span className="text-xs text-text-main">Full page</span>
-          </label>
+          <Checkbox
+            className="mt-2 text-xs"
+            label={t("scrapeFullPage")}
+            checked={config.fullPage}
+            onChange={(e) => onConfigChange({ fullPage: e.target.checked })}
+          />
         </div>
       )}
 
       {/* Compare tab options */}
       {activeTab === "compare" && (
         <div className="p-3 border-b border-border">
-          <div className="text-[10px] text-text-muted">
-            Select up to 4 providers on the Compare tab to compare them side by side.
-          </div>
+          <div className="text-[10px] text-text-muted">{t("compareProviderHint")}</div>
         </div>
       )}
 
       {/* Rerank model (only for search tab) */}
       {activeTab === "search" && rerankModels.length > 0 && (
         <div className="p-3 border-b border-border space-y-1">
-          <label className="block text-[10px] text-text-muted uppercase tracking-wider mb-1">
-            Rerank model
-          </label>
           <Select
+            label={t("rerankModelLabel")}
             value={config.rerankModel}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
               onConfigChange({ rerankModel: e.target.value })
             }
-            options={[{ value: "", label: "None" }, ...rerankModels]}
+            options={[{ value: "", label: t("noneOption") }, ...rerankModels]}
             className="w-full"
           />
         </div>
@@ -185,22 +174,22 @@ export default function SearchToolsConfigPane({
 
       {/* History section (collapsible placeholder) */}
       <div className="p-3 flex-1">
+        {/* kit-exception: Full-width disclosure header: stays a native <button> on kit tokens. */}
         <button
+          type="button"
           className="flex justify-between items-center w-full"
           onClick={() => setHistoryExpanded((e) => !e)}
           aria-expanded={historyExpanded}
         >
           <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">
-            History
+            {t("history")}
           </span>
           <span className="text-text-muted text-xs" aria-hidden="true">
             {historyExpanded ? "▼" : "▶"}
           </span>
         </button>
         {historyExpanded && (
-          <div className="mt-2 text-[10px] text-text-muted">
-            History is available on the Search tab.
-          </div>
+          <div className="mt-2 text-[10px] text-text-muted">{t("historyHint")}</div>
         )}
       </div>
     </aside>

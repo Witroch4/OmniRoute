@@ -1,7 +1,7 @@
 /**
  * db/settings/noAuthProxyFallback.ts
  *
- * #6272 — no-auth providers (mimocode, opencode, ...) are dispatched with a single
+ * #6272 — no-auth providers are dispatched with a single
  * hardcoded, provider-agnostic connectionId ("noauth" — SYNTHETIC_NOAUTH_CONNECTION_ID
  * in src/sse/services/auth.ts). No `provider_connections` row ever has id="noauth", so
  * `resolveProxyForConnection()` in ../settings.ts can never populate `connectionRecord`
@@ -55,8 +55,10 @@ async function resolveOneNoAuthProviderProxy(
 }
 
 export async function resolveNoAuthSharedProviderProxy(
-  legacyProviders: LegacyProviderProxyMap
+  legacyProviders: LegacyProviderProxyMap,
+  providerId?: string
 ): Promise<NoAuthProxyResolutionResult | null> {
+  if (providerId) return resolveOneNoAuthProviderProxy(providerId, legacyProviders);
   for (const providerId of Object.keys(NOAUTH_PROVIDERS)) {
     const resolved = await resolveOneNoAuthProviderProxy(providerId, legacyProviders);
     if (resolved) return resolved;

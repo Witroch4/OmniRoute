@@ -9,8 +9,7 @@ import { parseNonStreamingResponseBody } from "@omniroute/open-sse/handlers/chat
 function makeResponse(body: string, contentType: string): Response {
   return {
     headers: {
-      get: (name: string) =>
-        name.toLowerCase() === "content-type" ? contentType : null,
+      get: (name: string) => (name.toLowerCase() === "content-type" ? contentType : null),
     },
     text: async () => body,
     body: null,
@@ -60,6 +59,18 @@ test("invalid JSON → invalid_json with short message + detailed error", async 
   assert.match(res.detailedError, /^Invalid JSON response from provider \(error: /);
   assert.match(res.detailedError, /\{not json/);
   assert.equal(res.looksLikeSSE, false);
+});
+
+test("valid JSON with a non-object root → invalid_json", async () => {
+  for (const body of ["null", '"text"', "[]"]) {
+    const res = await parseNonStreamingResponseBody({
+      ...baseOpts,
+      providerResponse: makeResponse(body, "application/json"),
+    });
+    assert.equal(res.kind, "invalid_json");
+    if (res.kind !== "invalid_json") continue;
+    assert.match(res.detailedError, /expected an object payload/);
+  }
 });
 
 test("valid SSE payload (by content-type) → ok with SSE-derived format", async () => {
@@ -155,3 +166,32 @@ test("buffering log fires debug when stream was expected, warn otherwise", async
   });
   assert.equal(warnCalls.length, 1);
 });
+
+for (const wrapped of [false, true]) {
+  test(`buffered ${wrapped ? "wrapped" : "native"} Gemini SSE reaches the non-streaming response caller`, async () => {
+    const payload = {
+      candidates: [{ content: { parts: [{ text: "hello Gemini" }] }, finishReason: "STOP" }],
+      usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2, totalTokenCount: 5 },
+    };
+    const response = new Response(
+      `data: ${JSON.stringify(wrapped ? { response: payload } : payload)}\n\n`,
+      {
+        headers: { "content-type": "text/event-stream" },
+      }
+    );
+    const result = await parseNonStreamingResponseBody({
+      ...baseOpts,
+      targetFormat: "gemini",
+      providerResponse: response,
+    });
+    assert.equal(result.kind, "ok");
+    if (result.kind !== "ok") return;
+    assert.equal(result.looksLikeSSE, true);
+    assert.equal(result.responseBody.choices[0].message.content, "hello Gemini");
+    assert.deepEqual(result.responseBody.usage, {
+      prompt_tokens: 3,
+      completion_tokens: 2,
+      total_tokens: 5,
+    });
+  });
+}

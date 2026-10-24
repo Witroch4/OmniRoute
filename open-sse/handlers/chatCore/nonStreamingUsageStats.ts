@@ -11,6 +11,7 @@
  */
 
 import { saveRequestUsage } from "@/lib/usageDb";
+import { recordKeyQuotaUsage } from "@/domain/keyQuota";
 import { formatUsageLog } from "@/lib/usage/tokenAccounting";
 import { COLORS } from "../../utils/stream.ts";
 import { recordTokenUsage } from "../../services/tokenLimitCounter.ts";
@@ -34,6 +35,7 @@ export type RecordNonStreamingUsageStatsContext = {
   endpoint?: string | null | undefined;
   /** Caller's tailnet IP (validated) — usage_history.client_ip. */
   clientIp?: string | null | undefined;
+  cpaAuthIndex?: string | null | undefined;
 };
 
 function logUsageTrace(
@@ -66,6 +68,7 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
     clientIp: ctx.clientIp || null,
+    cpaAuthIndex: ctx.cpaAuthIndex || undefined,
   }).catch((err) => {
     console.error("Failed to save usage stats:", err.message);
   });
@@ -80,6 +83,10 @@ function recordBillableTokens(
   if (!apiKeyInfo?.id) return;
   try {
     const billable = computeBillableTokens(usage);
+    // Key-quota tpm/rpm counters advance for every successful call regardless
+    // of token count (rpm always +1), so the gate in apiKeyPolicy sees current
+    // usage. Mirrors recordTokenUsage's swallow-and-continue.
+    recordKeyQuotaUsage(apiKeyInfo.id, billable);
     if (billable > 0)
       recordTokenUsage(apiKeyInfo.id, provider || "unknown", model || "unknown", billable);
   } catch {

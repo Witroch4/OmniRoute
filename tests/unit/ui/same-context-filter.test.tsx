@@ -17,6 +17,7 @@ const ROOT = path.resolve(
   __dirname,
   "../../../src/app/(dashboard)/dashboard/tools/traffic-inspector"
 );
+const SRC_ROOT = path.resolve(__dirname, "../../../src");
 
 const SRC_ROOT = path.resolve(__dirname, "../../../src");
 
@@ -62,8 +63,9 @@ describe("R5-4 same-context filter end-to-end", () => {
 
   it("RequestRow ctx chip is a button element", () => {
     const src = read("components/RequestRow.tsx");
-    // The ctx chip should now be a button for keyboard/mouse click
-    const hasButton = src.includes("<button") && src.includes("onSameContext");
+    // The ctx chip should now be a button for keyboard/mouse click (the kit Button adapter
+    // since KEA-7886, which renders a native <button>).
+    const hasButton = /<(button|Button)\b/.test(src) && src.includes("onSameContext");
     assert.ok(hasButton, "ctx chip should be a <button> that calls onSameContext");
   });
 

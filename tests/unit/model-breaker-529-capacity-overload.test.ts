@@ -117,14 +117,18 @@ test("the breaker is model-scoped: locking opus does not touch its siblings", as
   assert.equal(isModelLocked("claude", conn.id, "claude-haiku-4-5-20251001"), false);
 });
 
-test("scope is deliberately 529-only: 503 keeps its previous behaviour here", async () => {
+test("scope is deliberately 529-only: a 503 never gets the overload breaker", async () => {
   const conn = await seedConnection("claude");
   await auth.markAccountUnavailable(conn.id, 503, "Service Unavailable", "claude", "claude-opus-5");
 
-  assert.equal(
-    isModelLocked("claude", conn.id, "claude-opus-5"),
-    false,
-    "on this provider a 503 can be network/gateway rather than the model — widening the scope needs its own evidence"
+  // Upstream #12340 (3.8.53) scopes a Claude 5xx to the model instead of cooling the
+  // whole account; that is upstream's own lockout, not this breaker. What stays 529-only
+  // is the overload treatment: the `model_overloaded` reason and its tight 30s cap.
+  const info = getModelLockoutInfo("claude", conn.id, "claude-opus-5");
+  assert.notEqual(
+    info?.reason,
+    "model_overloaded",
+    "on this provider a 503 can be network/gateway rather than the model — it must not be read as capacity overload"
   );
 });
 

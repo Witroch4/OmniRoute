@@ -18,6 +18,11 @@
 // the probe also never advertised), so the 5.5 tiers are pinned here. The retired 4.6
 // ids are kept only as hidden aliases in antigravityModelAliases.ts.
 
+import {
+  ANTIGRAVITY_QUOTA_VISIBLE_NON_CHAT_MODEL_IDS,
+  isRetiredAntigravityCatalogId,
+} from "./antigravityModelAliases.ts";
+
 export const AGY_PUBLIC_MODELS = Object.freeze([
   // Claude 5.5 (Antigravity backend) — the headline differentiator for this provider.
   // Limits are the conservative values the 4.6 entries carried; not probed for 5.5 yet.
@@ -161,6 +166,15 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
 ]);
 
 const AGY_PUBLIC_MODEL_IDS = new Set(AGY_PUBLIC_MODELS.map((model) => model.id));
+const AGY_NON_CHAT_MODEL_IDS = new Set(["tab_flash_lite_preview", "tab_jump_flash_lite_preview"]);
+const AGY_NON_CHAT_MODEL_PATTERN =
+  /(?:^|[-_])(image|imagen|audio|tts|embedding|embed|video|veo)(?:[-_]|$)/i;
+// Retired ids: the shared Antigravity rule (upstream's retired list plus every id the
+// chat pipeline refuses), never touching a model this catalog still publishes — Gemini
+// 2.5, 3.1 Flash Lite and the image model stay callable on `agy` (fork catalog).
+function isRetiredAgyModelId(id: string): boolean {
+  return !AGY_PUBLIC_MODEL_IDS.has(id) && isRetiredAntigravityCatalogId(id);
+}
 
 const AGY_CLIENT_VISIBLE_MODEL_NAMES = Object.freeze(
   AGY_PUBLIC_MODELS.reduce<Record<string, string>>((acc, model) => {
@@ -175,4 +189,28 @@ export function getClientVisibleAgyModelName(modelId: string, fallbackName?: str
 
 export function isUserCallableAgyModelId(modelId: string): boolean {
   return !!modelId && AGY_PUBLIC_MODEL_IDS.has(modelId);
+}
+
+export function isDiscoverableAgyModelId(modelId: string): boolean {
+  const id = modelId ? modelId.trim() : "";
+  return (
+    !!id &&
+    !id.startsWith("chat_") &&
+    !id.startsWith("tab_") &&
+    !id.endsWith("_weekly") &&
+    !AGY_NON_CHAT_MODEL_IDS.has(id) &&
+    !isRetiredAgyModelId(id) &&
+    !AGY_NON_CHAT_MODEL_PATTERN.test(id)
+  );
+}
+
+/**
+ * Quota visibility is broader than chat discovery (same rule as Antigravity): image-only models
+ * keep their live quota buckets in Provider Limits even though they are not chat models, so
+ * `AGY_NON_CHAT_MODEL_PATTERN` must not hide them.
+ */
+export function isUserVisibleAgyQuotaModelId(modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id) return false;
+  return isDiscoverableAgyModelId(id) || ANTIGRAVITY_QUOTA_VISIBLE_NON_CHAT_MODEL_IDS.has(id);
 }

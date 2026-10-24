@@ -1,22 +1,20 @@
-// #3520 — Provider Quota page should use horizontal whitespace better.
+// Provider Quota page should be easy to scan provider-by-provider.
 //
-// QuotaCardGrid previously stacked provider groups vertically via a single
-// `flex flex-col` container and kept cards to a conservative 1/2/3/4-column
-// breakpoint ladder starting at `grid-cols-1`. This regression guard asserts
+// QuotaCardGrid used to flow provider groups into CSS columns. That made
+// high-account operators scan left/right across unrelated providers and made
+// Codex/Claude quota priority hard to follow. This regression guard asserts
 // the shipped JSX structure and grouping logic directly:
 //  1. Grouping still produces one header per distinct provider with the
 //     correct account count ("N account(s)").
-//  2. The per-group card grid fills horizontal space by CONTAINER width:
-//     `repeat(auto-fill, minmax(<min>px, 1fr))` with a minimum small enough
-//     that one masonry column fits at least two cards. It started as a
-//     `grid-cols-2 md:grid-cols-3 xl:grid-cols-4` ladder, but Tailwind
-//     breakpoints key off the VIEWPORT, so inside the 2-column masonry below
-//     a wide screen got 4 tracks in half the page and cards were clipped
-//     (fork fix 4695512925, 2026-07-26). The guard keeps #3520's goal (more
-//     than one card per row whenever there is room) without the ladder.
-//  3. Provider groups themselves flow into multiple columns on wide screens
-//     (`columns-*`) instead of an unconditional vertical `flex flex-col`
-//     stack.
+//  2. Each provider group's card grid sizes its tracks by the group's CONTAINER
+//     width — `repeat(auto-fill|auto-fit, minmax(<min>px, 1fr))` — never by a
+//     viewport-breakpoint ladder (`grid-cols-2 md:grid-cols-3 xl:grid-cols-4`).
+//     Tailwind breakpoints key off the VIEWPORT, so the ladder clipped cards
+//     whenever the group was narrower than the page (fork fix 4695512925,
+//     2026-07-26). The fork keeps a 220px floor so wide screens show several
+//     cards per row; upstream's native fix uses 280px auto-fit.
+//  3. Provider groups themselves are one-column expandable sections, not a
+//     two-column masonry flow.
 //
 // Note: QuotaCardGrid's sibling QuotaCard pulls in next/image + provider-icon
 // resolution that only works inside the real Next.js runtime, so this file
@@ -103,11 +101,50 @@ function extractDivClassNames(sourcePath: string): string[] {
   return classNames;
 }
 
-test("QuotaCardGrid (#3520) — outer container flows groups into multiple columns, not a single vertical stack", () => {
-  const [outerClassName] = extractDivClassNames(COMPONENT_PATH);
-  assert.ok(outerClassName, "expected the component to render an outer <div className=...>");
-  assert.match(outerClassName, /\bcolumns-/);
-  assert.notEqual(outerClassName, "flex flex-col gap-6");
+test("QuotaCardGrid — outer provider sections stay in one vertical reading order", () => {
+  const classNames = extractDivClassNames(COMPONENT_PATH);
+  const outerClassName = classNames.find((className) => /\bspace-y-\d+\b/.test(className));
+  assert.ok(
+    outerClassName,
+    "expected the component to render a vertical provider-section container"
+  );
+  assert.doesNotMatch(
+    outerClassName!,
+    /\bcolumns-/,
+    "provider sections should not flow into two CSS columns"
+  );
+  assert.match(
+    outerClassName,
+    /(?:^|\s)(?:space-y-\d+|flex)(?:\s|$)/,
+    "provider sections should render as one vertical list"
+  );
+});
+
+test("QuotaCardGrid — provider groups are expandable details sections", () => {
+  const sourceText = fs.readFileSync(COMPONENT_PATH, "utf8");
+  assert.match(sourceText, /<details\b/, "expected each provider group to use <details>");
+  assert.match(sourceText, /<summary\b/, "expected each provider group to expose a summary row");
+  assert.match(sourceText, /\bdefaultOpen\b/, "expected provider sections to default open");
+});
+
+test("QuotaCardGrid — provider sections and accounts use quota monitoring priority", () => {
+  const sourceText = fs.readFileSync(COMPONENT_PATH, "utf8");
+  assert.match(
+    sourceText,
+    /\bPROVIDER_ORDER\b/,
+    "expected provider sections to use provider order"
+  );
+  assert.match(
+    sourceText,
+    /\bsortProviderConnectionsByPriority\b/,
+    "expected accounts inside a provider to use a dedicated priority sort"
+  );
+  assert.match(sourceText, /\bisActive\b/, "expected active accounts to sort before inactive ones");
+  assert.match(
+    sourceText,
+    /\bgetSoonestResetMs\b/,
+    "expected account priority to consider the next quota reset"
+  );
 });
 
 test("QuotaCardGrid (#3520) — per-group card grid fills horizontal space by container width", () => {
@@ -123,17 +160,16 @@ test("QuotaCardGrid (#3520) — per-group card grid fills horizontal space by co
     track,
     `card grid must size tracks by container width (repeat(auto-fill, minmax(Npx, 1fr))), got "${cardGridClassName}"`
   );
-  // ... never a fixed or viewport-breakpoint column count, which ignores the masonry
-  // column the grid actually lives in and clips cards on wide screens.
+  // ... never a fixed or viewport-breakpoint column count, which ignores the width of
+  // the section the grid actually lives in and clips cards.
   assert.doesNotMatch(cardGridClassName!, /(?:^|\s)(?:[a-z0-9]+:)*grid-cols-\d+(?=\s|$)/);
 
-  // Two cards plus the gap-3 (12px) gutter must fit in ~600px — roughly one masonry
-  // column at the 2xl breakpoint next to the dashboard sidebar — so a wide screen
-  // still shows several cards per row (#3520), not one.
+  // Two cards plus the gap-3 (12px) gutter must fit in ~600px, so even a half-width
+  // window next to the dashboard sidebar still shows several cards per row (#3520).
   const minCardPx = Number(track![1]);
   assert.ok(
     2 * minCardPx + 12 <= 600,
-    `minimum card width ${minCardPx}px is too wide for two cards per masonry column`
+    `minimum card width ${minCardPx}px is too wide for two cards per ~600px row`
   );
 });
 

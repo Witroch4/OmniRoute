@@ -12,13 +12,13 @@
     "esModuleInterop": true,
     "strict": false,
     "jsx": "react-jsx",
+    "incremental": true,
+    "tsBuildInfoFile": "../.tsbuildinfo-typecheck-open-sse",
     "lib": ["dom", "esnext"],
-    "ignoreDeprecations": "5.0",
-    "baseUrl": "..",
     "paths": {
-      "@/*": ["./src/*"],
-      "@omniroute/open-sse": ["./open-sse"],
-      "@omniroute/open-sse/*": ["./open-sse/*"]
+      "@/*": ["../src/*"],
+      "@omniroute/open-sse": ["../open-sse"],
+      "@omniroute/open-sse/*": ["../open-sse/*"]
     }
   },
   "include": ["**/*.ts", "**/*.js"]

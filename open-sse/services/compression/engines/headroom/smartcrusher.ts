@@ -131,6 +131,55 @@ export type MessageLike = {
   [key: string]: unknown;
 };
 
+function isTextBlock(part: unknown): part is Record<string, unknown> & { text: string } {
+  return (
+    !!part &&
+    typeof part === "object" &&
+    (part as Record<string, unknown>)["type"] === "text" &&
+    typeof (part as Record<string, unknown>)["text"] === "string"
+  );
+}
+
+/**
+ * Text payloads of a content part: a text block, or an Anthropic tool_result
+ * (content is a plain string or an array of nested blocks).
+ */
+export function contentTextChunks(part: Record<string, unknown>): string[] {
+  if (isTextBlock(part)) return [part["text"]];
+  if (part["type"] !== "tool_result") return [];
+  const content = part["content"];
+  if (typeof content === "string") return [content];
+  if (!Array.isArray(content)) return [];
+  return content.filter(isTextBlock).map((block) => block["text"]);
+}
+
+/** Rewrite every text payload in a content part; returns the same object when nothing changed. */
+export function mapContentPartText(
+  part: Record<string, unknown>,
+  transform: (text: string) => string
+): Record<string, unknown> {
+  if (isTextBlock(part)) {
+    const next = transform(part["text"]);
+    return next === part["text"] ? part : { ...part, text: next };
+  }
+  if (part["type"] !== "tool_result") return part;
+  const content = part["content"];
+  if (typeof content === "string") {
+    const next = transform(content);
+    return next === content ? part : { ...part, content: next };
+  }
+  if (!Array.isArray(content)) return part;
+  let changed = false;
+  const nextContent = content.map((block: unknown) => {
+    if (!isTextBlock(block)) return block;
+    const next = transform(block["text"]);
+    if (next === block["text"]) return block;
+    changed = true;
+    return { ...block, text: next };
+  });
+  return changed ? { ...part, content: nextContent } : part;
+}
+
 /**
  * Collect every JSON array (whole-string or inside a ```json fence) in non-system
  * messages that SmartCrusher would compact (same gates as tryCompactJson). Pure;
@@ -160,12 +209,11 @@ export function collectCompactableArrays(
     while ((m = regex.exec(text)) !== null) pushIfCompactable(m[1].trim());
   };
   for (const msg of messages) {
-    if (msg.role === "system") continue;
+    if (msg.role === "system" || msg.role === "developer") continue;
     if (typeof msg.content === "string") scanText(msg.content);
     else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
-        if (part["type"] === "text" && typeof part["text"] === "string")
-          scanText(part["text"] as string);
+        for (const text of contentTextChunks(part)) scanText(text);
       }
     }
   }
@@ -218,8 +266,12 @@ export function crushMessages(
   let changed = false;
 
   const result = messages.map((msg): MessageLike => {
-    // Guard: never touch system messages
-    if (msg.role === "system") return { ...msg };
+    // Guard: never touch system messages. "developer" is the Responses-API equivalent of
+    // "system" used by newer models (e.g. Codex CLI, see open-sse/executors/codex.ts) and
+    // carries the same kind of instructions/tool-schema content — compacting a JSON array
+    // embedded there (e.g. an update_plan example) can corrupt the model's tool-calling
+    // instructions (9router#2132: broke Codex CLI plan mode).
+    if (msg.role === "system" || msg.role === "developer") return { ...msg };
 
     if (typeof msg.content === "string") {
       const crushed = crushText(msg.content, minRows);
@@ -233,13 +285,9 @@ export function crushMessages(
     if (Array.isArray(msg.content)) {
       let contentChanged = false;
       const newContent = msg.content.map((part: Record<string, unknown>) => {
-        if (part["type"] !== "text" || typeof part["text"] !== "string") return part;
-        const crushed = crushText(part["text"] as string, minRows);
-        if (crushed !== part["text"]) {
-          contentChanged = true;
-          return { ...part, text: crushed };
-        }
-        return part;
+        const crushedPart = mapContentPartText(part, (text) => crushText(text, minRows));
+        if (crushedPart !== part) contentChanged = true;
+        return crushedPart;
       });
       if (contentChanged) {
         changed = true;

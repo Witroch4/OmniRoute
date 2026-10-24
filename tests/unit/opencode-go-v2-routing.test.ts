@@ -156,12 +156,21 @@ describe("OpenCode Go v2 always sends x-opencode-session (400 MissingSessionID w
     assert.notEqual(session(2), session(0), "a different conversation gets its own session");
   });
 
+  // 3.8.53 sync: upstream's CLI-identity synthesis (on by default since #5997 follow-ups) renders
+  // every session in the canonical `ses_` shape, translating a client id deterministically — so the
+  // client's conversation still maps to ONE upstream session, it just is not forwarded verbatim.
   it("the client's own conversation id wins over the derived one", async () => {
-    await new OpencodeExecutor("opencode-go").execute({
+    const executor = new OpencodeExecutor("opencode-go");
+    const withClientId = {
       ...input("glm-5.3-flash"),
       clientHeaders: { "x-claude-code-session-id": "cc-123" },
-    });
-    assert.equal(session(0), "cc-123");
+    };
+    await executor.execute(withClientId);
+    await executor.execute(withClientId);
+    await executor.execute(input("glm-5.3-flash"));
+    assert.match(session(0), /^ses_/);
+    assert.equal(session(1), session(0), "the same client conversation keeps one session");
+    assert.notEqual(session(2), session(0), "the client id, not the body, decided the session");
   });
 
   it("covers the Anthropic and Google formats too", async () => {
@@ -175,9 +184,21 @@ describe("OpenCode Go v2 always sends x-opencode-session (400 MissingSessionID w
     assert.match(session(1), /^ses_/);
   });
 
-  it("leaves OpenCode Zen as it was: no session is invented there", async () => {
-    await new OpencodeExecutor("opencode-zen").execute(input("big-pickle"));
+  // 3.8.53 sync: Zen now gets a canonical session from upstream's default CLI-identity synthesis
+  // (opencode.ai flags requests without one since 2026-09-06); the Go-only fallback is not what
+  // adds it, so with that synthesis switched off Zen still gets none.
+  it("leaves OpenCode Zen to upstream's CLI-identity policy (no Go fallback there)", async () => {
+    const previous = process.env.OPENCODE_SYNTHESIZE_CLI_HEADERS;
+    process.env.OPENCODE_SYNTHESIZE_CLI_HEADERS = "false";
+    try {
+      await new OpencodeExecutor("opencode-zen").execute(input("big-pickle"));
+      await new OpencodeExecutor("opencode-go").execute(input("glm-5.3-flash"));
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_SYNTHESIZE_CLI_HEADERS;
+      else process.env.OPENCODE_SYNTHESIZE_CLI_HEADERS = previous;
+    }
     assert.equal(session(0), undefined);
+    assert.match(session(1), /^ses_[0-9a-f]{26}$/, "Go still always carries a session");
   });
 });
 

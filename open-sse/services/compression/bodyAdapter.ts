@@ -2,9 +2,28 @@ type MessageLike = {
   role?: unknown;
   content?: unknown;
   [COMPRESSION_INPUT_INDEX]?: number;
+  [DEVELOPER_ROLE_NORMALIZED]?: boolean;
   [KIRO_TOOL_RESULT_PATH]?: KiroToolResultPath;
   [key: string]: unknown;
 };
+
+export const CODEX_RESPONSE_ITEM_META = Symbol("codexResponseItemMeta");
+
+export type CodexResponseItemMeta = {
+  type: string;
+  eligible: boolean;
+};
+
+type CodexMessageLike = MessageLike & {
+  [CODEX_RESPONSE_ITEM_META]?: CodexResponseItemMeta;
+};
+
+/** True for a synthesized `role:"tool"` message created from a Responses output item. */
+export function isResponsesToolOutputMessage(message: unknown): boolean {
+  if (!isRecord(message)) return false;
+  const m = message as CodexMessageLike;
+  return m.role === "tool" && m[CODEX_RESPONSE_ITEM_META] !== undefined;
+}
 
 type ResponsesItem = {
   type?: unknown;
@@ -14,8 +33,17 @@ type ResponsesItem = {
   [key: string]: unknown;
 };
 
-const RESPONSES_MESSAGE_TYPES = new Set(["message", "function_call_output"]);
+const RESPONSES_MESSAGE_TYPES = new Set([
+  "message",
+  "function_call_output",
+  "custom_tool_call_output",
+  "local_shell_call_output",
+  "apply_patch_call_output",
+]);
 const COMPRESSION_INPUT_INDEX = Symbol("compressionInputIndex");
+// Set on a chat-shape message whose `developer` role was relabeled to `system` for the
+// engines, so `restore` can hand the original role back to the provider payload.
+const DEVELOPER_ROLE_NORMALIZED = Symbol("compressionDeveloperRoleNormalized");
 
 // Kiro envelope path back to the original tool-result text inside
 // `conversationState.{history|currentMessage}[].userInputMessage.userInputMessageContext.toolResults[N].content[M].text`.
@@ -39,7 +67,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeRole(role: unknown, fallback: string): string {
-  return typeof role === "string" && role.length > 0 ? role : fallback;
+  if (typeof role !== "string" || role.length === 0) return fallback;
+  // OpenAI's `developer` role is the modern spelling of `system` (Responses API, and newer
+  // chat completions). Every engine role gate keys off `system` — and the rest of the
+  // pipeline already folds the two together (translator/helpers/openaiHelper.ts) — so fold
+  // them here, at the single boundary both wire shapes cross, instead of at every gate.
+  return role === "developer" ? "system" : role;
 }
 
 function toChatContent(content: unknown, fallbackOutput?: unknown): unknown {
@@ -60,11 +93,52 @@ function fromChatContent(nextContent: unknown, originalContent: unknown): unknow
   return nextContent;
 }
 
-function responsesItemToMessage(item: ResponsesItem): MessageLike | null {
+function customToolOutputToChatContent(rawOutput: unknown): unknown {
+  if (typeof rawOutput !== "string") {
+    if (isRecord(rawOutput) && typeof rawOutput.output === "string") return rawOutput.output;
+    return rawOutput;
+  }
+
+  try {
+    const parsed = JSON.parse(rawOutput) as unknown;
+    if (isRecord(parsed) && typeof parsed.output === "string") return parsed.output;
+  } catch {
+    // Plain-text custom tool output is already in the form compression engines expect.
+  }
+  return rawOutput;
+}
+
+function restoreCustomToolOutput(nextContent: unknown, originalOutput: unknown): unknown {
+  if (typeof originalOutput === "string") {
+    try {
+      const parsed = JSON.parse(originalOutput) as unknown;
+      if (isRecord(parsed) && typeof parsed.output === "string") {
+        return JSON.stringify({ ...parsed, output: nextContent });
+      }
+    } catch {
+      // Preserve the original plain-text representation below.
+    }
+  }
+  if (isRecord(originalOutput) && typeof originalOutput.output === "string") {
+    return { ...originalOutput, output: nextContent };
+  }
+  return fromChatContent(nextContent, originalOutput);
+}
+
+function responsesToolOutputField(item: ResponsesItem): "output" | "content" {
+  return item.output !== null && item.output !== undefined ? "output" : "content";
+}
+
+function responsesItemToMessage(item: ResponsesItem): CodexMessageLike | null {
   const type = typeof item.type === "string" ? item.type : "message";
   if (!RESPONSES_MESSAGE_TYPES.has(type)) return null;
 
-  if (type === "function_call_output") {
+  if (
+    type === "function_call_output" ||
+    type === "custom_tool_call_output" ||
+    type === "local_shell_call_output" ||
+    type === "apply_patch_call_output"
+  ) {
     const rawOutput = item.output ?? item.content;
     // OpenAI Responses shape (Codex): body.input holds Responses items. When
     // output is a JSON object (not a string or content array), serialise it so
@@ -77,7 +151,13 @@ function responsesItemToMessage(item: ResponsesItem): MessageLike | null {
       !Array.isArray(rawOutput);
     return {
       role: "tool",
-      content: isObjectOutput ? JSON.stringify(rawOutput) : toChatContent(rawOutput),
+      content:
+        type === "custom_tool_call_output"
+          ? customToolOutputToChatContent(rawOutput)
+          : isObjectOutput
+            ? JSON.stringify(rawOutput)
+            : toChatContent(rawOutput),
+      [CODEX_RESPONSE_ITEM_META]: { type, eligible: false },
     };
   }
 
@@ -87,12 +167,73 @@ function responsesItemToMessage(item: ResponsesItem): MessageLike | null {
   };
 }
 
+const DEFAULT_CODEX_PROTECTED_TOOL_NAMES = new Set([
+  "read",
+  "glob",
+  "grep",
+  "write",
+  "edit",
+  "websearch",
+  "webfetch",
+  "web_search",
+  "web_fetch",
+]);
+function markCodexResponseEligibility(
+  messages: CodexMessageLike[],
+  inputItems: unknown[],
+  preserveToolNames: string[] = []
+): void {
+  const protectedNames = new Set([
+    ...DEFAULT_CODEX_PROTECTED_TOOL_NAMES,
+    ...preserveToolNames.map((name) => name.trim().toLowerCase()),
+  ]);
+  const functionCalls = new Map<string, string>();
+  const skippedCallIds = new Set<string>();
+  for (const raw of inputItems) {
+    if (!isRecord(raw) || raw.type !== "function_call") continue;
+    if (typeof raw.call_id !== "string" || raw.call_id.length === 0) continue;
+    const name = typeof raw.name === "string" ? raw.name : "";
+    functionCalls.set(raw.call_id, name);
+    if (
+      protectedNames.has(name.trim().toLowerCase()) ||
+      name === "headless_retrieval" ||
+      name.endsWith("__headless_retrieval")
+    ) {
+      skippedCallIds.add(raw.call_id);
+    }
+  }
+
+  for (const message of messages) {
+    const meta = message[CODEX_RESPONSE_ITEM_META];
+    if (!meta) continue;
+    if (meta.type === "local_shell_call_output" || meta.type === "apply_patch_call_output") {
+      meta.eligible = true;
+      continue;
+    }
+    if (meta.type !== "function_call_output") continue;
+    const rawIndex = message[COMPRESSION_INPUT_INDEX];
+    const rawItem = typeof rawIndex === "number" ? inputItems[rawIndex] : null;
+    const callId = isRecord(rawItem) && typeof rawItem.call_id === "string" ? rawItem.call_id : "";
+    meta.eligible = callId.length > 0 && functionCalls.has(callId) && !skippedCallIds.has(callId);
+  }
+}
+
 function messageToResponsesItem(message: MessageLike, originalItem: ResponsesItem): ResponsesItem {
   const type = typeof originalItem.type === "string" ? originalItem.type : "message";
-  if (type === "function_call_output") {
+  if (
+    type === "function_call_output" ||
+    type === "custom_tool_call_output" ||
+    type === "local_shell_call_output" ||
+    type === "apply_patch_call_output"
+  ) {
+    const outputField = responsesToolOutputField(originalItem);
+    const originalOutput = originalItem[outputField];
     return {
       ...originalItem,
-      output: fromChatContent(message.content, originalItem.output),
+      [outputField]:
+        type === "custom_tool_call_output"
+          ? restoreCustomToolOutput(message.content, originalOutput)
+          : fromChatContent(message.content, originalOutput),
     };
   }
 
@@ -100,6 +241,14 @@ function messageToResponsesItem(message: MessageLike, originalItem: ResponsesIte
     ...originalItem,
     content: fromChatContent(message.content, originalItem.content),
   };
+}
+/**
+ * Engines can inject messages that have no source `input[]` item (CCR prepends its
+ * protocol instruction). Restore them as new input items instead of dropping them.
+ */
+function injectedMessageToResponsesItem(message: MessageLike): ResponsesItem {
+  const role = typeof message.role === "string" && message.role.length > 0 ? message.role : "user";
+  return { type: "message", role, content: message.content };
 }
 
 function hasTextContent(message: MessageLike): boolean {
@@ -110,19 +259,120 @@ function hasTextContent(message: MessageLike): boolean {
   );
 }
 
+function isInlineBase64ImageUrl(value: unknown): boolean {
+  return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value);
+}
+
+/** Image-only Responses turns must enter the adapter so #8560 image pruning can see them. */
+function hasInlineImageContent(message: MessageLike): boolean {
+  if (!Array.isArray(message.content)) return false;
+  return message.content.some((part) => {
+    if (!isRecord(part)) return false;
+    if (part.type === "input_image" && isInlineBase64ImageUrl(part.image_url)) return true;
+    if (part.type === "image_url") {
+      const imageUrl = part.image_url;
+      if (isInlineBase64ImageUrl(imageUrl)) return true;
+      return isRecord(imageUrl) && isInlineBase64ImageUrl(imageUrl.url);
+    }
+    if (part.type === "image") {
+      if (isInlineBase64ImageUrl(part.image)) return true;
+      const source = part.source;
+      return isRecord(source) && source.type === "base64" && typeof source.data === "string";
+    }
+    const inlineData = part.inlineData ?? part.inline_data;
+    return isRecord(inlineData) && typeof inlineData.data === "string";
+  });
+}
+
+function hasCompressibleContent(message: MessageLike): boolean {
+  return hasTextContent(message) || hasInlineImageContent(message);
+}
+
+export type CompressionBodyRestoreOptions = {
+  /**
+   * When true, mapped `input[]` items whose synthetic messages were removed
+   * (e.g. compressContext Layer-3 purifyHistory) are omitted from the restored
+   * Responses payload. Default false preserves prior engine behavior: lite
+   * dedup may drop a synthetic duplicate without mutating the original input
+   * item positions (#8560 compaction opts in explicitly).
+   */
+  dropMissingMappedItems?: boolean;
+};
+
 export type CompressionBodyAdapter = {
   body: Record<string, unknown>;
   adapted: boolean;
-  restore(compressedBody: Record<string, unknown>): Record<string, unknown>;
+  restore(
+    compressedBody: Record<string, unknown>,
+    options?: CompressionBodyRestoreOptions
+  ): Record<string, unknown>;
 };
 
-export function adaptBodyForCompression(body: Record<string, unknown>): CompressionBodyAdapter {
-  if (Array.isArray(body.messages)) {
+/**
+ * Chat-shape bodies reach the engines as-is, so a `developer` role never matched an engine
+ * role gate — the same gap the Responses `input[]` mapping has. Relabel only when such a
+ * message exists (every other request keeps the zero-copy pass-through), and hand the
+ * original role back on restore, so the payload that leaves for the provider is unchanged.
+ */
+function adaptChatBodyForCompression(body: Record<string, unknown>): CompressionBodyAdapter {
+  const messages = body.messages as MessageLike[];
+  if (!messages.some((message) => isRecord(message) && message.role === "developer")) {
+    return { body, adapted: false, restore: (compressedBody) => compressedBody };
+  }
+  const normalized = messages.map((message) =>
+    isRecord(message) && message.role === "developer"
+      ? { ...message, role: "system", [DEVELOPER_ROLE_NORMALIZED]: true }
+      : message
+  );
+  return {
+    body: { ...body, messages: normalized },
+    adapted: true,
+    restore: (compressedBody) => {
+      const compressedMessages = compressedBody.messages;
+      if (!Array.isArray(compressedMessages)) return compressedBody;
+      return {
+        ...compressedBody,
+        messages: compressedMessages.map((message) =>
+          isRecord(message) && (message as MessageLike)[DEVELOPER_ROLE_NORMALIZED]
+            ? { ...message, role: "developer" }
+            : message
+        ),
+      };
+    },
+  };
+}
+
+/**
+ * Re-attach the restored `input` to a Responses body. A string `input` collapses back to a
+ * string unless an engine injected messages, in which case it becomes an array of items with
+ * the injected items first.
+ */
+function finalizeResponsesInput(
+  rest: Record<string, unknown>,
+  originalInput: unknown,
+  items: unknown[],
+  injectedItems: unknown[]
+): Record<string, unknown> {
+  if (typeof originalInput === "string") {
+    const first = items[0];
+    const content = isRecord(first) ? (first.content ?? originalInput) : originalInput;
     return {
-      body,
-      adapted: false,
-      restore: (compressedBody) => compressedBody,
+      ...rest,
+      input:
+        injectedItems.length === 0
+          ? content
+          : [...injectedItems, { type: "message", role: "user", content }],
     };
+  }
+  return { ...rest, input: [...injectedItems, ...items] };
+}
+
+export function adaptBodyForCompression(
+  body: Record<string, unknown>,
+  preserveToolNames: string[] = []
+): CompressionBodyAdapter {
+  if (Array.isArray(body.messages)) {
+    return adaptChatBodyForCompression(body);
   }
 
   // Kiro / AWS CodeWhisperer envelope: tool results live deep inside
@@ -150,10 +400,12 @@ export function adaptBodyForCompression(body: Record<string, unknown>): Compress
   inputItems.forEach((item, index) => {
     if (!isRecord(item)) return;
     const message = responsesItemToMessage(item);
-    if (!message || !hasTextContent(message)) return;
+    if (!message || !hasCompressibleContent(message)) return;
     mappings.push({ index, item: item as ResponsesItem });
     messages.push({ ...message, [COMPRESSION_INPUT_INDEX]: index });
   });
+
+  markCodexResponseEligibility(messages, inputItems, preserveToolNames);
 
   if (messages.length === 0) {
     return {
@@ -165,32 +417,99 @@ export function adaptBodyForCompression(body: Record<string, unknown>): Compress
 
   const bodyWithoutInput = { ...body };
   delete bodyWithoutInput.input;
+  const mappedIndexSet = new Set(mappings.map((mapping) => mapping.index));
 
   return {
     body: { ...bodyWithoutInput, messages },
     adapted: true,
-    restore(compressedBody) {
+    restore(compressedBody, options = {}) {
+      const dropMissingMappedItems = options.dropMissingMappedItems === true;
       const compressedMessagesByIndex = new Map<number, MessageLike>();
+      const injectedMessages: MessageLike[] = [];
       if (Array.isArray(compressedBody.messages)) {
         for (const message of compressedBody.messages as MessageLike[]) {
           if (typeof message[COMPRESSION_INPUT_INDEX] === "number") {
             compressedMessagesByIndex.set(message[COMPRESSION_INPUT_INDEX], message);
+          } else if (isRecord(message)) {
+            injectedMessages.push(message);
           }
         }
       }
-      const nextInput = [...inputItems];
-      mappings.forEach((mapping) => {
-        const compressedMessage = compressedMessagesByIndex.get(mapping.index);
-        if (!compressedMessage) return;
-        nextInput[mapping.index] = messageToResponsesItem(compressedMessage, mapping.item);
+      // Messages an engine injected have no source item (CCR prepends its protocol instruction).
+      const injectedItems = injectedMessages.map(injectedMessageToResponsesItem);
+
+      if (!dropMissingMappedItems) {
+        // Legacy restore: patch survivors in place; leave missing mapped items untouched
+        // so lite/caveman dedup of synthetic messages cannot desync Responses positions.
+        const nextInput = [...inputItems];
+        mappings.forEach((mapping) => {
+          const compressedMessage = compressedMessagesByIndex.get(mapping.index);
+          if (!compressedMessage) return;
+          nextInput[mapping.index] = messageToResponsesItem(compressedMessage, mapping.item);
+        });
+        const rest = { ...compressedBody };
+        delete rest.messages;
+        return finalizeResponsesInput(rest, body.input, nextInput, injectedItems);
+      }
+
+      // Compaction restore (#8560): rebuild input so Layer-3 history drops actually shrink
+      // Responses payloads. Also drop orphan regular/custom call items whose outputs vanished.
+      const nextInput: unknown[] = [];
+      const survivingOutputKeys = new Set<string>();
+      inputItems.forEach((item, index) => {
+        if (mappedIndexSet.has(index)) {
+          const compressedMessage = compressedMessagesByIndex.get(index);
+          if (!compressedMessage) return;
+          const mapping = mappings.find((entry) => entry.index === index);
+          if (!mapping) return;
+          const restored = messageToResponsesItem(compressedMessage, mapping.item);
+          nextInput.push(restored);
+          if (
+            isRecord(restored) &&
+            (restored.type === "function_call_output" ||
+              restored.type === "custom_tool_call_output" ||
+              restored.type === "local_shell_call_output" ||
+              restored.type === "apply_patch_call_output") &&
+            typeof restored.call_id === "string"
+          ) {
+            survivingOutputKeys.add(`${restored.type}:${restored.call_id}`);
+          }
+          return;
+        }
+        nextInput.push(item);
       });
+
+      const cleanedInput = nextInput.filter((item) => {
+        if (!isRecord(item)) return true;
+        const t = item.type;
+        if (
+          t !== "function_call" &&
+          t !== "custom_tool_call" &&
+          t !== "local_shell_call" &&
+          t !== "apply_patch_call"
+        ) {
+          return true;
+        }
+        if (typeof item.call_id !== "string" || item.call_id.length === 0) return true;
+        const hadMappedOutput = mappings.some((mapping) => {
+          const original = mapping.item;
+          return (
+            (original.type === "function_call_output" ||
+              original.type === "custom_tool_call_output" ||
+              original.type === "local_shell_call_output" ||
+              original.type === "apply_patch_call_output") &&
+            original.call_id === item.call_id
+          );
+        });
+        if (!hadMappedOutput) return true;
+        const outputType =
+          item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output";
+        return survivingOutputKeys.has(`${outputType}:${item.call_id}`);
+      });
+
       const rest = { ...compressedBody };
       delete rest.messages;
-      if (typeof body.input === "string") {
-        const first = nextInput[0];
-        return { ...rest, input: isRecord(first) ? (first.content ?? body.input) : body.input };
-      }
-      return { ...rest, input: nextInput };
+      return finalizeResponsesInput(rest, body.input, cleanedInput, injectedItems);
     },
   };
 }
@@ -332,7 +651,12 @@ function rewriteKiroEntry(
     let trChanged = false;
     const nextContent = content.map((part, partIdx) => {
       if (!isRecord(part) || typeof part.text !== "string") return part;
-      const key = kiroPathKey({ scope, historyIndex, toolResultIndex: trIdx, contentIndex: partIdx });
+      const key = kiroPathKey({
+        scope,
+        historyIndex,
+        toolResultIndex: trIdx,
+        contentIndex: partIdx,
+      });
       const rewritten = rewrites.get(key);
       if (rewritten === undefined || rewritten === part.text) return part;
       trChanged = true;

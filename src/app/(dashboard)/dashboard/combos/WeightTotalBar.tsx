@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 type ModelEntry = {
   weight?: number;
   [key: string]: unknown;
@@ -9,16 +11,8 @@ type WeightTotalBarProps = {
   models: ModelEntry[];
 };
 
-const WEIGHT_COLORS = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-amber-500",
-  "bg-purple-500",
-  "bg-rose-500",
-  "bg-cyan-500",
-  "bg-orange-500",
-  "bg-indigo-500",
-];
+// Data colours (one per target) come from the kit chart palette (--ci-chart-1..5).
+const WEIGHT_COLORS = ["bg-chart-1", "bg-chart-2", "bg-chart-3", "bg-chart-4", "bg-chart-5"];
 
 /**
  * #6147 — effective routing share of a weighted target.
@@ -35,13 +29,14 @@ export function effectiveSharePercent(weight: number, total: number): number {
 }
 
 export default function WeightTotalBar({ models }: WeightTotalBarProps) {
+  const t = useTranslations("combos");
   const total = models.reduce((sum, m) => sum + (m.weight || 0), 0);
   const isValid = total === 100;
 
   return (
     <div className="mt-1.5">
       {/* Visual bar */}
-      <div className="h-1.5 rounded-full bg-black/5 dark:bg-white/5 overflow-hidden flex">
+      <div className="h-1.5 rounded-full bg-bg-subtle overflow-hidden flex">
         {models.map((m, i) => {
           if (!m.weight) return null;
           return (
@@ -65,10 +60,7 @@ export default function WeightTotalBar({ models }: WeightTotalBarProps) {
                   {m.weight}%
                   {/* #6147 — show the *effective* routing share when weights don't sum to 100 */}
                   {total > 0 && total !== 100 && (
-                    <span
-                      className="text-text-muted/70"
-                      title="Effective routing share (weight ÷ total)"
-                    >
+                    <span className="text-text-muted/70" title={t("effectiveRoutingShare")}>
                       {" → "}
                       {Math.round(effectiveSharePercent(m.weight, total))}%
                     </span>
@@ -79,7 +71,7 @@ export default function WeightTotalBar({ models }: WeightTotalBarProps) {
         </div>
         <span
           className={`text-[10px] font-medium ${
-            isValid ? "text-emerald-500" : total > 100 ? "text-red-500" : "text-amber-500"
+            isValid ? "text-success" : total > 100 ? "text-error" : "text-warning"
           }`}
         >
           {total}%{!isValid && total > 0 && " ≠ 100%"}

@@ -40,7 +40,7 @@ async function resetStorage() {
   // config cache too, or getChaosConfig() keeps serving a stale value (e.g. a
   // prior test's `enabled: true`) after resetDbInstance() below.
   chaosConfig.invalidateChaosConfigCache();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   delete process.env.INITIAL_PASSWORD;
 }
@@ -79,7 +79,7 @@ test.afterEach(() => {
 test.after(() => {
   core.resetDbInstance();
   apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 
   if (ORIGINAL_DATA_DIR === undefined) {
     delete process.env.DATA_DIR;
@@ -191,7 +191,7 @@ test("POST /api/chaos/run — 400 on invalid body (missing task)", async () => {
   assert.equal(res.status, 400);
 });
 
-test("POST /api/chaos/run — 200 happy path dispatches without an Authorization header (dashboard/local mode)", async () => {
+test("POST /api/chaos/run — 200 happy path dispatches with internal Authorization (dashboard mode)", async () => {
   await chaosConfig.setChaosConfig({
     enabled: true,
     defaultMode: "parallel",
@@ -220,7 +220,7 @@ test("POST /api/chaos/run — 200 happy path dispatches without an Authorization
   const body = (await res.json()) as { models: { status: string; content: string }[] };
   assert.equal(body.models[0].status, "success");
   assert.equal(body.models[0].content, "dashboard result");
-  assert.equal(capturedAuth, null);
+  assert.equal(capturedAuth?.startsWith("Bearer "), true);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

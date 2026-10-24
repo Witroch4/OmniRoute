@@ -7,6 +7,9 @@ import type { RegistryEntry } from "../../../shared.ts";
 // (`/google/v1beta/models/<id>:generateContent`) endpoints from it for models whose `targetFormat` says so.
 // Model list, wire format, limits, vision and interleaved reasoning field are copied from the OpenCode
 // models.dev catalog the official CLI ships (2026-10-24); deprecated ids are left out.
+// 3.8.53 sync: upstream's effort-tier declarations (#8353/#10788 — `supportedThinkingEfforts` on the
+// base row, the same tier set OpencodeExecutor's EFFORT_TIERS parses) and their `<base>-<effort>` alias
+// rows are carried for every base that is still in the v2 catalog; upstream's v1-only ids are not.
 export const opencode_goProvider: RegistryEntry = {
   id: "opencode-go",
   alias: "opencode-go",
@@ -20,6 +23,15 @@ export const opencode_goProvider: RegistryEntry = {
   authHeader: "Authorization",
   authPrefix: "Bearer",
   defaultContextLength: 200000,
+  // Upstream 400s "name must be at most 64 characters" on chat-completions tools.
+  toolNameMaxLength: 64,
+  // glm-5.3-flash and other always-thinking models need a generous output
+  // budget or reasoning consumes every token before content is emitted.
+  requestDefaults: { maxTokens: 16_384 },
+  // Console Go / Command Code gateways buffer entire generations — no upstream
+  // bytes flow until the model finishes thinking. Streaming needs a headers-wait
+  // ceiling well above the 110s global cap for long reasoning generations.
+  fetchStartTimeoutCapMs: 600_000,
   models: [
     // ── OpenAI chat completions ──────────────────────────────────────────────
     {
@@ -40,9 +52,29 @@ export const opencode_goProvider: RegistryEntry = {
       supportsVision: false,
       interleavedField: "reasoning_content",
     },
+    // #6922/#10788: GLM-5.2 base + effort-tier aliases.
     {
       id: "glm-5.2",
       name: "GLM-5.2",
+      contextLength: 1000000,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["high", "max"],
+      supportsVision: false,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "glm-5.2-high",
+      name: "GLM-5.2 (high effort)",
+      contextLength: 1000000,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: false,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "glm-5.2-max",
+      name: "GLM-5.2 (max effort)",
       contextLength: 1000000,
       maxOutputTokens: 131072,
       supportsReasoning: true,
@@ -58,9 +90,20 @@ export const opencode_goProvider: RegistryEntry = {
       supportsVision: true,
       interleavedField: "reasoning_content",
     },
+    // #8353: Kimi K3 base + max-effort alias.
     {
       id: "kimi-k3",
       name: "Kimi K3",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["max"],
+      supportsVision: true,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "kimi-k3-max",
+      name: "Kimi K3 (max effort)",
       contextLength: 1048576,
       maxOutputTokens: 131072,
       supportsReasoning: true,
@@ -97,49 +140,25 @@ export const opencode_goProvider: RegistryEntry = {
       supportsVision: true,
       interleavedField: "reasoning_content",
     },
+    // #16579 (upstream): Go's live list also exposes `deepseek-flash`, an alias of the same 1M
+    // DeepSeek V4.1 Flash; imported from live catalogs, so it needs its own metadata row.
+    {
+      id: "deepseek-flash",
+      name: "DeepSeek V4.1 Flash",
+      contextLength: 1000000,
+      maxOutputTokens: 384000,
+    },
+    // #8353: DeepSeek V4 effort tiers are declared on the base (upstream EFFORT_LEVELS: none/low/high/
+    // max). The `<base>-<effort>` variants are derived by the catalog (not registered as duplicate
+    // rows) and OpencodeExecutor rewrites them to the base id with reasoning_effort. The fork's former
+    // explicit -low/-medium/-high/-max rows predate that vocabulary ("medium" is no longer a tier).
     {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
       contextLength: 1000000,
       maxOutputTokens: 384000,
       supportsReasoning: true,
-      supportsVision: false,
-      interleavedField: "reasoning_content",
-    },
-    // OpencodeExecutor rewrites these aliases to the canonical upstream id and injects reasoning_effort.
-    {
-      id: "deepseek-v4-pro-low",
-      name: "DeepSeek V4 Pro (low effort)",
-      contextLength: 1000000,
-      maxOutputTokens: 384000,
-      supportsReasoning: true,
-      supportsVision: false,
-      interleavedField: "reasoning_content",
-    },
-    {
-      id: "deepseek-v4-pro-medium",
-      name: "DeepSeek V4 Pro (medium effort)",
-      contextLength: 1000000,
-      maxOutputTokens: 384000,
-      supportsReasoning: true,
-      supportsVision: false,
-      interleavedField: "reasoning_content",
-    },
-    {
-      id: "deepseek-v4-pro-high",
-      name: "DeepSeek V4 Pro (high effort)",
-      contextLength: 1000000,
-      maxOutputTokens: 384000,
-      supportsReasoning: true,
-      supportsVision: false,
-      interleavedField: "reasoning_content",
-    },
-    {
-      id: "deepseek-v4-pro-max",
-      name: "DeepSeek V4 Pro (max effort)",
-      contextLength: 1000000,
-      maxOutputTokens: 384000,
-      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high", "max"],
       supportsVision: false,
       interleavedField: "reasoning_content",
     },
@@ -161,9 +180,29 @@ export const opencode_goProvider: RegistryEntry = {
       supportsVision: true,
       interleavedField: "reasoning_content",
     },
+    // #6922/#10788: MiMo-V2.5 base + effort-tier aliases.
     {
       id: "mimo-v2.5",
       name: "MiMo-V2.5",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["high", "max"],
+      supportsVision: true,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "mimo-v2.5-high",
+      name: "MiMo-V2.5 (high effort)",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      supportsVision: true,
+      interleavedField: "reasoning_content",
+    },
+    {
+      id: "mimo-v2.5-max",
+      name: "MiMo-V2.5 (max effort)",
       contextLength: 1000000,
       maxOutputTokens: 128000,
       supportsReasoning: true,
@@ -196,9 +235,38 @@ export const opencode_goProvider: RegistryEntry = {
       supportsReasoning: true,
       supportsVision: false,
     },
+    // #8353: hy3 is the Go-tier base id (distinct from the retired hy3-preview / hy3-free).
     {
       id: "hy3",
       name: "Hunyuan3",
+      contextLength: 256000,
+      maxInputTokens: 192000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "high"],
+      supportsVision: false,
+    },
+    {
+      id: "hy3-none",
+      name: "Hunyuan3 (none effort)",
+      contextLength: 256000,
+      maxInputTokens: 192000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      supportsVision: false,
+    },
+    {
+      id: "hy3-low",
+      name: "Hunyuan3 (low effort)",
+      contextLength: 256000,
+      maxInputTokens: 192000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      supportsVision: false,
+    },
+    {
+      id: "hy3-high",
+      name: "Hunyuan3 (high effort)",
       contextLength: 256000,
       maxInputTokens: 192000,
       maxOutputTokens: 128000,
@@ -224,6 +292,8 @@ export const opencode_goProvider: RegistryEntry = {
       interleavedField: "reasoning_content",
     },
     // ── OpenAI responses ─────────────────────────────────────────────────────
+    // Effort vocabularies live-verified upstream (gpt-6-luna: none..max → 200, "ultra" → 400), so
+    // sanitizeReasoningEffortForProvider clamps instead of forwarding a 400.
     {
       id: "gpt-6-luna",
       name: "GPT-6 Luna",
@@ -232,6 +302,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxInputTokens: 922000,
       maxOutputTokens: 128000,
       supportsReasoning: true,
+      supportedThinkingEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       supportsVision: true,
     },
     {
@@ -242,6 +313,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxInputTokens: 922000,
       maxOutputTokens: 128000,
       supportsReasoning: true,
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh", "max"],
       supportsVision: true,
     },
     {
@@ -253,6 +325,8 @@ export const opencode_goProvider: RegistryEntry = {
       supportsReasoning: true,
       supportsVision: true,
     },
+    // #12674/#10788: Muse Spark 1.3 Contributor base + effort-tier aliases (minimal..xhigh, no max);
+    // Responses API only.
     {
       id: "muse-spark-1.3-contributor",
       name: "Muse Spark 1.3 (contributor)",
@@ -260,11 +334,105 @@ export const opencode_goProvider: RegistryEntry = {
       contextLength: 1048576,
       maxOutputTokens: 131072,
       supportsReasoning: true,
+      supportedThinkingEfforts: ["minimal", "low", "medium", "high", "xhigh"],
       supportsVision: true,
     },
     {
+      id: "muse-spark-1.3-contributor-minimal",
+      name: "Muse Spark 1.3 (contributor) (minimal effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.3-contributor-low",
+      name: "Muse Spark 1.3 (contributor) (low effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.3-contributor-medium",
+      name: "Muse Spark 1.3 (contributor) (medium effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.3-contributor-high",
+      name: "Muse Spark 1.3 (contributor) (high effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.3-contributor-xhigh",
+      name: "Muse Spark 1.3 (contributor) (xhigh effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    // #12674/#10788: Muse Spark 1.2 Contributor base + effort-tier aliases (minimal..xhigh, no max);
+    // Responses API only.
+    {
       id: "muse-spark-1.2-contributor",
       name: "Muse Spark 1.2 (contributor)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.2-contributor-minimal",
+      name: "Muse Spark 1.2 (contributor) (minimal effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.2-contributor-low",
+      name: "Muse Spark 1.2 (contributor) (low effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.2-contributor-medium",
+      name: "Muse Spark 1.2 (contributor) (medium effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.2-contributor-high",
+      name: "Muse Spark 1.2 (contributor) (high effort)",
+      targetFormat: "openai-responses",
+      contextLength: 1048576,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "muse-spark-1.2-contributor-xhigh",
+      name: "Muse Spark 1.2 (contributor) (xhigh effort)",
       targetFormat: "openai-responses",
       contextLength: 1048576,
       maxOutputTokens: 131072,
@@ -273,11 +441,15 @@ export const opencode_goProvider: RegistryEntry = {
     },
     // Still in the live list but not in the catalog (2026-10-24); chat completions answers 400
     // ModelProtocolUnsupported, so the protocol is pinned here.
+    // Limits and effort vocabulary from upstream (#16579, models.dev reasoning_options low..xhigh).
     {
       id: "grok-4.6",
       name: "Grok 4.6",
       targetFormat: "openai-responses",
+      contextLength: 500000,
+      maxOutputTokens: 500000,
       supportsReasoning: true,
+      supportedThinkingEfforts: ["low", "medium", "high", "xhigh"],
     },
     // ── Anthropic messages ───────────────────────────────────────────────────
     {
@@ -316,9 +488,29 @@ export const opencode_goProvider: RegistryEntry = {
       supportsReasoning: true,
       supportsVision: true,
     },
+    // #8353: Qwen3.7 Plus base + effort-tier aliases (Anthropic protocol on Go).
     {
       id: "qwen3.7-plus",
       name: "Qwen3.7 Plus",
+      targetFormat: "claude",
+      contextLength: 1000000,
+      maxOutputTokens: 65536,
+      supportsReasoning: true,
+      supportedThinkingEfforts: ["high", "max"],
+      supportsVision: true,
+    },
+    {
+      id: "qwen3.7-plus-high",
+      name: "Qwen3.7 Plus (high effort)",
+      targetFormat: "claude",
+      contextLength: 1000000,
+      maxOutputTokens: 65536,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    {
+      id: "qwen3.7-plus-max",
+      name: "Qwen3.7 Plus (max effort)",
       targetFormat: "claude",
       contextLength: 1000000,
       maxOutputTokens: 65536,

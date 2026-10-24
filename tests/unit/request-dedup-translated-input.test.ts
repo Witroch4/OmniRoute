@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeRequestHash, deduplicate } from "../../open-sse/services/requestDedup.ts";
+import { computeRequestHash as computeHash, deduplicate } from "../../open-sse/services/requestDedup.ts";
+
+// chatCore always hashes with the trusted effort context (the production path); the
+// no-context legacy projection is upstream's and deliberately narrower.
+const computeRequestHash = (body: unknown) => computeHash(body, null, {});
 
 test("distinct Responses inputs must execute independently while in flight", async () => {
   const bodies = ["item-918", "item-919"].map((text) => ({

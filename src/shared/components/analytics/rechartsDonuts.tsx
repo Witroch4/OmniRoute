@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useTranslations } from "next-intl";
 import Card from "../Card";
-import { getModelColor } from "@/shared/constants/colors";
+import { getSeriesColor } from "./chartColors";
 import {
   fmtCompact as fmt,
   fmtCost,
@@ -95,7 +95,7 @@ export function AccountDonut({ byAccount }) {
     return data.slice(0, 8).map((item, i) => ({
       name: item.account,
       value: item.totalTokens,
-      fill: getModelColor(i),
+      fill: getSeriesColor(i),
     }));
   }, [data]);
 
@@ -103,14 +103,14 @@ export function AccountDonut({ byAccount }) {
     return (
       <Card className="p-4 flex-1">
         <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
-          By Account
+          {t("chartByAccount")}
         </h3>
         <div className="text-center text-text-muted text-sm py-8">{t("chartNoData")}</div>
       </Card>
     );
   }
 
-  return <CompactDonutCard pieData={pieData} title="By Account" formatter={fmt} />;
+  return <CompactDonutCard pieData={pieData} title={t("chartByAccount")} formatter={fmt} />;
 }
 
 // ── ApiKeyDonut (Recharts) ─────────────────────────────────────────────────
@@ -123,17 +123,17 @@ export function ApiKeyDonut({ byApiKey }) {
   const pieData = useMemo(() => {
     return data.slice(0, 8).map((item, i) => ({
       name: maskApiKeyLabel(item.apiKeyName, item.apiKeyId),
-      fullName: item.apiKeyName || item.apiKeyId || "unknown",
+      fullName: item.apiKeyName || item.apiKeyId || t("unknownApiKey"),
       value: item.totalTokens,
-      fill: getModelColor(i),
+      fill: getSeriesColor(i),
     }));
-  }, [data]);
+  }, [data, t]);
 
   if (!hasData) {
     return (
       <Card className="p-4 flex-1">
         <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
-          By API Key
+          {t("chartByApiKey")}
         </h3>
         <div className="text-center text-text-muted text-sm py-8">{t("chartNoData")}</div>
       </Card>
@@ -143,7 +143,7 @@ export function ApiKeyDonut({ byApiKey }) {
   return (
     <CompactDonutCard
       pieData={pieData}
-      title="By API Key"
+      title={t("chartByApiKey")}
       formatter={fmt}
       getLegendKey={(seg, i) => `${seg.fullName}-${i}`}
       getLegendTitle={(seg) => seg.fullName}
@@ -186,7 +186,7 @@ export function ProviderCostDonut({ byProvider }) {
       pieData={pieData}
       title={t("chartCostByProvider")}
       formatter={fmtCost}
-      valueClassName="text-amber-500"
+      valueClassName="text-warning"
       labelClassName="capitalize"
     />
   );

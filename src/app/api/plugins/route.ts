@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
   const url = new URL(request.url);
-  const statusResult = StatusSchema.safeParse(url.searchParams.get("status"));
+  const statusResult = StatusSchema.safeParse(url.searchParams.get("status") ?? undefined);
   if (!statusResult.success) {
     return NextResponse.json(
       { error: "Invalid status value", details: statusResult.error.issues },
@@ -45,7 +45,15 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
-  const body = await request.json();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400, headers: CORS_HEADERS }
+    );
+  }
   const schema = z.object({
     path: z.string().min(1).regex(/^\/[^]*$/, "Path must be absolute").refine(
       (p) => !p.includes("\0") && !p.includes(".."),

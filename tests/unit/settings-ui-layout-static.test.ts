@@ -1,14 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-
-function readSrc(path: string): string {
-  return readFileSync(join(ROOT, path), "utf8");
-}
+import { readSrc } from "../_helpers/readSrc";
 
 function assertInOrder(source: string, labels: string[]) {
   let lastIndex = -1;
@@ -20,11 +13,15 @@ function assertInOrder(source: string, labels: string[]) {
   }
 }
 
-test("Appearance page keeps theme color above branding and removes sidebar item controls", () => {
+test("Appearance page keeps the theme selector above branding and removes sidebar item controls", () => {
   const source = readSrc("src/app/(dashboard)/dashboard/settings/components/AppearanceTab.tsx");
 
   assert.doesNotMatch(source, /SidebarVisibilitySetting/);
-  assertInOrder(source, ['t("themeAccent")', 't("whitelabeling")']);
+  // The light/dark/system selector stays above the whitelabeling block. The accent presets
+  // (`themeAccent` / COLOR_THEMES / custom hex) were retired with the Keak kit (KEA-7886, D4):
+  // the accent is the kit's token, not a per-user preference.
+  assertInOrder(source, ['t("themeSelectionAria")', 't("whitelabeling")']);
+  assert.doesNotMatch(source, /themeAccent|COLOR_THEMES|setColorTheme|customColor/);
 });
 
 test("Usage Token Buffer lives in AI settings instead of General storage", () => {
@@ -34,6 +31,9 @@ test("Usage Token Buffer lives in AI settings instead of General storage", () =>
   );
 
   assert.match(aiPage, /UsageTokenBufferTab/);
+  // Anchor: the storage tab component itself, so the negative guard below cannot
+  // pass against a file that was moved, renamed, or split apart.
+  assert.match(generalStorage, /export default function SystemStorageTab\(/);
   assert.doesNotMatch(generalStorage, /storageUsageTokenBuffer/);
 });
 
@@ -80,8 +80,9 @@ test("Proxy Logs table uses the same blue row hover emphasis as Logs", () => {
   const proxyLogger = readSrc("src/shared/components/ProxyLogger.tsx");
   const requestLogger = readSrc("src/shared/components/RequestLoggerV2.tsx");
 
-  assert.match(proxyLogger, /hover:bg-sky-500\/10 dark:hover:bg-sky-400\/10/);
-  assert.match(requestLogger, /hover:bg-sky-500\/10 dark:hover:bg-sky-400\/10/);
+  // KEA-7886: the blue (sky) hover is the kit info token, which resolves per theme.
+  assert.match(proxyLogger, /hover:bg-info\/10/);
+  assert.match(requestLogger, /hover:bg-info\/10/);
   assert.doesNotMatch(proxyLogger, /hover:bg-primary\/5/);
 });
 

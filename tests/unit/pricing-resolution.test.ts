@@ -189,21 +189,26 @@ describe("pricing resolution", () => {
 });
 
 // A newly released Claude id lands in the catalog before anyone writes a pricing
-// row for it. `claude-fable-5-1` is that case: it must bill at the FABLE tier via
-// the family anchor, never at $0 and never at the Opus tier (Fable is priced
-// above Opus, so falling into the looser claude rule would undercharge by half).
-describe("claude-fable-5-1 (no explicit row yet)", () => {
-  it("bills at the fable tier through the family anchor", () => {
+// row for it. `claude-fable-5-1` was that case: it billed at the FABLE tier via the
+// family anchor, never at $0 and never at the Opus tier (Fable is priced above
+// Opus, so falling into the looser claude rule would undercharge by half).
+// 3.8.53 sync: upstream (#12367) gave it its own row (CLAUDE_FABLE_5_1_PRICING), so
+// it now resolves exactly; the anchor path stays covered by an unpriced fable id.
+describe("claude-fable-5-1 (own row since upstream #12367)", () => {
+  it("bills from its explicit row, never at $0", () => {
     const resolved = resolveModelPricing(CATALOG, "claude", "claude-fable-5-1");
+
+    assert.equal(resolved.source, "exact");
+    assert.ok(resolved.pricing, "must not resolve to missing/zero pricing");
+    assert.ok(Number((resolved.pricing as Record<string, unknown>).input) > 0);
+  });
+
+  it("an unpriced fable id still bills at the fable tier through the family anchor", () => {
+    const resolved = resolveModelPricing(CATALOG, "claude", "claude-fable-5-9");
     const fable5 = resolveModelPricing(CATALOG, "claude", "claude-fable-5").pricing;
 
     assert.equal(resolved.source, "family_anchor");
-    assert.ok(resolved.pricing, "must not resolve to missing/zero pricing");
-    assert.deepEqual(
-      resolved.pricing,
-      fable5,
-      "fable 5.1 must bill exactly like fable 5 until it gets its own row"
-    );
+    assert.deepEqual(resolved.pricing, fable5, "an unpriced fable id bills like fable 5");
   });
 
   it("does not fall through to the opus tier", () => {

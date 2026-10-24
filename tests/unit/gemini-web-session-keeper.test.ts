@@ -315,7 +315,7 @@ test("executor stores what the page rotated and maps __Host- cookies by URL", as
           evaluate: async () => ({ text: "3.1 Pro", aria: "" }),
           waitForTimeout: async () => {},
           waitForSelector: async () => ({ click: async () => {} }),
-          keyboard: { type: async () => {}, press: async () => {} },
+          keyboard: { type: async () => {}, insertText: async () => {}, press: async () => {} },
         }),
       }),
       close: async () => {},

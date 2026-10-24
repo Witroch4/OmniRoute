@@ -1,14 +1,62 @@
+/**
+ * @file providerWindowCosts.ts
+ * @description Provider weekly USD cost breakdown for the dashboard modal.
+ *
+ * @changes
+ * - [2026-07-24] [Composer] - Aggregate usage_history in SQL instead of loading all rows into JS
+ */
+
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { getCostSummary } from "@/domain/costRules";
 import { getApiKeys } from "@/lib/db/apiKeys";
 import { getDbInstance } from "@/lib/db/core";
 import { getAllProviderLimitsCache, getProviderLimitsCache } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStart } from "@/lib/db/quotaResetEvents";
-import { calculateRequestCost } from "@/lib/usage/costCalculator";
+import { calculateCost, calculateRequestCost } from "@/lib/usage/costCalculator";
+import {
+  PRICED_FROM_TOKENS_SQL,
+  longContextSumColumns,
+  readLongContextColumns,
+} from "@/lib/usage/longContextSql";
+import {
+  COST_MATCH_BATCH_SIZE,
+  RecordedCostMatcher,
+  type RecordedCostRow,
+} from "./recordedCostMatcher";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const RECORDED_COST_MATCH_TOLERANCE_MS = 30_000;
 
 type JsonRecord = Record<string, unknown>;
+
+interface UsageHistoryFilter {
+  whereSql: string;
+  params: Record<string, unknown>;
+}
+
+interface AggregatedUsageCostRow {
+  apiKeyId: string | null;
+  apiKeyName: string | null;
+  provider: string;
+  model: string;
+  serviceTier: string;
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  lastUsed: string | null;
+  /** Sum of provider-reported exact costs (`provider_cost_usd`) in the group. */
+  storedCost: number;
+  /** Token sums of the group's rows WITHOUT a reported cost — the only priceable ones. */
+  costPromptTokens: number;
+  costCompletionTokens: number;
+  costCacheReadTokens: number;
+  costCacheCreationTokens: number;
+  costReasoningTokens: number;
+}
 
 interface UsageCostRow {
   id: number;
@@ -24,13 +72,13 @@ interface UsageCostRow {
   reasoningTokens: number;
   totalTokens: number;
   timestamp: string | null;
+  /** Provider-reported exact cost of the request, or null when it reported none. */
+  storedCost: number | null;
 }
 
-interface RecordedCostRow {
-  rowId: number;
-  apiKeyId: string;
-  timestamp: number;
-  cost: number;
+interface RecordedCostSummary {
+  totalCost: number;
+  entryCount: number;
 }
 
 interface ProviderWindowCostModelRow {
@@ -318,7 +366,7 @@ async function getApiKeyDirectory(): Promise<ApiKeyDirectory> {
   return { names, weeklyLimitUsd };
 }
 
-function uniqueApiKeyIds(rows: UsageCostRow[]): string[] {
+function uniqueApiKeyIds(rows: Array<{ apiKeyId: string | null }>): string[] {
   return Array.from(
     new Set(
       rows
@@ -328,135 +376,13 @@ function uniqueApiKeyIds(rows: UsageCostRow[]): string[] {
   );
 }
 
-function appendNamedPlaceholders(
-  params: Record<string, unknown>,
-  prefix: string,
-  values: string[]
-): string {
-  return values
-    .map((value, index) => {
-      const key = `${prefix}${index}`;
-      params[key] = value;
-      return `@${key}`;
-    })
-    .join(", ");
-}
-
-function getRecordedCostsByApiKey(
-  apiKeyIds: string[],
-  sinceMs: number,
-  untilMs: number
-): Map<string, RecordedCostRow[]> {
-  if (apiKeyIds.length === 0) return new Map();
-
-  try {
-    const params: Record<string, unknown> = {
-      sinceMs: Math.max(0, sinceMs - RECORDED_COST_MATCH_TOLERANCE_MS),
-      untilMs: untilMs + RECORDED_COST_MATCH_TOLERANCE_MS,
-    };
-    const placeholders = appendNamedPlaceholders(params, "apiKey", apiKeyIds);
-    const rows = getDbInstance()
-      .prepare<RecordedCostRow>(
-        `
-        SELECT
-          id as rowId,
-          api_key_id as apiKeyId,
-          timestamp,
-          cost
-        FROM domain_cost_history
-        WHERE api_key_id IN (${placeholders})
-          AND timestamp >= @sinceMs
-          AND timestamp <= @untilMs
-        ORDER BY api_key_id ASC, timestamp ASC, rowid ASC
-      `
-      )
-      .all(params);
-
-    const byApiKey = new Map<string, RecordedCostRow[]>();
-    for (const row of rows) {
-      if (!row.apiKeyId || !Number.isFinite(row.timestamp) || !Number.isFinite(row.cost)) {
-        continue;
-      }
-      const list = byApiKey.get(row.apiKeyId) ?? [];
-      list.push(row);
-      byApiKey.set(row.apiKeyId, list);
-    }
-    return byApiKey;
-  } catch {
-    return new Map();
-  }
-}
-
-function findClosestRecordedCost(
-  candidates: RecordedCostRow[] | undefined,
-  timestampMs: number,
-  usedRecordedRows: Set<number>
-): RecordedCostRow | null {
-  if (!candidates?.length || !Number.isFinite(timestampMs)) return null;
-
-  let best: RecordedCostRow | null = null;
-  let bestDelta = Number.POSITIVE_INFINITY;
-
-  for (const candidate of candidates) {
-    if (usedRecordedRows.has(candidate.rowId)) continue;
-    const delta = Math.abs(candidate.timestamp - timestampMs);
-    if (delta > RECORDED_COST_MATCH_TOLERANCE_MS) {
-      if (candidate.timestamp > timestampMs + RECORDED_COST_MATCH_TOLERANCE_MS) break;
-      continue;
-    }
-    if (delta < bestDelta) {
-      best = candidate;
-      bestDelta = delta;
-    }
-  }
-
-  if (best) usedRecordedRows.add(best.rowId);
-  return best;
-}
-
-async function getUsageRowCostUsd(
-  row: UsageCostRow,
-  recordedCostsByApiKey: Map<string, RecordedCostRow[]>,
-  usedRecordedRows: Set<number>
-): Promise<number> {
-  const usageTimestampMs = Date.parse(row.timestamp ?? "");
-  const recordedCost = findClosestRecordedCost(
-    row.apiKeyId ? recordedCostsByApiKey.get(row.apiKeyId) : undefined,
-    usageTimestampMs,
-    usedRecordedRows
-  );
-  if (recordedCost) return Math.max(0, toNumber(recordedCost.cost));
-
-  return calculateRequestCost(
-    row.provider,
-    row.model,
-    {
-      input: toNumber(row.promptTokens),
-      output: toNumber(row.completionTokens),
-      cacheRead: toNumber(row.cacheReadTokens),
-      cacheCreation: toNumber(row.cacheCreationTokens),
-      reasoning: toNumber(row.reasoningTokens),
-    },
-    { serviceTier: row.serviceTier }
-  );
-}
-
-export async function getProviderWindowCostBreakdown({
-  provider,
-  connectionId = null,
-  now = Date.now(),
-}: {
-  provider: string;
-  connectionId?: string | null;
-  now?: number;
-}): Promise<ProviderWindowCostBreakdown> {
-  const providerKey = provider.trim().toLowerCase();
-  const nowMs = Number.isFinite(now) ? now : Date.now();
-  const window = selectWeeklyWindow(providerKey, connectionId, nowMs);
-  const windowStartAt = new Date(window.startMs).toISOString();
-  const windowResetAt = window.resetMs ? new Date(window.resetMs).toISOString() : null;
-  const nowIso = new Date(nowMs).toISOString();
-
+function buildUsageHistoryFilter(
+  providerKey: string,
+  windowStartAt: string,
+  nowIso: string,
+  windowResetAt: string | null,
+  connectionId: string | null
+): UsageHistoryFilter {
   const where = [
     "LOWER(provider) = @provider",
     "timestamp >= @since",
@@ -492,8 +418,75 @@ export async function getProviderWindowCostBreakdown({
     }
     params.connectionId = connectionId;
   }
+  return { whereSql: where.join(" AND "), params };
+}
 
-  const usageRows = getDbInstance()
+function fetchAggregatedUsageRows(filter: UsageHistoryFilter): AggregatedUsageCostRow[] {
+  return getDbInstance()
+    .prepare<AggregatedUsageCostRow>(
+      `
+      SELECT
+        NULLIF(api_key_id, '') as apiKeyId,
+        NULLIF(api_key_name, '') as apiKeyName,
+        LOWER(provider) as provider,
+        LOWER(model) as model,
+        COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
+        COUNT(*) as requests,
+        COALESCE(SUM(tokens_input), 0) as promptTokens,
+        COALESCE(SUM(tokens_output), 0) as completionTokens,
+        COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
+        COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
+        COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
+        COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
+        MAX(timestamp) as lastUsed,
+        COALESCE(SUM(provider_cost_usd), 0) as storedCost,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_input ELSE 0 END), 0) as costPromptTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_output ELSE 0 END), 0) as costCompletionTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_cache_read ELSE 0 END), 0) as costCacheReadTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_cache_creation ELSE 0 END), 0) as costCacheCreationTokens,
+        COALESCE(SUM(CASE WHEN provider_cost_usd IS NULL THEN tokens_reasoning ELSE 0 END), 0) as costReasoningTokens,
+        ${longContextSumColumns("", undefined, undefined, PRICED_FROM_TOKENS_SQL)}
+      FROM usage_history
+      WHERE ${filter.whereSql}
+      GROUP BY
+        COALESCE(NULLIF(api_key_id, ''), ''),
+        COALESCE(NULLIF(api_key_name, ''), ''),
+        LOWER(provider),
+        LOWER(model),
+        COALESCE(NULLIF(service_tier, ''), 'standard')
+      ORDER BY totalTokens DESC
+      `
+    )
+    .all(filter.params);
+}
+
+function fetchUsageRequestCountByApiKey(filter: UsageHistoryFilter): Map<string, number> {
+  const rows = getDbInstance()
+    .prepare<{ apiKeyId: string; requestCount: number }>(
+      `
+      SELECT
+        COALESCE(NULLIF(api_key_id, ''), '') as apiKeyId,
+        COUNT(*) as requestCount
+      FROM usage_history
+      WHERE ${filter.whereSql}
+      GROUP BY COALESCE(NULLIF(api_key_id, ''), '')
+      `
+    )
+    .all(filter.params);
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.apiKeyId) continue;
+    counts.set(row.apiKeyId, toNumber(row.requestCount));
+  }
+  return counts;
+}
+
+function fetchDetailedUsageRowsForApiKey(
+  filter: UsageHistoryFilter,
+  apiKeyId: string
+): UsageCostRow[] {
+  return getDbInstance()
     .prepare<UsageCostRow>(
       `
       SELECT
@@ -509,110 +502,370 @@ export async function getProviderWindowCostBreakdown({
         COALESCE(tokens_cache_creation, 0) as cacheCreationTokens,
         COALESCE(tokens_reasoning, 0) as reasoningTokens,
         COALESCE(tokens_input + tokens_output, 0) as totalTokens,
-        timestamp
+        timestamp,
+        provider_cost_usd as storedCost
       FROM usage_history
-      WHERE ${where.join(" AND ")}
+      WHERE ${filter.whereSql}
+        AND api_key_id = @apiKeyId
       ORDER BY timestamp ASC, id ASC
       `
     )
-    .all(params);
+    .all({ ...filter.params, apiKeyId });
+}
 
+function getRecordedCostSummariesByApiKey(
+  apiKeyIds: string[],
+  sinceMs: number,
+  untilMs: number
+): Map<string, RecordedCostSummary> {
+  if (apiKeyIds.length === 0) return new Map();
+
+  try {
+    const params: Record<string, unknown> = {
+      sinceMs: Math.max(0, sinceMs - RECORDED_COST_MATCH_TOLERANCE_MS),
+      untilMs: untilMs + RECORDED_COST_MATCH_TOLERANCE_MS,
+    };
+    const placeholders = appendNamedPlaceholders(params, "apiKey", apiKeyIds);
+    const rows = getDbInstance()
+      .prepare<{ apiKeyId: string; totalCost: number; entryCount: number }>(
+        `
+        SELECT
+          api_key_id as apiKeyId,
+          COALESCE(SUM(cost), 0) as totalCost,
+          COUNT(*) as entryCount
+        FROM domain_cost_history
+        WHERE api_key_id IN (${placeholders})
+          AND timestamp >= @sinceMs
+          AND timestamp <= @untilMs
+        GROUP BY api_key_id
+      `
+      )
+      .all(params);
+
+    const summaries = new Map<string, RecordedCostSummary>();
+    for (const row of rows) {
+      if (!row.apiKeyId) continue;
+      summaries.set(row.apiKeyId, {
+        totalCost: Math.max(0, toNumber(row.totalCost)),
+        entryCount: toNumber(row.entryCount),
+      });
+    }
+    return summaries;
+  } catch {
+    return new Map();
+  }
+}
+
+function appendNamedPlaceholders(
+  params: Record<string, unknown>,
+  prefix: string,
+  values: string[]
+): string {
+  return values
+    .map((value, index) => {
+      const key = `${prefix}${index}`;
+      params[key] = value;
+      return `@${key}`;
+    })
+    .join(", ");
+}
+
+async function getRecordedCostsByApiKey(
+  apiKeyIds: string[],
+  sinceMs: number,
+  untilMs: number
+): Promise<Map<string, RecordedCostRow[]>> {
+  if (apiKeyIds.length === 0) return new Map();
+
+  try {
+    const params: Record<string, unknown> = {
+      sinceMs: Math.max(0, sinceMs - RECORDED_COST_MATCH_TOLERANCE_MS),
+      untilMs: untilMs + RECORDED_COST_MATCH_TOLERANCE_MS,
+    };
+    const placeholders = appendNamedPlaceholders(params, "apiKey", apiKeyIds);
+    const rows = getDbInstance()
+      .prepare<RecordedCostRow>(
+        `
+        SELECT
+          id as rowId,
+          api_key_id as apiKeyId,
+          timestamp,
+          cost
+        FROM domain_cost_history
+        WHERE api_key_id IN (${placeholders})
+          AND timestamp >= @sinceMs
+          AND timestamp <= @untilMs
+        ORDER BY api_key_id ASC, timestamp ASC, rowid ASC
+      `
+      )
+      .all(params);
+
+    const byApiKey = new Map<string, RecordedCostRow[]>();
+    let processed = 0;
+    for (const row of rows) {
+      if (++processed % COST_MATCH_BATCH_SIZE === 0) await yieldToEventLoop();
+      if (!row.apiKeyId || !Number.isFinite(row.timestamp) || !Number.isFinite(row.cost)) {
+        continue;
+      }
+      const list = byApiKey.get(row.apiKeyId) ?? [];
+      list.push(row);
+      byApiKey.set(row.apiKeyId, list);
+    }
+    return byApiKey;
+  } catch {
+    return new Map();
+  }
+}
+
+async function getUsageRowCostUsd(
+  row: UsageCostRow,
+  matcher: RecordedCostMatcher
+): Promise<number> {
+  // A provider-reported exact cost is the billed amount for this request.
+  if (row.storedCost !== null && row.storedCost !== undefined) {
+    return Math.max(0, toNumber(row.storedCost));
+  }
+  const usageTimestampMs = Date.parse(row.timestamp ?? "");
+  const recordedCost = matcher.takeClosest(usageTimestampMs, RECORDED_COST_MATCH_TOLERANCE_MS);
+  if (recordedCost) return Math.max(0, toNumber(recordedCost.cost));
+
+  return calculateRequestCost(
+    row.provider,
+    row.model,
+    {
+      input: toNumber(row.promptTokens),
+      output: toNumber(row.completionTokens),
+      cacheRead: toNumber(row.cacheReadTokens),
+      cacheCreation: toNumber(row.cacheCreationTokens),
+      reasoning: toNumber(row.reasoningTokens),
+    },
+    { serviceTier: row.serviceTier }
+  );
+}
+
+async function getAggregatedGroupCostUsd(row: AggregatedUsageCostRow): Promise<number> {
+  // Reported costs are taken as-is; only the rows without one are priced.
+  return roundUsd(
+    toNumber(row.storedCost) +
+      (await calculateCost(
+        row.provider,
+        row.model,
+        {
+          input: toNumber(row.costPromptTokens),
+          output: toNumber(row.costCompletionTokens),
+          cacheRead: toNumber(row.costCacheReadTokens),
+          cacheCreation: toNumber(row.costCacheCreationTokens),
+          reasoning: toNumber(row.costReasoningTokens),
+          // Long-context share of these sums, split per request in SQL.
+          ...readLongContextColumns(row as unknown as Record<string, unknown>),
+        },
+        { serviceTier: row.serviceTier }
+      ))
+  );
+}
+
+function distributeRecordedCostAcrossGroups(
+  groups: AggregatedUsageCostRow[],
+  recordedTotalUsd: number,
+  groupCalculatedCosts: number[]
+): number[] {
+  const calculatedTotal = groupCalculatedCosts.reduce((sum, value) => sum + value, 0);
+  if (calculatedTotal <= 0) {
+    const evenShare = recordedTotalUsd / Math.max(groups.length, 1);
+    return groups.map(() => roundUsd(evenShare));
+  }
+  return groupCalculatedCosts.map((value) =>
+    roundUsd((recordedTotalUsd * value) / calculatedTotal)
+  );
+}
+
+async function buildApiKeyCostAllocations(args: {
+  groups: AggregatedUsageCostRow[];
+  filter: UsageHistoryFilter;
+  usageRequestCount: number;
+  recordedSummary: RecordedCostSummary | undefined;
+  getMatcher: (apiKeyId: string) => Promise<RecordedCostMatcher>;
+}): Promise<number[]> {
+  const calculatedCosts: number[] = [];
+  for (const group of args.groups) {
+    calculatedCosts.push(await getAggregatedGroupCostUsd(group));
+    if (calculatedCosts.length % COST_MATCH_BATCH_SIZE === 0) await yieldToEventLoop();
+  }
+
+  if (!args.recordedSummary || args.recordedSummary.entryCount <= 0) {
+    return calculatedCosts;
+  }
+
+  if (args.recordedSummary.entryCount === args.usageRequestCount) {
+    return distributeRecordedCostAcrossGroups(
+      args.groups,
+      args.recordedSummary.totalCost,
+      calculatedCosts
+    );
+  }
+
+  const apiKeyId = args.groups[0]?.apiKeyId;
+  if (!apiKeyId) return calculatedCosts;
+
+  const matcher = await args.getMatcher(apiKeyId);
+  const detailedRows = fetchDetailedUsageRowsForApiKey(args.filter, apiKeyId);
+  let total = 0;
+  for (let i = 0; i < detailedRows.length; i++) {
+    total += await getUsageRowCostUsd(detailedRows[i], matcher);
+    // Awaiting an already-resolved promise only drains microtasks. A real
+    // event-loop yield lets inference, timers and HTTP health probes progress.
+    if ((i + 1) % COST_MATCH_BATCH_SIZE === 0) await yieldToEventLoop();
+  }
+  const detailedTotal = roundUsd(total);
+  return distributeRecordedCostAcrossGroups(args.groups, detailedTotal, calculatedCosts);
+}
+
+export async function getProviderWindowCostBreakdown({
+  provider,
+  connectionId = null,
+  now = Date.now(),
+}: {
+  provider: string;
+  connectionId?: string | null;
+  now?: number;
+}): Promise<ProviderWindowCostBreakdown> {
+  const providerKey = provider.trim().toLowerCase();
+  const nowMs = Number.isFinite(now) ? now : Date.now();
+  const window = selectWeeklyWindow(providerKey, connectionId, nowMs);
+  const windowStartAt = new Date(window.startMs).toISOString();
+  const windowResetAt = window.resetMs ? new Date(window.resetMs).toISOString() : null;
+  const nowIso = new Date(nowMs).toISOString();
+  const filter = buildUsageHistoryFilter(
+    providerKey,
+    windowStartAt,
+    nowIso,
+    windowResetAt,
+    connectionId
+  );
+
+  const aggregatedRows = fetchAggregatedUsageRows(filter);
+  const usageRequestCounts = fetchUsageRequestCountByApiKey(filter);
   const apiKeyDirectory = await getApiKeyDirectory();
   const currentApiKeyNames = apiKeyDirectory.names;
-  const recordedCostsByApiKey = getRecordedCostsByApiKey(
-    uniqueApiKeyIds(usageRows),
-    window.startMs,
-    nowMs
-  );
-  const usedRecordedRows = new Set<number>();
+  const apiKeyIds = uniqueApiKeyIds(aggregatedRows);
+  const recordedSummaries = getRecordedCostSummariesByApiKey(apiKeyIds, window.startMs, nowMs);
+  // Aggregate-only keys never need detailed records. Matchers are request-local:
+  // repeated groups for a key share consumption, concurrent requests do not.
+  const matchers = new Map<string, RecordedCostMatcher>();
+  const getMatcher = async (apiKeyId: string): Promise<RecordedCostMatcher> => {
+    const existing = matchers.get(apiKeyId);
+    if (existing) return existing;
+    const rows = await getRecordedCostsByApiKey([apiKeyId], window.startMs, nowMs);
+    const matcher = await RecordedCostMatcher.create(rows.get(apiKeyId) ?? []);
+    matchers.set(apiKeyId, matcher);
+    return matcher;
+  };
   const byApiKey = new Map<string, ProviderWindowCostAggregateRow>();
 
-  for (const row of usageRows) {
-    const apiKeyId = row.apiKeyId || null;
-    const apiKeyName = row.apiKeyName || null;
-    const apiKeyKey = makeApiKeyKey(apiKeyId, apiKeyName);
+  const groupsByApiKey = new Map<string, AggregatedUsageCostRow[]>();
+  for (const row of aggregatedRows) {
+    const apiKeyKey = makeApiKeyKey(row.apiKeyId, row.apiKeyName);
+    const list = groupsByApiKey.get(apiKeyKey) ?? [];
+    list.push(row);
+    groupsByApiKey.set(apiKeyKey, list);
+  }
+
+  for (const [apiKeyKey, groups] of groupsByApiKey.entries()) {
+    const first = groups[0];
+    const apiKeyId = first.apiKeyId || null;
+    const apiKeyName = first.apiKeyName || null;
     const displayName =
       (apiKeyId ? currentApiKeyNames.get(apiKeyId) : null) ||
       apiKeyName ||
       apiKeyId ||
       "Unattributed";
-    const costUsd = roundUsd(
-      await getUsageRowCostUsd(row, recordedCostsByApiKey, usedRecordedRows)
-    );
+    const usageRequestCount = apiKeyId
+      ? (usageRequestCounts.get(apiKeyId) ?? 0)
+      : groups.reduce((sum, group) => sum + toNumber(group.requests), 0);
+    const groupCosts = await buildApiKeyCostAllocations({
+      groups,
+      filter,
+      usageRequestCount,
+      recordedSummary: apiKeyId ? recordedSummaries.get(apiKeyId) : undefined,
+      getMatcher,
+    });
 
-    let aggregate = byApiKey.get(apiKeyKey);
-    if (!aggregate) {
-      let limitUsd: number | null = null;
-      let limitPeriod: string | null = null;
-      let budgetResetAt: string | null = null;
-      if (apiKeyId) {
-        const summary = getCostSummary(apiKeyId);
-        if (summary.activeLimitUsd > 0) {
-          limitUsd = summary.activeLimitUsd;
-          limitPeriod = summary.resetInterval;
+    let limitUsd: number | null = null;
+    let limitPeriod: string | null = null;
+    let budgetResetAt: string | null = null;
+    if (apiKeyId) {
+      const summary = getCostSummary(apiKeyId);
+      if (summary.activeLimitUsd > 0) {
+        limitUsd = summary.activeLimitUsd;
+        limitPeriod = summary.resetInterval;
+        budgetResetAt =
+          typeof summary.nextResetAt === "number" && Number.isFinite(summary.nextResetAt)
+            ? new Date(summary.nextResetAt).toISOString()
+            : null;
+      } else {
+        // No domain budget on this key: fall back to its own weekly USD cap so
+        // the breakdown stops claiming "No USD limit" for a key whose requests
+        // are being rejected by that very cap. The domain budget still wins
+        // when both exist, so this only fills the gap.
+        const ownWeeklyLimitUsd = apiKeyDirectory.weeklyLimitUsd.get(apiKeyId);
+        if (ownWeeklyLimitUsd !== undefined) {
+          limitUsd = ownWeeklyLimitUsd;
+          limitPeriod = "weekly";
+          // The cap is enforced over the same provider weekly window this
+          // breakdown reports, so its reset is the window's own reset.
           budgetResetAt =
-            typeof summary.nextResetAt === "number" && Number.isFinite(summary.nextResetAt)
-              ? new Date(summary.nextResetAt).toISOString()
+            typeof window.resetMs === "number" && Number.isFinite(window.resetMs)
+              ? new Date(window.resetMs).toISOString()
               : null;
-        } else {
-          // No domain budget on this key: fall back to its own weekly USD cap so
-          // the breakdown stops claiming "No USD limit" for a key whose requests
-          // are being rejected by that very cap. The domain budget still wins
-          // when both exist, so this only fills the gap.
-          const ownWeeklyLimitUsd = apiKeyDirectory.weeklyLimitUsd.get(apiKeyId);
-          if (ownWeeklyLimitUsd !== undefined) {
-            limitUsd = ownWeeklyLimitUsd;
-            limitPeriod = "weekly";
-            // The cap is enforced over the same provider weekly window this
-            // breakdown reports, so its reset is the window's own reset.
-            budgetResetAt =
-              typeof window.resetMs === "number" && Number.isFinite(window.resetMs)
-                ? new Date(window.resetMs).toISOString()
-                : null;
-          }
         }
       }
-      aggregate = {
-        apiKeyKey,
-        apiKeyId,
-        apiKeyName: displayName,
-        requests: 0,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        limitUsd,
-        limitPeriod,
-        limitUsedPercent: null,
-        budgetResetAt,
-        lastUsed: null,
-        models: [],
-        modelMap: new Map(),
-      };
-      byApiKey.set(apiKeyKey, aggregate);
     }
 
-    aggregate.requests += 1;
-    aggregate.promptTokens += toNumber(row.promptTokens);
-    aggregate.completionTokens += toNumber(row.completionTokens);
-    aggregate.totalTokens += toNumber(row.totalTokens);
-    aggregate.costUsd = roundUsd(aggregate.costUsd + costUsd);
-    if (!aggregate.lastUsed || (row.timestamp && row.timestamp > aggregate.lastUsed)) {
-      aggregate.lastUsed = row.timestamp || aggregate.lastUsed;
-    }
-    const modelKey = `${row.provider}\0${row.model}\0${row.serviceTier}`;
-    const model = aggregate.modelMap.get(modelKey) ?? {
-      model: row.model,
-      provider: row.provider,
-      serviceTier: row.serviceTier,
+    const aggregate: ProviderWindowCostAggregateRow = {
+      apiKeyKey,
+      apiKeyId,
+      apiKeyName: displayName,
       requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
       totalTokens: 0,
       costUsd: 0,
+      limitUsd,
+      limitPeriod,
+      limitUsedPercent: null,
+      budgetResetAt,
+      lastUsed: null,
+      models: [],
+      modelMap: new Map(),
     };
-    model.requests += 1;
-    model.totalTokens += toNumber(row.totalTokens);
-    model.costUsd = roundUsd(model.costUsd + costUsd);
-    aggregate.modelMap.set(modelKey, model);
+
+    groups.forEach((row, index) => {
+      const costUsd = groupCosts[index] ?? 0;
+      aggregate.requests += toNumber(row.requests);
+      aggregate.promptTokens += toNumber(row.promptTokens);
+      aggregate.completionTokens += toNumber(row.completionTokens);
+      aggregate.totalTokens += toNumber(row.totalTokens);
+      aggregate.costUsd = roundUsd(aggregate.costUsd + costUsd);
+      if (!aggregate.lastUsed || (row.lastUsed && row.lastUsed > aggregate.lastUsed)) {
+        aggregate.lastUsed = row.lastUsed || aggregate.lastUsed;
+      }
+
+      const modelKey = `${row.provider}\0${row.model}\0${row.serviceTier}`;
+      const model = aggregate.modelMap.get(modelKey) ?? {
+        model: row.model,
+        provider: row.provider,
+        serviceTier: row.serviceTier,
+        requests: 0,
+        totalTokens: 0,
+        costUsd: 0,
+      };
+      model.requests += toNumber(row.requests);
+      model.totalTokens += toNumber(row.totalTokens);
+      model.costUsd = roundUsd(model.costUsd + costUsd);
+      aggregate.modelMap.set(modelKey, model);
+    });
+
+    byApiKey.set(apiKeyKey, aggregate);
   }
 
   const breakdownRows = Array.from(byApiKey.values())

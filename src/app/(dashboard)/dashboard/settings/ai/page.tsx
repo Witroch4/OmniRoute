@@ -1,11 +1,14 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { PageHeader } from "@omniroute/ui-kit/page-header";
+import ConnectionTestSettings from "../components/ConnectionTestSettings";
 import ThinkingBudgetTab from "../components/ThinkingBudgetTab";
-import VisionBridgeSettingsTab from "../components/VisionBridgeSettingsTab";
+import ModalityBridgeMovedCard from "../components/ModalityBridgeMovedCard";
 import SystemPromptTab from "../components/SystemPromptTab";
 import ResponsesStatePolicyTab from "../components/ResponsesStatePolicyTab";
 import CodexFastTierTab from "../components/CodexFastTierTab";
+import CodexAutoPingTab from "../components/CodexAutoPingTab";
 import ClaudeFastModeTab from "../components/ClaudeFastModeTab";
 import MemorySkillsTab from "../components/MemorySkillsTab";
 import ModelsDevSyncTab from "../components/ModelsDevSyncTab";
@@ -14,15 +17,18 @@ import ModelCapabilityOverridesTab from "../components/ModelCapabilityOverridesT
 
 export default function SettingsAiPage() {
   const t = useTranslations("settings");
+  const tSidebar = useTranslations("sidebar");
   return (
     <div className="space-y-6">
-      <p className="text-sm text-text-muted">{t("aiSettingsIntro")}</p>
+      <PageHeader compact title={tSidebar("settingsAi")} description={t("aiSettingsIntro")} />
       <ThinkingBudgetTab />
-      <VisionBridgeSettingsTab />
+      <ModalityBridgeMovedCard />
       <SystemPromptTab />
       <ResponsesStatePolicyTab />
       <UsageTokenBufferTab />
       <CodexFastTierTab />
+      <ConnectionTestSettings />
+      <CodexAutoPingTab />
       <ClaudeFastModeTab />
       <MemorySkillsTab />
       <ModelCapabilityOverridesTab />

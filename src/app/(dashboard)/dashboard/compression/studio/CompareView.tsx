@@ -1,5 +1,16 @@
 "use client";
 import { useState } from "react";
+import { useTranslations } from "next-intl";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@omniroute/ui-kit/table";
+import Button from "@/shared/components/Button";
+import Input from "@/shared/components/Input";
 
 interface Row {
   engine: string;
@@ -81,57 +92,98 @@ function VerifyControls({
   spent,
   capped,
 }: VerifyControlsProps) {
+  const t = useTranslations("compressionStudio");
   return (
     <>
-      <label className="text-[10px]">
-        provider
-        <input
-          className="ml-1 w-24 rounded border px-1 text-xs"
-          value={provider}
-          onChange={(e) => onProvider(e.target.value)}
-        />
-      </label>
-      <label className="text-[10px]">
-        juiz (modelo)
-        <input
-          data-testid="verify-model"
-          className="ml-1 w-32 rounded border px-1 text-xs"
-          value={judgeModel}
-          onChange={(e) => onJudgeModel(e.target.value)}
-          placeholder="ex: claude-haiku"
-        />
-      </label>
-      <label className="text-[10px]">
-        cap USD
-        <input
-          type="number"
-          step="0.01"
-          min="0"
-          className="ml-1 w-16 rounded border px-1 text-xs"
-          value={capUsd}
-          onChange={(e) => onCapUsd(Number(e.target.value))}
-        />
-      </label>
-      <button
+      <Input
+        label={t("provider")}
+        className="w-28"
+        inputClassName="h-8 min-h-8 text-xs"
+        value={provider}
+        onChange={(e) => onProvider(e.target.value)}
+      />
+      <Input
+        label={t("judgeModel")}
+        data-testid="verify-model"
+        className="w-40"
+        inputClassName="h-8 min-h-8 text-xs"
+        value={judgeModel}
+        onChange={(e) => onJudgeModel(e.target.value)}
+        placeholder={t("judgeModelPlaceholder")}
+      />
+      <Input
+        type="number"
+        label={t("maxCostUsd")}
+        step="0.01"
+        min="0"
+        className="w-24"
+        inputClassName="h-8 min-h-8 text-xs"
+        value={capUsd}
+        onChange={(e) => onCapUsd(Number(e.target.value))}
+      />
+      <Button
+        variant="secondary"
+        size="sm"
+        icon="balance"
         data-testid="verify-all"
         onClick={onVerify}
+        loading={verifying}
         disabled={verifying || !judgeModel}
-        title={!judgeModel ? "informe o modelo-juiz" : undefined}
-        className="rounded bg-purple-500/30 px-3 py-1 text-sm disabled:opacity-40"
+        title={!judgeModel ? t("enterJudgeModel") : undefined}
       >
-        {verifying ? "Verificando..." : "⚖ Verificar todas"}
-      </button>
+        {verifying ? t("verifying") : t("verifyAll")}
+      </Button>
       {spent !== null && (
-        <span className="text-[10px] opacity-70">
-          gasto ${spent.toFixed(3)} / ${capUsd.toFixed(2)}
-          {capped ? " · cap atingido" : ""}
+        <span className="text-[10px] text-text-muted">
+          {t("spent", { spent: spent.toFixed(3), cap: capUsd.toFixed(2) })}
+          {capped ? ` · ${t("capReached")}` : ""}
         </span>
       )}
     </>
   );
 }
 
+function ComparisonTable({
+  rows,
+  verdicts,
+}: {
+  rows: Row[];
+  verdicts: Record<string, VerifyResult>;
+}) {
+  const t = useTranslations("compressionStudio");
+  return (
+    <Table scrollbarLabel={t("compareTab")} className="min-w-0 text-xs">
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t("engine")}</TableHead>
+          <TableHead>{t("savings")}</TableHead>
+          <TableHead>{t("retention")}</TableHead>
+          <TableHead>{t("outputTokensShort")}</TableHead>
+          <TableHead>{t("fidelity")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => {
+          const verdict = verdicts[row.engine];
+          return (
+            <TableRow key={row.engine} data-testid="compare-row">
+              <TableCell className="font-semibold">{row.engine}</TableCell>
+              <TableCell>−{row.meanSavingsPercent.toFixed(0)}%</TableCell>
+              <TableCell>{Math.round(row.meanRetention * 100)}%</TableCell>
+              <TableCell>{row.totalCompressedTokens}</TableCell>
+              <TableCell data-testid="verify-verdict">
+                {verdict ? (verdict.skippedCapped ? "—(cap)" : (verdict.verdict ?? "?")) : ""}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
 export function CompareView({ text }: CompareViewProps) {
+  const t = useTranslations("compressionStudio");
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [verdicts, setVerdicts] = useState<Record<string, VerifyResult>>({});
@@ -177,14 +229,16 @@ export function CompareView({ text }: CompareViewProps) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-2">
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           data-testid="compare-load"
           onClick={load}
+          loading={loading}
           disabled={loading}
-          className="rounded bg-blue-500/30 px-3 py-1 text-sm"
         >
-          {loading ? "Rodando..." : "Carregar A/B"}
-        </button>
+          {loading ? t("running") : t("loadAb")}
+        </Button>
         {rows.length > 0 && (
           <VerifyControls
             provider={provider}
@@ -200,33 +254,7 @@ export function CompareView({ text }: CompareViewProps) {
           />
         )}
       </div>
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-left opacity-60">
-            <th>Engine</th>
-            <th>Savings</th>
-            <th>Retention</th>
-            <th>Out tok</th>
-            <th>Fidelity</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const v = verdicts[r.engine];
-            return (
-              <tr key={r.engine} data-testid="compare-row" className="border-b">
-                <td className="font-semibold">{r.engine}</td>
-                <td>−{r.meanSavingsPercent.toFixed(0)}%</td>
-                <td>{Math.round(r.meanRetention * 100)}%</td>
-                <td>{r.totalCompressedTokens}</td>
-                <td data-testid="verify-verdict">
-                  {v ? (v.skippedCapped ? "—(cap)" : (v.verdict ?? "?")) : ""}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <ComparisonTable rows={rows} verdicts={verdicts} />
     </div>
   );
 }

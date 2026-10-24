@@ -1,0 +1,19 @@
+// Kept in lockstep with the `@openai/codex@x.y.z` pin in the root Dockerfile
+// (the CLI installed in the OmniRoute image). When that image pin is bumped,
+// refresh this so the fingerprint OpenAI sees from the OAuth/Responses face
+// matches the real client version. Overridable per-deployment via
+// CODEX_CLIENT_VERSION.
+// Fork: max(fork 0.160.0, upstream 0.159.2). 0.160.0 is the first client the ChatGPT
+// backend lists `gpt-6.1-sol` for (2026-10-03; 0.156.1 got "not supported when using
+// Codex with a ChatGPT account"). See the history in open-sse/config/codexClient.ts.
+export const DEFAULT_CODEX_CLIENT_VERSION = "0.160.0";
+export const CODEX_CLI_RS_ORIGINATOR = "codex_cli_rs";
+
+export function getCodexCliRsHeaders(
+  version = DEFAULT_CODEX_CLIENT_VERSION
+): Record<string, string> {
+  return {
+    "User-Agent": `${CODEX_CLI_RS_ORIGINATOR}/${version}`,
+    originator: CODEX_CLI_RS_ORIGINATOR,
+  };
+}

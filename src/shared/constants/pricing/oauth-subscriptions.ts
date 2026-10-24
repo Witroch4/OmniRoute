@@ -3,20 +3,130 @@
  * Pure data; merged by default-pricing.ts via spread (god-file decomposition; semantic split).
  */
 import {
+  GPT_6_ASTRA_PRICING,
+  CLAUDE_FABLE_5_1_PRICING,
+  CLAUDE_OPUS_5_5_PRICING,
+  CLAUDE_OPUS_5_PRICING,
+  CLAUDE_SONNET_5_PRICING,
   GEMINI_3_7_FLASH_PROMO_PRICING,
+  GEMINI_3_8_FLASH_PROMO_PRICING,
+  GEMINI_4_ARGON_PROMO_PRICING,
   GPT_5_3_CODEX_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
   GPT_5_6_SOL_PRICING,
   GPT_5_6_TERRA_PRICING,
-  GPT_6_1_SOL_PRICING,
-  GPT_6_ASTRA_PRICING,
-  GPT_6_LUNA_PRICING,
-  GPT_6_SOL_PRICING,
 } from "./shared-tiers";
+
+// Both connection ids and the legacy alias must reach the same billing data.
+const ANTIGRAVITY_PRICING = {
+  "gemini-3.1-pro-low": {
+    input: 2.0,
+    output: 12.0,
+    cached: 0.25,
+    reasoning: 18.0,
+    cache_creation: 2.0,
+  },
+  "gemini-pro-agent": {
+    input: 4.0,
+    output: 18.0,
+    cached: 0.5,
+    reasoning: 27.0,
+    cache_creation: 4.0,
+  },
+  "gemini-3.7-flash-low": GEMINI_3_7_FLASH_PROMO_PRICING,
+  "gemini-3.7-flash-medium": GEMINI_3_7_FLASH_PROMO_PRICING,
+  "gemini-3.7-flash-high": GEMINI_3_7_FLASH_PROMO_PRICING,
+  "gemini-3.7-flash-tiered": GEMINI_3_7_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-low": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-medium": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-high": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-3.8-flash-tiered": GEMINI_3_8_FLASH_PROMO_PRICING,
+  "gemini-4-argon": GEMINI_4_ARGON_PROMO_PRICING,
+  "gemini-4-argon-low": GEMINI_4_ARGON_PROMO_PRICING,
+  "gemini-4-argon-medium": GEMINI_4_ARGON_PROMO_PRICING,
+  "gemini-4-argon-high": GEMINI_4_ARGON_PROMO_PRICING,
+  "gemini-3.5-flash-lite": {
+    input: 0.3,
+    output: 2.5,
+    cached: 0.03,
+    reasoning: 2.5,
+    cache_creation: 0.3,
+  },
+  "gemini-3.1-flash-lite": {
+    input: 0.25,
+    output: 1.5,
+    cached: 0.025,
+    reasoning: 1.5,
+    cache_creation: 0.25,
+  },
+  "gemini-3-flash": {
+    input: 0.5,
+    output: 3.0,
+    cached: 0.05,
+    reasoning: 3.0,
+    cache_creation: 0.5,
+  },
+  "claude-sonnet-4-6": {
+    input: 3.0,
+    output: 15.0,
+    cached: 0.3,
+    reasoning: 22.5,
+    cache_creation: 3.0,
+  },
+  "claude-opus-4-6-thinking": {
+    input: 5.0,
+    output: 25.0,
+    cached: 0.5,
+    reasoning: 37.5,
+    cache_creation: 5.0,
+  },
+  "claude-opus-5-5-low": CLAUDE_OPUS_5_5_PRICING,
+  "claude-opus-5-5-medium": CLAUDE_OPUS_5_5_PRICING,
+  "claude-opus-5-5-high": CLAUDE_OPUS_5_5_PRICING,
+  "claude-sonnet-5-5-low": CLAUDE_SONNET_5_PRICING,
+  "claude-sonnet-5-5-medium": CLAUDE_SONNET_5_PRICING,
+  "claude-sonnet-5-5-high": CLAUDE_SONNET_5_PRICING,
+  "gpt-oss-120b-medium": {
+    input: 0.5,
+    output: 2.0,
+    cached: 0.25,
+    reasoning: 3.0,
+    cache_creation: 0.5,
+  },
+};
+
+// Codex Standard: 250 / 25 / 1250 credits per MTok, at 25 credits per USD.
+// https://developers.openai.com/codex/pricing
+const GPT_6_ASTRA_CODEX_PRICING = GPT_6_ASTRA_PRICING;
+// Codex Standard: Sol 50 / 5 / 250 and Luna 2.5 / 0.25 / 12.5 credits per MTok.
+const GPT_6_SOL_CODEX_PRICING = {
+  input: 2.0,
+  output: 10.0,
+  cached: 0.2,
+  reasoning: 10.0,
+  cache_creation: 2.5,
+};
+// GPT-6.1 Sol Standard: 50 / 2.5 / 250 credits per MTok (input / cached / output).
+// Keep GPT-6 Sol's 5-credit cached rate separate. Dollar equivalents below use
+// this table's existing 25 credits/USD convention, not included-plan usage.
+// https://learn.chatgpt.com/docs/pricing#token-rates (checked 2026-10-07)
+const GPT_6_1_SOL_CODEX_PRICING = {
+  ...GPT_6_SOL_CODEX_PRICING,
+  cached: 0.1,
+};
+const GPT_6_LUNA_CODEX_PRICING = {
+  input: 0.1,
+  output: 0.5,
+  cached: 0.01,
+  reasoning: 0.5,
+  cache_creation: 0.125,
+};
 
 export const DEFAULT_PRICING_OAUTH = {
   cc: {
+    "claude-fable-5-1": CLAUDE_FABLE_5_1_PRICING,
     "claude-fable-5": {
       input: 10.0,
       output: 50.0,
@@ -24,25 +134,11 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 50.0,
       cache_creation: 12.5,
     },
-    // Same rates as Opus 4.8 — Claude Opus 5 is a drop-in upgrade at the Opus
-    // tier price ($5 / $25 per MTok, cache read 0.1x, 5m cache write 1.25x).
-    "claude-opus-5": {
-      input: 5.0,
-      output: 25.0,
-      cached: 0.5,
-      reasoning: 25.0,
-      cache_creation: 6.25,
-    },
-    // Opus 5.5 is priced BELOW Opus 5 ($4 / $20 per MTok, cache read $0.20,
-    // 5m cache write 1.25x). Needs its own row: the `claude-opus-*` family
-    // anchor would bill it at Opus 4.8 rates, 25% too high.
-    "claude-opus-5-5": {
-      input: 4.0,
-      output: 20.0,
-      cached: 0.2,
-      reasoning: 20.0,
-      cache_creation: 5.0,
-    },
+    // Opus 5 $5/$25 (cache read 0.1x, 5m cache write 1.25x); Opus 5.5 is priced BELOW
+    // it ($4/$20, cache read $0.20). Each needs its own row: the `claude-opus-*` family
+    // anchor would bill 5.5 at Opus 4.8 rates, 25% too high. Same values as the fork's rows.
+    "claude-opus-5-5": CLAUDE_OPUS_5_5_PRICING,
+    "claude-opus-5": CLAUDE_OPUS_5_PRICING,
     "claude-opus-4-8": {
       input: 5.0,
       output: 25.0,
@@ -71,15 +167,6 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 15.0,
       cache_creation: 3.75,
     },
-    // Sonnet 5.5: $2 / $10 per MTok, cache read 0.1x ($0.20), 5m write 1.25x
-    // (platform.claude.com models overview, read 2026-09-28).
-    "claude-sonnet-5-5": {
-      input: 2.0,
-      output: 10.0,
-      cached: 0.2,
-      reasoning: 10.0,
-      cache_creation: 2.5,
-    },
     "claude-sonnet-5": {
       input: 3.0,
       output: 15.0,
@@ -87,6 +174,9 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 15.0,
       cache_creation: 3.75,
     },
+    // Sonnet 5.5: $2 / $10 per MTok, cache read 0.1x ($0.20), 5m write 1.25x
+    // (platform.claude.com models overview, read 2026-09-28).
+    "claude-sonnet-5-5": CLAUDE_SONNET_5_PRICING,
     "claude-opus-4-5-20251101": {
       input: 5.0,
       output: 25.0,
@@ -129,36 +219,36 @@ export const DEFAULT_PRICING_OAUTH = {
     },
   },
   cx: {
+    "gpt-6-astra": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-ultra": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-max": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-xhigh": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-high": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-medium": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-astra-low": GPT_6_ASTRA_CODEX_PRICING,
+    "gpt-6-sol": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-ultra": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-max": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-xhigh": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-high": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-medium": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6-sol-low": GPT_6_SOL_CODEX_PRICING,
+    "gpt-6.1-sol": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-ultra": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-max": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-xhigh": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-high": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-medium": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.1-sol-low": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6-luna": GPT_6_LUNA_CODEX_PRICING,
+    "gpt-6-luna-max": GPT_6_LUNA_CODEX_PRICING,
+    "gpt-6-luna-xhigh": GPT_6_LUNA_CODEX_PRICING,
+    "gpt-6-luna-high": GPT_6_LUNA_CODEX_PRICING,
+    "gpt-6-luna-medium": GPT_6_LUNA_CODEX_PRICING,
+    "gpt-6-luna-low": GPT_6_LUNA_CODEX_PRICING,
     "codex-auto-review": GPT_5_5_PRICING,
     // Codex uses credits per 1M tokens. OmniRoute stores the dollar-equivalent
     // values below at the documented conversion of 25 credits per USD.
-    "gpt-6.1-sol": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-ultra": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-max": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-xhigh": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-high": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-medium": GPT_6_1_SOL_PRICING,
-    "gpt-6.1-sol-low": GPT_6_1_SOL_PRICING,
-    "gpt-6-astra": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-ultra": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-max": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-xhigh": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-high": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-medium": GPT_6_ASTRA_PRICING,
-    "gpt-6-astra-low": GPT_6_ASTRA_PRICING,
-    "gpt-6-sol": GPT_6_SOL_PRICING,
-    "gpt-6-sol-ultra": GPT_6_SOL_PRICING,
-    "gpt-6-sol-max": GPT_6_SOL_PRICING,
-    "gpt-6-sol-xhigh": GPT_6_SOL_PRICING,
-    "gpt-6-sol-high": GPT_6_SOL_PRICING,
-    "gpt-6-sol-medium": GPT_6_SOL_PRICING,
-    "gpt-6-sol-low": GPT_6_SOL_PRICING,
-    "gpt-6-luna": GPT_6_LUNA_PRICING,
-    "gpt-6-luna-max": GPT_6_LUNA_PRICING,
-    "gpt-6-luna-xhigh": GPT_6_LUNA_PRICING,
-    "gpt-6-luna-high": GPT_6_LUNA_PRICING,
-    "gpt-6-luna-medium": GPT_6_LUNA_PRICING,
-    "gpt-6-luna-low": GPT_6_LUNA_PRICING,
     "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol-ultra": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol-max": GPT_5_6_SOL_PRICING,
@@ -259,46 +349,6 @@ export const DEFAULT_PRICING_OAUTH = {
       cache_creation: 1.0,
     },
   },
-  qw: {
-    "qwen3-coder-plus": {
-      input: 1.0,
-      output: 4.0,
-      cached: 0.5,
-      reasoning: 6.0,
-      cache_creation: 1.0,
-    },
-    // Next-generation Qwen Coder tier (added Mar 2026)
-    "qwen3-coder-next": {
-      input: 2.0,
-      output: 8.0,
-      cached: 1.0,
-      reasoning: 12.0,
-      cache_creation: 2.0,
-    },
-    "qwen3-coder-flash": {
-      input: 0.5,
-      output: 2.0,
-      cached: 0.25,
-      reasoning: 3.0,
-      cache_creation: 0.5,
-    },
-    "vision-model": {
-      input: 1.5,
-      output: 6.0,
-      cached: 0.75,
-      reasoning: 9.0,
-      cache_creation: 1.5,
-    },
-    // Qwen3.5/3.6 Coder Model — ported from upstream 9router PR #156 (zx07).
-    // Priced identically to the vision tier per upstream defaults.
-    "coder-model": {
-      input: 1.5,
-      output: 6.0,
-      cached: 0.75,
-      reasoning: 9.0,
-      cache_creation: 1.5,
-    },
-  },
   if: {
     "qwen3-coder-plus": {
       input: 1.0,
@@ -386,89 +436,11 @@ export const DEFAULT_PRICING_OAUTH = {
       cache_creation: 0.75,
     },
   },
-  ag: {
-    "gemini-3.1-pro-low": {
-      input: 2.0,
-      output: 12.0,
-      cached: 0.25,
-      reasoning: 18.0,
-      cache_creation: 2.0,
-    },
-    "gemini-3.1-pro-high": {
-      input: 4.0,
-      output: 18.0,
-      cached: 0.5,
-      reasoning: 27.0,
-      cache_creation: 4.0,
-    },
-    "gemini-3-flash": {
-      input: 0.5,
-      output: 3.0,
-      cached: 0.03,
-      reasoning: 4.5,
-      cache_creation: 0.5,
-    },
-    // Antigravity 2.0.4+ exposes Gemini 3.5 Flash as three public client ids
-    // (see ANTIGRAVITY_PUBLIC_MODELS in open-sse/config/antigravityModelAliases.ts):
-    //   gemini-3-flash-agent   → "Gemini 3.5 Flash (High)"
-    //   gemini-3.5-flash-low   → "Gemini 3.5 Flash (Medium)"
-    // Both bill at the same per-MTok rates as legacy `gemini-3-flash` above —
-    // without these rows, getPricingForModel("ag", id) returned null and downstream
-    // cost / quota calculations silently fell back to $0.
-    "gemini-3-flash-agent": {
-      input: 0.5,
-      output: 3.0,
-      cached: 0.03,
-      reasoning: 4.5,
-      cache_creation: 0.5,
-    },
-    // Gemini 3.8 Flash. Google has not published 3.8 rates yet, so these bill at
-    // the 3.7 Flash promo tier — deliberately provisional, and revisit when the
-    // real card lands. Without a row the family resolves to `missing`, which
-    // reports the model at $0: 3.6 is in exactly that state today and every
-    // request on it has been counted as free. Off by a little beats off by 100%.
-    "gemini-3.8-flash-high": GEMINI_3_7_FLASH_PROMO_PRICING,
-    "gemini-3.8-flash-medium": GEMINI_3_7_FLASH_PROMO_PRICING,
-    "gemini-3.8-flash-low": GEMINI_3_7_FLASH_PROMO_PRICING,
-    "gemini-3.5-flash-low": {
-      input: 0.5,
-      output: 3.0,
-      cached: 0.03,
-      reasoning: 4.5,
-      cache_creation: 0.5,
-    },
-    // `gemini-pro-agent` is the Antigravity v1.23+ Agent-mode alias for the
-    // Gemini 3.1 Pro (High) tier — bills at the same rates as `gemini-3.1-pro-high`.
-    "gemini-pro-agent": {
-      input: 4.0,
-      output: 18.0,
-      cached: 0.5,
-      reasoning: 27.0,
-      cache_creation: 4.0,
-    },
-    "claude-sonnet-4-6": {
-      input: 3.0,
-      output: 15.0,
-      cached: 0.3,
-      reasoning: 22.5,
-      cache_creation: 3.0,
-    },
-    "claude-opus-4-6-thinking": {
-      input: 5.0,
-      output: 25.0,
-      cached: 0.5,
-      reasoning: 37.5,
-      cache_creation: 5.0,
-    },
-    "gpt-oss-120b-medium": {
-      input: 0.5,
-      output: 2.0,
-      cached: 0.25,
-      reasoning: 3.0,
-      cache_creation: 0.5,
-    },
-  },
+  ag: ANTIGRAVITY_PRICING,
+  antigravity: ANTIGRAVITY_PRICING,
+  agy: ANTIGRAVITY_PRICING,
   gh: {
+    "claude-opus-5": CLAUDE_OPUS_5_PRICING,
     "gpt-5": {
       input: 3.0,
       output: 12.0,
@@ -532,7 +504,6 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 18.0,
       cache_creation: 2.0,
     },
-    "gemini-3.7-flash": GEMINI_3_7_FLASH_PROMO_PRICING,
     "gemini-3-flash": {
       input: 0.5,
       output: 3.0,
@@ -540,6 +511,7 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 4.5,
       cache_creation: 0.5,
     },
+    "gemini-3.7-flash": GEMINI_3_7_FLASH_PROMO_PRICING,
     "gemini-2.5-pro": {
       input: 2.0,
       output: 12.0,
@@ -556,13 +528,6 @@ export const DEFAULT_PRICING_OAUTH = {
     },
   },
   kiro: {
-    "claude-fable-5": {
-      input: 15.0,
-      output: 75.0,
-      cached: 7.5,
-      reasoning: 112.5,
-      cache_creation: 15.0,
-    },
     "claude-sonnet-4.5": {
       input: 3.0,
       output: 15.0,
@@ -577,36 +542,9 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 2.5,
       cache_creation: 0.5,
     },
-    // Models from issue #334
+    // Fork (6c4dbf7ae8): Kiro has no "claude-sonnet-5" (live 400 "Invalid model" on two
+    // connections); the registry lists "claude-sonnet-4" instead (live 200), priced here.
     "claude-sonnet-4": {
-      input: 3.0,
-      output: 15.0,
-      cached: 1.5,
-      reasoning: 15.0,
-      cache_creation: 3.0,
-    },
-    "claude-opus-4.8": {
-      input: 15.0,
-      output: 75.0,
-      cached: 7.5,
-      reasoning: 75.0,
-      cache_creation: 15.0,
-    },
-    "claude-opus-4.7": {
-      input: 15.0,
-      output: 75.0,
-      cached: 7.5,
-      reasoning: 75.0,
-      cache_creation: 15.0,
-    },
-    "claude-opus-4.6": {
-      input: 15.0,
-      output: 75.0,
-      cached: 7.5,
-      reasoning: 75.0,
-      cache_creation: 15.0,
-    },
-    "claude-sonnet-4.6": {
       input: 3.0,
       output: 15.0,
       cached: 1.5,
@@ -657,21 +595,10 @@ export const DEFAULT_PRICING_OAUTH = {
       reasoning: 8.0,
       cache_creation: 2.0,
     },
-    // Kiro "Auto" pricing — retained for both the upstream "auto" id and the
-    // local "auto-kiro" selector. The translator maps auto-kiro back to auto.
-    auto: {
-      input: 3.0,
-      output: 15.0,
-      cached: 1.5,
-      reasoning: 15.0,
-      cache_creation: 3.0,
-    },
-    "auto-kiro": {
-      input: 3.0,
-      output: 15.0,
-      cached: 1.5,
-      reasoning: 15.0,
-      cache_creation: 3.0,
-    },
+    // Kiro's GPT-5.6 family (kiro.dev/changelog/models, 2026-07-14) — same
+    // per-tier rates the codex/openai aliases already bill at.
+    "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
+    "gpt-5.6-terra": GPT_5_6_TERRA_PRICING,
+    "gpt-5.6-luna": GPT_5_6_LUNA_PRICING,
   },
 };

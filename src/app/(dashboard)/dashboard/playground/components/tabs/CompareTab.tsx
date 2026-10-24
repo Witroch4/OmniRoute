@@ -1,11 +1,18 @@
 "use client";
 
+import Input from "@/shared/components/Input";
+import Textarea from "@/shared/components/Textarea";
+import Button from "@/shared/components/Button";
+import Icon from "@/shared/components/Icon";
+
 // src/app/(dashboard)/dashboard/playground/components/tabs/CompareTab.tsx
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import CompareColumn, { type CompareColumnData, type ColumnStatus } from "../CompareColumn";
 import type { ConfigState } from "../StudioConfigPane";
 import type { StreamMetrics } from "@/shared/schemas/playground";
+import { resolveGenerationMs } from "@/shared/utils/logTps";
 
 interface CompareTabProps {
   configState: ConfigState;
@@ -82,8 +89,13 @@ class ColumnMetricsTracker {
     const { startedAt, firstChunkAt, finishedAt, tokensOut, tokensIn } = this;
     const ttftMs = startedAt != null && firstChunkAt != null ? firstChunkAt - startedAt : null;
     const totalMs = startedAt != null && finishedAt != null ? finishedAt - startedAt : null;
+    // #13130: generation throughput — exclude the wait for the first chunk
+    // (TTFT) when it is known; fall back to the full window otherwise.
+    const generationMs = resolveGenerationMs(totalMs, ttftMs);
     const tps =
-      totalMs != null && totalMs > 0 && tokensOut > 0 ? (tokensOut / totalMs) * 1000 : null;
+      generationMs != null && generationMs > 0 && tokensOut > 0
+        ? (tokensOut / generationMs) * 1000
+        : null;
     return { ttftMs, totalMs, tokensIn, tokensOut, tps, costUsd: null };
   }
 }
@@ -96,6 +108,7 @@ class ColumnMetricsTracker {
  * Cmd+K (or Ctrl+K) focuses the "add column" model input.
  */
 export default function CompareTab({ configState }: CompareTabProps) {
+  const t = useTranslations("playground");
   const [columns, setColumns] = useState<ColumnState[]>(() => [
     {
       id: createColumnId(),
@@ -242,11 +255,11 @@ export default function CompareTab({ configState }: CompareTabProps) {
       });
 
       if (!res.ok) {
-        const text = await res.text().catch(() => "Unknown error");
+        const text = await res.text().catch(() => t("unknownError"));
         throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
 
-      if (!res.body) throw new Error("No response body");
+      if (!res.body) throw new Error(t("noResponseBody"));
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -290,8 +303,7 @@ export default function CompareTab({ configState }: CompareTabProps) {
           }
 
           const usage = parsed["usage"] as
-            | { prompt_tokens?: number; completion_tokens?: number }
-            | undefined;
+            { prompt_tokens?: number; completion_tokens?: number } | undefined;
           if (usage != null) {
             tracker.finish(usage);
           }
@@ -347,13 +359,13 @@ export default function CompareTab({ configState }: CompareTabProps) {
     <div className="flex flex-col h-full">
       {/* Prompt input area */}
       <div className="px-4 pt-3 pb-2 border-b border-border bg-bg-alt shrink-0">
-        <textarea
+        <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Enter your prompt here…"
+          placeholder={t("comparePromptPlaceholder")}
           rows={3}
-          className="w-full text-sm bg-surface border border-border rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary text-text-main resize-y"
-          aria-label="User prompt"
+          aria-label={t("userPrompt")}
+          className="text-sm resize-y w-full"
         />
       </div>
 
@@ -361,29 +373,31 @@ export default function CompareTab({ configState }: CompareTabProps) {
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-bg-alt shrink-0">
         {/* Run / Cancel all */}
         {isAnyStreaming ? (
-          <button
+          <Button
+            variant="outline"
+            size="sm"
+            icon="stop"
             onClick={cancelAll}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-destructive/10 text-destructive border border-destructive/30 hover:bg-destructive/20 transition-colors"
-            aria-label="Cancel all streams"
+            className="border-error/30 text-error hover:bg-error/10"
+            aria-label={t("cancelAllStreams")}
           >
-            <span className="material-symbols-outlined text-[14px]">stop</span>
-            Cancel all
-          </button>
+            {t("cancelAll")}
+          </Button>
         ) : (
-          <button
+          <Button
+            size="sm"
+            icon="play_arrow"
             onClick={() => void runAll()}
             disabled={columns.length === 0 || !prompt.trim()}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label="Run all columns"
+            aria-label={t("runAllColumns")}
           >
-            <span className="material-symbols-outlined text-[14px]">play_arrow</span>
-            Run all
-          </button>
+            {t("runAll")}
+          </Button>
         )}
 
         {/* Add column */}
         <div className="flex items-center gap-1.5 ml-2">
-          <input
+          <Input
             ref={addInputRef}
             type="text"
             value={newModel}
@@ -391,32 +405,35 @@ export default function CompareTab({ configState }: CompareTabProps) {
             onKeyDown={(e) => {
               if (e.key === "Enter") addColumn();
             }}
-            placeholder="Model (Cmd+K)…"
+            placeholder={t("modelPlaceholderCompare")}
             disabled={atColumnLimit}
-            className="text-xs bg-surface border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary text-text-main w-40 disabled:opacity-40"
-            aria-label="Model name for new column"
+            aria-label={t("newColumnModelName")}
+            inputClassName="text-xs"
+            className="w-40 min-w-0"
           />
-          <button
+          <Button
+            variant="outline"
+            size="sm"
+            icon="add"
             onClick={addColumn}
             disabled={atColumnLimit}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-border text-text-muted hover:text-text-main hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={atColumnLimit ? `Maximum ${MAX_COLUMNS} columns` : "Add column"}
-            aria-label="Add model column"
+            className="text-text-muted"
+            title={atColumnLimit ? t("maxColumnsReached", { max: MAX_COLUMNS }) : t("addColumn")}
+            aria-label={t("addModelColumn")}
           >
-            <span className="material-symbols-outlined text-[14px]">add</span>
-            Add model
-          </button>
+            {t("addModel")}
+          </Button>
         </div>
 
         {/* Column count indicator */}
         <span className="ml-auto text-[11px] text-text-muted">
-          {columns.length}/{MAX_COLUMNS} columns
+          {t("columnCount", { count: columns.length, max: MAX_COLUMNS })}
         </span>
       </div>
 
       {/* Columns area */}
       <div
-        className="flex-1 grid overflow-hidden"
+        className="flex-1 grid overflow-x-hidden min-h-0"
         style={{
           gridTemplateColumns: `repeat(${Math.max(columns.length, 1)}, minmax(0, 1fr))`,
         }}
@@ -433,12 +450,10 @@ export default function CompareTab({ configState }: CompareTabProps) {
         {columns.length === 0 && (
           <div className="flex items-center justify-center h-full text-text-muted col-span-4">
             <div className="text-center space-y-2">
-              <span className="material-symbols-outlined text-[48px] text-text-muted/30">
-                compare
-              </span>
-              <p className="text-sm">Add a model column to compare</p>
+              <Icon name="compare" size={48} className="text-text-muted/30" />
+              <p className="text-sm">{t("addModelToCompare")}</p>
               <p className="text-xs text-text-muted/60">
-                Up to {MAX_COLUMNS} models simultaneously
+                {t("modelsSimultaneously", { max: MAX_COLUMNS })}
               </p>
             </div>
           </div>

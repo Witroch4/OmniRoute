@@ -7,6 +7,7 @@ export const COPILOT_REASONING_SUMMARY_MARKER = "_omnirouteCopilotReasoningSumma
 
 // Forward-compatible regex: matches web_search, web_search_20250305, and future versioned names.
 export const WEB_SEARCH_TOOL_TYPES = /^web_search/;
+export const X_SEARCH_TOOL_TYPES = /^x_search/;
 // tool_search is a Responses API built-in sent by newer Codex clients; it has no Chat Completions
 // equivalent and must be silently dropped (not rejected with 400).
 export const TOOL_SEARCH_TOOL_TYPES = /^tool_search/;
@@ -49,9 +50,37 @@ export function imageUrlToText(value: unknown): string {
   return toString(record.url);
 }
 
-export function normalizeResponsesReasoningEffort(value: unknown): string {
+const CODEX_MAX_EFFORT_MODEL_PATTERN =
+  /^(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6(?:\.1)?-(?:astra|sol|luna))(?:-(?:none|low|medium|high|xhigh|max|ultra))?$/;
+const KIRO_GPT_5_6_MODEL_PATTERN =
+  /^(?:kiro|kr)\/gpt-5\.6-(?:sol|terra|luna)(?:-(?:none|low|medium|high|xhigh|max))?$/;
+const KIRO_OPUS_5_5_MODEL_PATTERN = /^(?:kiro|kr)\/claude-opus-5(?:\.|-)5(?:-thinking)?$/;
+
+function supportsNativeMaxReasoningEffort(model: unknown, targetFormat?: unknown): boolean {
+  const originalModel = toString(model).trim().toLowerCase();
+  const kiroModel =
+    targetFormat === "kiro" && !originalModel.includes("/")
+      ? `kiro/${originalModel}`
+      : originalModel;
+  const normalizedModel = toString(model)
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:codex|cx)\//, "");
+  return (
+    CODEX_MAX_EFFORT_MODEL_PATTERN.test(normalizedModel) ||
+    KIRO_GPT_5_6_MODEL_PATTERN.test(kiroModel) ||
+    KIRO_OPUS_5_5_MODEL_PATTERN.test(kiroModel)
+  );
+}
+
+export function normalizeResponsesReasoningEffort(
+  value: unknown,
+  model?: unknown,
+  targetFormat?: unknown
+): string {
   const effort = toString(value).toLowerCase();
-  return effort === "max" ? "xhigh" : effort;
+  if (effort !== "max") return effort;
+  return supportsNativeMaxReasoningEffort(model, targetFormat) ? "max" : "xhigh";
 }
 
 export function shouldRequestClaudeSummarizedThinking(value: unknown): boolean {

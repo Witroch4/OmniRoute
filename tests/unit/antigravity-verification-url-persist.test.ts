@@ -14,6 +14,8 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const { recordAntigravityVerificationUrl, clearAntigravityVerificationUrl } =
   await import("../../open-sse/handlers/chatCore/antigravityVerificationState.ts");
+const { handleProjectRouteFailure } =
+  await import("../../open-sse/handlers/chatCore/projectRouteFailure.ts");
 
 const URL_A = "https://accounts.google.com/signin/continue?sarp=1&id=ag-1";
 const VALIDATION_BODY = {
@@ -153,18 +155,45 @@ test("agy (same Antigravity executor in this fork) records and clears the link t
   assert.equal((await readPsd(id)).providerSpecificData?.verificationUrl, undefined);
 });
 
+test("PROJECT_ROUTE_ERROR leaf records the link and the error, never bans", async () => {
+  const id = await makeConn();
+  await handleProjectRouteFailure({
+    provider: "antigravity",
+    connectionId: id,
+    statusCode: 403,
+    persistentMessage: "Verify your account to continue.",
+    message: "Verify your account to continue.",
+    upstreamErrorBody: VALIDATION_BODY,
+    targetModel: "gemini-3-pro",
+  });
+
+  const row = (await readPsd(id)) as Awaited<ReturnType<typeof readPsd>> & {
+    lastErrorType?: string;
+    errorCode?: number | string;
+  };
+  assert.equal(row.providerSpecificData?.verificationUrl, URL_A);
+  assert.equal(row.lastErrorType, "project_route_error");
+  assert.equal(Number(row.errorCode), 403);
+  assert.notEqual(row.testStatus, "banned");
+  assert.notEqual(row.isActive, false);
+});
+
 test("wiring: chatCore records on PROJECT_ROUTE_ERROR, chat success path clears", () => {
   const root = path.resolve(import.meta.dirname, "../..");
   const chatCore = fs.readFileSync(path.join(root, "open-sse/handlers/chatCore.ts"), "utf8");
   const branchStart = chatCore.indexOf("errorType === PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR");
   assert.ok(branchStart > 0, "PROJECT_ROUTE_ERROR branch not found in chatCore.ts");
   const branchEnd = chatCore.indexOf("} else if (", branchStart);
-  // Fork: chatCore keeps the branch inline (upstream moved it to a
-  // projectRouteFailure.ts leaf) and must hand the recorder the upstream body.
+  // chatCore delegates the branch to the leaf and must hand it the upstream body.
   assert.match(
     chatCore.slice(branchStart, branchEnd),
-    /recordAntigravityVerificationUrl\(\{[\s\S]*upstreamErrorBody/
+    /handleProjectRouteFailure\(\{[\s\S]*upstreamErrorBody/
   );
+  const leaf = fs.readFileSync(
+    path.join(root, "open-sse/handlers/chatCore/projectRouteFailure.ts"),
+    "utf8"
+  );
+  assert.match(leaf, /recordAntigravityVerificationUrl\(\{[\s\S]*upstreamErrorBody/);
 
   const helpers = fs.readFileSync(path.join(root, "src/sse/handlers/chatHelpers.ts"), "utf8");
   const successStart = helpers.indexOf("onRequestSuccess: async () => {");

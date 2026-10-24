@@ -1,8 +1,23 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useTranslations } from "next-intl";
-import { Card } from "@/shared/components";
+import { useLocale, useTranslations } from "next-intl";
+import { Alert } from "@omniroute/ui-kit/alert";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@omniroute/ui-kit/table";
+import { DataTableShell } from "@omniroute/ui-kit/data-table-shell";
+import { PageHeader } from "@omniroute/ui-kit/page-header";
+import Badge from "@/shared/components/Badge";
+import Button from "@/shared/components/Button";
+import Card from "@/shared/components/Card";
+import EmptyState from "@/shared/components/EmptyState";
+import Input from "@/shared/components/Input";
 
 interface TokenLedgerEntry {
   id: number;
@@ -36,6 +51,7 @@ interface ServerConnection {
 
 export default function TokensPage() {
   const t = useTranslations("common");
+  const locale = useLocale();
   // Balance & History
   const [balance, setBalance] = useState(0);
   const [history, setHistory] = useState<TokenLedgerEntry[]>([]);
@@ -56,6 +72,7 @@ export default function TokensPage() {
   const [inviteMaxUses, setInviteMaxUses] = useState("1");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [newInviteCode, setNewInviteCode] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState("");
 
   // Redeem
   const [redeemCode, setRedeemCode] = useState("");
@@ -70,9 +87,9 @@ export default function TokensPage() {
   const [serverUrl, setServerUrl] = useState("");
   const [serverApiKey, setServerApiKey] = useState("");
   const [serverLoading, setServerLoading] = useState(false);
+  const [serverError, setServerError] = useState("");
 
   const fetchData = useCallback(async () => {
-    setHistoryLoading(true);
     try {
       const [transferRes, inviteRes, serverRes] = await Promise.all([
         fetch("/api/gamification/transfer"),
@@ -101,7 +118,11 @@ export default function TokensPage() {
   }, []);
 
   useEffect(() => {
-    fetchData();
+    const loadTimer = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
+
+    return () => window.clearTimeout(loadTimer);
   }, [fetchData]);
 
   const handleTransfer = async (e: React.FormEvent) => {
@@ -122,18 +143,21 @@ export default function TokensPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setTransferMsg({ type: "success", text: `Transfer successful (${data.idempotencyKey})` });
+        setTransferMsg({
+          type: "success",
+          text: t("tokensTransferSuccess", { idempotencyKey: data.idempotencyKey }),
+        });
         setToApiKeyId("");
         setAmount("");
         setReason("");
         await fetchData();
       } else {
-        setTransferMsg({ type: "error", text: data.error || "Transfer failed" });
+        setTransferMsg({ type: "error", text: data.error || t("tokensTransferFailed") });
       }
     } catch (err) {
       setTransferMsg({
         type: "error",
-        text: err instanceof Error ? err.message : "Transfer failed",
+        text: err instanceof Error ? err.message : t("tokensTransferFailed"),
       });
     } finally {
       setTransferLoading(false);
@@ -143,6 +167,7 @@ export default function TokensPage() {
   const handleCreateInvite = async () => {
     setInviteLoading(true);
     setNewInviteCode(null);
+    setInviteError("");
 
     try {
       const res = await fetch("/api/gamification/invite", {
@@ -157,20 +182,26 @@ export default function TokensPage() {
       if (res.ok) {
         setNewInviteCode(data.code);
         await fetchData();
+      } else {
+        setInviteError(data.error || t("tokensCreateInviteFailed"));
       }
-    } catch {
-      // silent fail
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : t("tokensCreateInviteFailed"));
     } finally {
       setInviteLoading(false);
     }
   };
 
   const handleRevokeInvite = async (inviteId: string) => {
+    setInviteError("");
     try {
-      await fetch(`/api/gamification/invite?id=${inviteId}`, { method: "DELETE" });
+      const response = await fetch(`/api/gamification/invite?id=${inviteId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(t("tokensRevokeInviteFailed"));
       await fetchData();
-    } catch {
-      // silent fail
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : t("tokensRevokeInviteFailed"));
     }
   };
 
@@ -189,15 +220,20 @@ export default function TokensPage() {
       if (res.ok) {
         setRedeemMsg({
           type: "success",
-          text: `Redeemed! Server: ${data.serverUrl || "connected"}`,
+          text: t("tokensRedeemSuccess", {
+            server: data.serverUrl || t("connected"),
+          }),
         });
         setRedeemCode("");
         await fetchData();
       } else {
-        setRedeemMsg({ type: "error", text: data.error || "Redeem failed" });
+        setRedeemMsg({ type: "error", text: data.error || t("tokensRedeemFailed") });
       }
     } catch (err) {
-      setRedeemMsg({ type: "error", text: err instanceof Error ? err.message : "Redeem failed" });
+      setRedeemMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : t("tokensRedeemFailed"),
+      });
     } finally {
       setRedeemLoading(false);
     }
@@ -206,6 +242,7 @@ export default function TokensPage() {
   const handleConnectServer = async (e: React.FormEvent) => {
     e.preventDefault();
     setServerLoading(true);
+    setServerError("");
 
     try {
       const res = await fetch("/api/gamification/servers", {
@@ -218,222 +255,214 @@ export default function TokensPage() {
         setServerUrl("");
         setServerApiKey("");
         await fetchData();
+      } else {
+        const data = await res.json().catch(() => null);
+        setServerError(data?.error || t("tokensConnectServerFailed"));
       }
-    } catch {
-      // silent fail
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : t("tokensConnectServerFailed"));
     } finally {
       setServerLoading(false);
     }
   };
 
   const handleDisconnectServer = async (serverId: string) => {
+    setServerError("");
     try {
-      await fetch(`/api/gamification/servers?id=${serverId}`, { method: "DELETE" });
+      const response = await fetch(`/api/gamification/servers?id=${serverId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(t("tokensDisconnectServerFailed"));
       await fetchData();
-    } catch {
-      // silent fail
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : t("tokensDisconnectServerFailed"));
     }
   };
 
+  const statusMessage = (
+    message: { type: "success" | "error"; text: string } | null,
+    onDismiss: () => void
+  ) =>
+    message ? (
+      <Alert
+        variant={message.type === "success" ? "success" : "critical"}
+        dismissLabel={t("close")}
+        onDismiss={onDismiss}
+      >
+        {message.text}
+      </Alert>
+    ) : null;
+
+  const errorMessage = (text: string, onDismiss: () => void) =>
+    text ? (
+      <Alert variant="critical" dismissLabel={t("close")} onDismiss={onDismiss}>
+        {text}
+      </Alert>
+    ) : null;
+
   return (
     <div className="flex flex-col gap-6">
+      <PageHeader compact title={t("tokensPageTitle")} description={t("tokensPageDescription")} />
+
       {/* Balance */}
       <Card>
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-text-muted">{t("tokensTokenBalance")}</p>
-            <p className="text-4xl font-bold mt-1">{balance.toLocaleString()}</p>
+            <p className="text-4xl font-bold mt-1">{balance.toLocaleString(locale)}</p>
           </div>
-          <div className="text-6xl opacity-20">🪙</div>
+          <div className="text-6xl opacity-20" aria-hidden="true">
+            🪙
+          </div>
         </div>
       </Card>
 
       {/* Transfer Form */}
       <Card title={t("tokensSendTokens")} icon="send">
         <form onSubmit={handleTransfer} className="grid gap-4">
-          <div>
-            <label className="block text-sm text-text-muted mb-1">
-              {t("tokensRecipientApiKeyId")}
-            </label>
-            <input
-              type="text"
-              value={toApiKeyId}
-              onChange={(e) => setToApiKeyId(e.target.value)}
-              placeholder={t("tokensRecipientApiKeyIdPlaceholder")}
+          <Input
+            label={t("tokensRecipientApiKeyId")}
+            type="text"
+            value={toApiKeyId}
+            onChange={(e) => setToApiKeyId(e.target.value)}
+            placeholder={t("tokensRecipientApiKeyIdPlaceholder")}
+            required
+          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input
+              label={t("tokensAmount")}
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0"
+              min="1"
               required
-              className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
+            />
+            <Input
+              label={t("tokensReasonOptional")}
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={t("tokensReasonPlaceholder")}
             />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm text-text-muted mb-1">Amount</label>
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0"
-                min="1"
-                required
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-text-muted mb-1">
-                {t("tokensReasonOptional")}
-              </label>
-              <input
-                type="text"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder={t("tokensReasonPlaceholder")}
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
-              />
-            </div>
-          </div>
-          {transferMsg && (
-            <div
-              className={`p-3 rounded-lg text-sm ${
-                transferMsg.type === "success"
-                  ? "bg-emerald-500/10 text-emerald-400"
-                  : "bg-red-500/10 text-red-400"
-              }`}
-            >
-              {transferMsg.text}
-            </div>
-          )}
-          <button
+          {statusMessage(transferMsg, () => setTransferMsg(null))}
+          <Button
             type="submit"
+            variant="primary"
             disabled={transferLoading || !toApiKeyId || !amount}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors justify-self-start"
+            className="justify-self-start"
           >
-            {transferLoading ? "Sending..." : "Send Tokens"}
-          </button>
+            {transferLoading ? t("tokensSending") : t("tokensSendTokens")}
+          </Button>
         </form>
       </Card>
 
       {/* Transaction History */}
       <Card title={t("tokensTransactionHistory")} icon="history">
-        {historyLoading ? (
-          <div className="text-center py-8 text-text-muted">Loading...</div>
-        ) : history.length === 0 ? (
-          <div className="text-center py-8 text-text-muted">{t("tokensNoTransactionsYet")}</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="text-left text-sm text-text-muted border-b border-border">
-                  <th className="pb-3 font-medium">Type</th>
-                  <th className="pb-3 font-medium">From</th>
-                  <th className="pb-3 font-medium">To</th>
-                  <th className="pb-3 font-medium text-right">Amount</th>
-                  <th className="pb-3 font-medium">Reason</th>
-                  <th className="pb-3 font-medium text-right">Date</th>
-                </tr>
-              </thead>
-              <tbody>
+        {/* Kit DataTableShell owns the loading overlay; no filters/pagination on this ledger. */}
+        <DataTableShell loading={historyLoading} loadingLabel={t("loading")}>
+          {!historyLoading && history.length === 0 ? (
+            <EmptyState icon="history" title={t("tokensNoTransactionsYet")} />
+          ) : (
+            <Table scrollbarLabel={t("tokensTransactionHistory")}>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("type")}</TableHead>
+                  <TableHead>{t("tokensFrom")}</TableHead>
+                  <TableHead>{t("tokensTo")}</TableHead>
+                  <TableHead className="text-right">{t("tokensAmount")}</TableHead>
+                  <TableHead>{t("tokensReason")}</TableHead>
+                  <TableHead className="text-right">{t("tokensDate")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {history.map((entry) => {
                   const isSent = entry.fromApiKeyId !== "current";
                   return (
-                    <tr key={entry.id} className="border-b border-border/50 last:border-b-0">
-                      <td className="py-3">
-                        <span
-                          className={`text-xs px-2 py-1 rounded ${
-                            isSent
-                              ? "bg-red-500/10 text-red-400"
-                              : "bg-emerald-500/10 text-emerald-400"
-                          }`}
-                        >
-                          {isSent ? "Sent" : "Received"}
-                        </span>
-                      </td>
-                      <td className="py-3 text-sm font-mono">
+                    <TableRow key={entry.id}>
+                      <TableCell>
+                        <Badge variant={isSent ? "error" : "success"} size="sm">
+                          {isSent ? t("tokensSent") : t("tokensReceived")}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm font-mono">
                         {entry.fromApiKeyId.slice(0, 8)}...
-                      </td>
-                      <td className="py-3 text-sm font-mono">{entry.toApiKeyId.slice(0, 8)}...</td>
-                      <td
-                        className={`py-3 text-right font-mono ${isSent ? "text-red-400" : "text-emerald-400"}`}
+                      </TableCell>
+                      <TableCell className="text-sm font-mono">
+                        {entry.toApiKeyId.slice(0, 8)}...
+                      </TableCell>
+                      <TableCell
+                        className={`text-right font-mono ${isSent ? "text-error" : "text-success"}`}
                       >
                         {isSent ? "-" : "+"}
-                        {entry.amount.toLocaleString()}
-                      </td>
-                      <td className="py-3 text-sm text-text-muted">{entry.reason || "-"}</td>
-                      <td className="py-3 text-right text-sm text-text-muted">
-                        {new Date(entry.createdAt).toLocaleDateString()}
-                      </td>
-                    </tr>
+                        {entry.amount.toLocaleString(locale)}
+                      </TableCell>
+                      <TableCell className="text-sm text-text-muted">
+                        {entry.reason || "-"}
+                      </TableCell>
+                      <TableCell className="text-right text-sm text-text-muted">
+                        {new Date(entry.createdAt).toLocaleDateString(locale)}
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </TableBody>
+            </Table>
+          )}
+        </DataTableShell>
       </Card>
 
       {/* Invite Panel */}
       <Card title={t("tokensInviteCodes")} icon="mail">
         <div className="flex flex-col gap-4">
           <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <label className="block text-sm text-text-muted mb-1">{t("tokensMaxUses")}</label>
-              <input
-                type="number"
-                value={inviteMaxUses}
-                onChange={(e) => setInviteMaxUses(e.target.value)}
-                min="1"
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
-              />
-            </div>
-            <button
-              onClick={handleCreateInvite}
-              disabled={inviteLoading}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors"
-            >
-              {inviteLoading ? "Creating..." : "Create Invite"}
-            </button>
+            <Input
+              label={t("tokensMaxUses")}
+              type="number"
+              value={inviteMaxUses}
+              onChange={(e) => setInviteMaxUses(e.target.value)}
+              min="1"
+              className="flex-1"
+            />
+            <Button variant="primary" onClick={handleCreateInvite} disabled={inviteLoading}>
+              {inviteLoading ? t("tokensCreatingInvite") : t("tokensCreateInvite")}
+            </Button>
           </div>
 
           {newInviteCode && (
-            <div className="p-3 rounded-lg bg-emerald-500/10 text-emerald-400 text-sm">
-              Invite code created: <span className="font-mono font-bold">{newInviteCode}</span>
-            </div>
+            <Alert
+              variant="success"
+              dismissLabel={t("close")}
+              onDismiss={() => setNewInviteCode(null)}
+            >
+              {t("tokensInviteCreated")}:{" "}
+              <span className="font-mono font-bold">{newInviteCode}</span>
+            </Alert>
           )}
+
+          {errorMessage(inviteError, () => setInviteError(""))}
 
           {/* Redeem */}
           <form
             onSubmit={handleRedeem}
             className="flex items-end gap-3 border-t border-border pt-4"
           >
-            <div className="flex-1">
-              <label className="block text-sm text-text-muted mb-1">{t("tokensRedeemCode")}</label>
-              <input
-                type="text"
-                value={redeemCode}
-                onChange={(e) => setRedeemCode(e.target.value)}
-                placeholder={t("tokensRedeemCodePlaceholder")}
-                required
-                className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={redeemLoading || !redeemCode}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors"
-            >
-              {redeemLoading ? "Redeeming..." : "Redeem"}
-            </button>
+            <Input
+              label={t("tokensRedeemCode")}
+              type="text"
+              value={redeemCode}
+              onChange={(e) => setRedeemCode(e.target.value)}
+              placeholder={t("tokensRedeemCodePlaceholder")}
+              required
+              className="flex-1"
+            />
+            <Button type="submit" variant="secondary" disabled={redeemLoading || !redeemCode}>
+              {redeemLoading ? t("tokensRedeeming") : t("tokensRedeem")}
+            </Button>
           </form>
 
-          {redeemMsg && (
-            <div
-              className={`p-3 rounded-lg text-sm ${
-                redeemMsg.type === "success"
-                  ? "bg-emerald-500/10 text-emerald-400"
-                  : "bg-red-500/10 text-red-400"
-              }`}
-            >
-              {redeemMsg.text}
-            </div>
-          )}
+          {statusMessage(redeemMsg, () => setRedeemMsg(null))}
 
           {/* Active Invites */}
           {invites.length > 0 && (
@@ -443,22 +472,28 @@ export default function TokensPage() {
                 {invites.map((inv) => (
                   <div
                     key={inv.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-surface/50 border border-border/50"
+                    className="flex items-center justify-between p-3 rounded-lg bg-surface-2 border border-border"
                   >
                     <div>
                       <span className="font-mono font-bold">{inv.code}</span>
                       <span className="text-xs text-text-muted ml-3">
-                        {inv.useCount}/{inv.maxUses} uses
+                        {t("tokensInviteUses", { used: inv.useCount, max: inv.maxUses })}
                       </span>
-                      {inv.revokedAt && <span className="text-xs text-red-400 ml-2">REVOKED</span>}
+                      {inv.revokedAt && (
+                        <Badge variant="error" size="sm" className="ml-2">
+                          {t("tokensRevoked")}
+                        </Badge>
+                      )}
                     </div>
                     {!inv.revokedAt && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-error"
                         onClick={() => handleRevokeInvite(inv.id)}
-                        className="text-xs px-2 py-1 rounded text-red-400 hover:bg-red-500/10 transition-colors"
                       >
-                        Revoke
-                      </button>
+                        {t("tokensRevoke")}
+                      </Button>
                     )}
                   </div>
                 ))}
@@ -473,82 +508,90 @@ export default function TokensPage() {
         <div className="flex flex-col gap-4">
           <form onSubmit={handleConnectServer} className="grid gap-3">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <input
+              <Input
                 type="text"
                 value={serverName}
                 onChange={(e) => setServerName(e.target.value)}
                 placeholder={t("tokensServerNamePlaceholder")}
+                aria-label={t("tokensServerNamePlaceholder")}
                 required
-                className="px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
               />
-              <input
+              <Input
                 type="url"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
                 placeholder="https://server.example.com"
+                aria-label={t("tokensServerUrlLabel")}
                 required
-                className="px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
               />
-              <input
+              <Input
                 type="password"
                 value={serverApiKey}
                 onChange={(e) => setServerApiKey(e.target.value)}
                 placeholder={t("tokensApiKeyPlaceholder")}
+                aria-label={t("tokensApiKeyPlaceholder")}
                 required
-                className="px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
               />
             </div>
-            <button
+            <Button
               type="submit"
+              variant="primary"
               disabled={serverLoading || !serverName || !serverUrl || !serverApiKey}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors justify-self-start"
+              className="justify-self-start"
             >
-              {serverLoading ? "Connecting..." : "Connect Server"}
-            </button>
+              {serverLoading ? t("tokensConnecting") : t("tokensConnectServer")}
+            </Button>
           </form>
 
+          {errorMessage(serverError, () => setServerError(""))}
+
           {servers.length === 0 ? (
-            <div className="text-center py-6 text-text-muted text-sm">
-              No servers connected. Connect to a community server to share leaderboards.
-            </div>
+            <EmptyState icon="dns" title={t("tokensNoServersConnected")} />
           ) : (
             <div className="space-y-2">
               {servers.map((server) => (
                 <div
                   key={server.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-surface/50 border border-border/50"
+                  className="flex items-center justify-between p-3 rounded-lg bg-surface-2 border border-border"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="font-semibold truncate">{server.name}</p>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded ${
+                      <Badge
+                        size="sm"
+                        variant={
                           server.status === "connected"
-                            ? "bg-emerald-500/10 text-emerald-400"
+                            ? "success"
                             : server.status === "error"
-                              ? "bg-red-500/10 text-red-400"
-                              : "bg-gray-500/10 text-gray-400"
-                        }`}
+                              ? "error"
+                              : "default"
+                        }
                       >
-                        {server.status}
-                      </span>
+                        {t.has(`tokensServerStatus.${server.status}`)
+                          ? t(`tokensServerStatus.${server.status}`)
+                          : server.status}
+                      </Badge>
                     </div>
                     <p className="text-xs text-text-muted mt-1 truncate">{server.url}</p>
                     {server.errorMessage && (
-                      <p className="text-xs text-red-400 mt-1">{server.errorMessage}</p>
+                      <p className="text-xs text-error mt-1">{server.errorMessage}</p>
                     )}
                     {server.lastSyncAt && (
                       <p className="text-xs text-text-muted mt-1">
-                        Last sync: {new Date(server.lastSyncAt).toLocaleString()}
+                        {t("tokensLastSync", {
+                          date: new Date(server.lastSyncAt).toLocaleString(locale),
+                        })}
                       </p>
                     )}
                   </div>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-error ml-4"
                     onClick={() => handleDisconnectServer(server.id)}
-                    className="text-xs px-3 py-1.5 rounded text-red-400 hover:bg-red-500/10 transition-colors ml-4"
                   >
-                    Disconnect
-                  </button>
+                    {t("tokensDisconnect")}
+                  </Button>
                 </div>
               ))}
             </div>

@@ -13,8 +13,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const BASE = process.env.OMNIROUTE_TEST_BASE || "http://localhost:20128/v1";
-const AUTH = process.env.OMNIROUTE_TEST_BEARER ? `Bearer ${process.env.OMNIROUTE_TEST_BEARER}` : "";
+const BASE =
+  process.env.OMNIROUTE_TEST_BASE || `${process.env.OMNIROUTE_URL || "http://localhost:20128"}/v1`;
+const TEST_BEARER = process.env.OMNIROUTE_TEST_BEARER || process.env.OMNIROUTE_API_KEY || "";
+const AUTH = TEST_BEARER ? `Bearer ${TEST_BEARER}` : "";
+const TEST_MODEL = process.env.OPENCLAW_TEST_MODEL || "cx/gpt-5.6-sol";
 
 // Cookie obtained via INITIAL_PASSWORD login
 const COOKIE = process.env.OMNIROUTE_TEST_COOKIE || "";
@@ -122,7 +125,7 @@ test(
   { skip },
   async () => {
     const body = {
-      model: "gemini/gemma-4-26b-a4b-it",
+      model: TEST_MODEL,
       input: [
         {
           role: "user",
@@ -146,11 +149,11 @@ test(
               content: { type: "string", description: "File content" },
             },
             required: ["path", "content"],
+            additionalProperties: false,
           },
           strict: true,
         },
       ],
-      temperature: 0.1,
       max_output_tokens: 4096,
     };
 
@@ -190,7 +193,7 @@ test(
   { skip },
   async () => {
     const body = {
-      model: "gemini/gemma-4-26b-a4b-it",
+      model: TEST_MODEL,
       input: [
         {
           role: "user",
@@ -214,11 +217,11 @@ test(
               content: { type: "string" },
             },
             required: ["path", "content"],
+            additionalProperties: false,
           },
           strict: true,
         },
       ],
-      temperature: 0.1,
       max_output_tokens: 4096,
       stream: true,
     };
@@ -257,7 +260,7 @@ test(
 
 test("OmniRoute boundary: exec tool call arguments survive Responses API", { skip }, async () => {
   const body = {
-    model: "gemini/gemma-4-26b-a4b-it",
+    model: TEST_MODEL,
     input: [
       {
         role: "user",
@@ -280,11 +283,11 @@ test("OmniRoute boundary: exec tool call arguments survive Responses API", { ski
             command: { type: "string", description: "The command to execute" },
           },
           required: ["command"],
+          additionalProperties: false,
         },
         strict: true,
       },
     ],
-    temperature: 0.1,
     max_output_tokens: 4096,
     stream: true,
   };
@@ -311,7 +314,7 @@ test("OmniRoute boundary: exec tool call arguments survive Responses API", { ski
 
 test("OmniRoute boundary: parallel tool calls survive Responses API", { skip }, async () => {
   const body = {
-    model: "gemini/gemma-4-26b-a4b-it",
+    model: TEST_MODEL,
     input: [
       {
         role: "user",
@@ -335,11 +338,11 @@ test("OmniRoute boundary: parallel tool calls survive Responses API", { skip }, 
             content: { type: "string" },
           },
           required: ["path", "content"],
+          additionalProperties: false,
         },
         strict: true,
       },
     ],
-    temperature: 0.1,
     max_output_tokens: 4096,
     stream: true,
   };
@@ -370,7 +373,7 @@ test("OmniRoute boundary: parallel tool calls survive Responses API", { skip }, 
 
 test("OmniRoute boundary: tool call through default combo (fill-first)", { skip }, async () => {
   const body = {
-    model: "default",
+    model: TEST_MODEL,
     input: [
       {
         role: "user",
@@ -393,11 +396,11 @@ test("OmniRoute boundary: tool call through default combo (fill-first)", { skip 
             command: { type: "string" },
           },
           required: ["command"],
+          additionalProperties: false,
         },
         strict: true,
       },
     ],
-    temperature: 0.1,
     max_output_tokens: 4096,
     stream: true,
   };
@@ -434,7 +437,7 @@ test(
     ].join("\n");
 
     const body = {
-      model: "gemini/gemma-4-26b-a4b-it",
+      model: TEST_MODEL,
       input: [
         {
           role: "user",
@@ -461,6 +464,7 @@ ${pythonCode}`,
               content: { type: "string" },
             },
             required: ["path", "content"],
+            additionalProperties: false,
           },
           strict: true,
         },
@@ -474,11 +478,11 @@ ${pythonCode}`,
               command: { type: "string" },
             },
             required: ["command"],
+            additionalProperties: false,
           },
           strict: true,
         },
       ],
-      temperature: 0.1,
       max_output_tokens: 4096,
       stream: true,
     };
@@ -533,7 +537,7 @@ test(
   async () => {
     // Test that the model can correctly produce tool calls with simple args
     const body = {
-      model: "gemini/gemma-4-26b-a4b-it",
+      model: TEST_MODEL,
       input: [
         {
           role: "user",
@@ -559,11 +563,11 @@ test(
               },
             },
             required: ["expression"],
+            additionalProperties: false,
           },
           strict: true,
         },
       ],
-      temperature: 0.1,
       max_output_tokens: 4096,
       stream: true,
     };

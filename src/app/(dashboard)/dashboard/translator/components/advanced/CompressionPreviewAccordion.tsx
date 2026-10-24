@@ -1,5 +1,9 @@
 "use client";
 
+// Header toggle imports the Button module directly so tests can keep stubbing the barrel.
+import HeaderButton from "@/shared/components/Button";
+import Icon from "@/shared/components/Icon";
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Button, Select } from "@/shared/components";
@@ -45,13 +49,15 @@ function sanitizeError(e: unknown): string {
 // Constants
 // ---------------------------------------------------------------------------
 
-const COMPRESSION_MODES = [
-  { value: "off", label: "Off" },
-  { value: "lite", label: "Lite" },
-  { value: "standard", label: "Standard" },
-  { value: "aggressive", label: "Aggressive" },
-  { value: "ultra", label: "Ultra" },
-] as const;
+const COMPRESSION_MODES = ["off", "lite", "standard", "aggressive", "ultra"] as const;
+
+const COMPRESSION_MODE_LABEL_KEYS = {
+  off: "compressionModeOff",
+  lite: "compressionModeLite",
+  standard: "compressionModeStandard",
+  aggressive: "compressionModeAggressive",
+  ultra: "compressionModeUltra",
+} as const;
 
 // ---------------------------------------------------------------------------
 // Inner content (always mounted when hasOpened is true)
@@ -59,6 +65,7 @@ const COMPRESSION_MODES = [
 
 function CompressionPreviewContent({ inputContent = "" }: { inputContent?: string }) {
   const t = useTranslations("translator");
+  const ts = useTranslations("settings");
 
   const [compressionMode, setCompressionMode] = useState<string>("standard");
   const [compressionResult, setCompressionResult] = useState<CompressionPreviewResult | null>(null);
@@ -90,27 +97,22 @@ function CompressionPreviewContent({ inputContent = "" }: { inputContent?: strin
         body: JSON.stringify({ messages, mode: compressionMode }),
       });
       const data: CompressionPreviewResult & { error?: string } = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Preview failed");
+      if (!res.ok) throw new Error(data.error ?? t("compressionPreviewFailed"));
       setCompressionResult(data);
     } catch (e: unknown) {
       setCompressionError(sanitizeError(e));
     } finally {
       setCompressionLoading(false);
     }
-  }, [hasInput, inputContent, compressionMode]);
+  }, [hasInput, inputContent, compressionMode, t]);
 
   return (
     <div className="space-y-4">
       {/* Empty state */}
       {!hasInput && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-black/5 dark:bg-white/5 text-sm text-text-muted">
-          <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-            info
-          </span>
-          <span>
-            {t("compressionEmptyHint") ||
-              "Fill in the input field on the Translate tab (Simple Controls or Raw JSON) to enable the preview."}
-          </span>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-bg-subtle text-sm text-text-muted">
+          <Icon name="info" size={16} />
+          <span>{t("compressionEmptyHint")}</span>
         </div>
       )}
 
@@ -119,9 +121,12 @@ function CompressionPreviewContent({ inputContent = "" }: { inputContent?: strin
         <Select
           value={compressionMode}
           onChange={(e) => setCompressionMode(e.target.value)}
-          options={COMPRESSION_MODES}
+          options={COMPRESSION_MODES.map((value) => ({
+            value,
+            label: ts(COMPRESSION_MODE_LABEL_KEYS[value]),
+          }))}
           className="text-sm"
-          aria-label={t("compressionModeLabel") || "Compression mode"}
+          aria-label={t("compressionModeLabel")}
         />
         <Button
           icon="play_arrow"
@@ -130,15 +135,13 @@ function CompressionPreviewContent({ inputContent = "" }: { inputContent?: strin
           disabled={compressionLoading || !hasInput}
           className="text-sm"
         >
-          {compressionLoading
-            ? t("compressionPreviewing") || "Previewing…"
-            : t("compressionPreviewButton") || "Preview Compression"}
+          {compressionLoading ? t("compressionPreviewing") : t("compressionPreviewButton")}
         </Button>
       </div>
 
       {/* Error */}
       {compressionError && (
-        <div className="text-sm text-red-500" role="alert">
+        <div className="text-sm text-error" role="alert">
           {compressionError}
         </div>
       )}
@@ -150,25 +153,23 @@ function CompressionPreviewContent({ inputContent = "" }: { inputContent?: strin
             className="grid grid-cols-2 md:grid-cols-4 gap-3"
             data-testid="compression-result-grid"
           >
-            <div className="card p-3 text-center bg-black/5 dark:bg-white/5 rounded-lg border border-border">
-              <div className="text-xs text-text-muted">Original</div>
+            <div className="card p-3 text-center bg-bg-subtle rounded-lg border border-border">
+              <div className="text-xs text-text-muted">{t("compressionOriginal")}</div>
               <div className="text-lg font-bold">{compressionResult.originalTokens}</div>
-              <div className="text-xs text-text-muted">tokens</div>
+              <div className="text-xs text-text-muted">{t("tokens")}</div>
             </div>
-            <div className="card p-3 text-center bg-black/5 dark:bg-white/5 rounded-lg border border-border">
-              <div className="text-xs text-text-muted">Compressed</div>
+            <div className="card p-3 text-center bg-bg-subtle rounded-lg border border-border">
+              <div className="text-xs text-text-muted">{t("compressionCompressed")}</div>
               <div className="text-lg font-bold">{compressionResult.compressedTokens}</div>
-              <div className="text-xs text-text-muted">tokens</div>
+              <div className="text-xs text-text-muted">{t("tokens")}</div>
             </div>
-            <div className="card p-3 text-center bg-black/5 dark:bg-white/5 rounded-lg border border-border">
-              <div className="text-xs text-text-muted">Saved</div>
-              <div className="text-lg font-bold text-green-500">
-                {compressionResult.tokensSaved}
-              </div>
+            <div className="card p-3 text-center bg-bg-subtle rounded-lg border border-border">
+              <div className="text-xs text-text-muted">{t("compressionSaved")}</div>
+              <div className="text-lg font-bold text-success">{compressionResult.tokensSaved}</div>
               <div className="text-xs text-text-muted">{compressionResult.savingsPct}%</div>
             </div>
-            <div className="card p-3 text-center bg-black/5 dark:bg-white/5 rounded-lg border border-border">
-              <div className="text-xs text-text-muted">Duration</div>
+            <div className="card p-3 text-center bg-bg-subtle rounded-lg border border-border">
+              <div className="text-xs text-text-muted">{t("compressionDuration")}</div>
               <div className="text-lg font-bold">{compressionResult.durationMs}</div>
               <div className="text-xs text-text-muted">ms</div>
             </div>
@@ -176,7 +177,7 @@ function CompressionPreviewContent({ inputContent = "" }: { inputContent?: strin
 
           {compressionResult.techniquesUsed.length > 0 && (
             <div className="text-xs text-text-muted">
-              <span className="font-semibold">{t("techniques") || "Techniques:"}</span>{" "}
+              <span className="font-semibold">{t("techniques")}</span>{" "}
               {compressionResult.techniquesUsed.join(", ")}
             </div>
           )}
@@ -223,12 +224,13 @@ export default function CompressionPreviewAccordion({
   useEffect(() => {
     const prev = prevForceOpen.current;
     prevForceOpen.current = Boolean(forceOpen);
-    if (!prev && forceOpen) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing deep-link prop into local state
+    if (prev || !forceOpen) return;
+    const openFromDeepLink = setTimeout(() => {
       setOpen(true);
       setHasOpened(true);
       onOpenChange?.(true);
-    }
+    }, 0);
+    return () => clearTimeout(openFromDeepLink);
   }, [forceOpen, onOpenChange]);
 
   const handleToggle = useCallback(() => {
@@ -240,47 +242,39 @@ export default function CompressionPreviewAccordion({
     onOpenChange?.(next);
   }, [open, hasOpened, onOpenChange]);
 
-  // i18n with inline EN fallbacks (D19 pattern).
-  const title = t("advancedCompressionTitle") || "Compression Preview";
-  const subtitle =
-    t("advancedCompressionSubtitle") || "Estime economia de tokens em diferentes modos.";
+  const title = t("advancedCompressionTitle");
+  const subtitle = t("advancedCompressionSubtitle");
 
   return (
     <div
-      className="rounded-lg border border-black/5 dark:border-white/5 bg-surface w-full"
+      className="rounded-lg border border-border bg-surface w-full"
       data-testid="compression-accordion"
     >
       {/* Header row — matches Collapsible visual style */}
       <div
         className={cn(
-          "flex items-center gap-3 p-4 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors",
-          open && "border-b border-black/5 dark:border-white/5"
+          "flex items-center gap-3 p-4 transition-colors hover:bg-bg-subtle",
+          open && "border-b border-border"
         )}
       >
-        <button
-          type="button"
+        <HeaderButton
+          variant="ghost"
           onClick={handleToggle}
           aria-expanded={open}
           aria-controls="compression-preview-content"
-          className="flex items-center gap-3 flex-1 min-w-0 text-left -m-1 p-1 rounded"
+          className="-m-1 h-auto min-w-0 flex-1 justify-start gap-3 p-1 text-left"
         >
-          <span
-            className="material-symbols-outlined text-text-muted text-[20px] shrink-0"
-            aria-hidden="true"
-          >
-            {open ? "expand_more" : "chevron_right"}
-          </span>
-          <span
-            className="material-symbols-outlined text-text-muted text-[18px] shrink-0"
-            aria-hidden="true"
-          >
-            compress
-          </span>
+          <Icon
+            name={open ? "expand_more" : "chevron_right"}
+            size={20}
+            className="text-text-muted"
+          />
+          <Icon name="compress" size={18} className="text-text-muted" />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium text-text-main truncate">{title}</div>
             <div className="text-xs text-text-muted truncate">{subtitle}</div>
           </div>
-        </button>
+        </HeaderButton>
       </div>
 
       {/* Content — D7 lazy-render */}

@@ -57,7 +57,8 @@ export function matchesFamilyGlobAgainstFullId(modelId: string, glob: string): b
  * a snapshot is the same model as its undated alias, not a newer one.
  */
 function modelVersion(modelId: string): number[] {
-  return (modelId.match(/\d+/g) ?? []).filter((run) => run.length < 6).map(Number);
+  const runs: string[] = modelId.match(/\d+/g) ?? [];
+  return runs.filter((run) => run.length < 6).map(Number);
 }
 
 /** Positive when `a` is a newer version than `b`; missing components read as 0. */

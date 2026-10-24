@@ -13,12 +13,12 @@ const { getComboBuilderOptions } = await import("../../src/lib/combos/builderOpt
 
 test.after(() => {
   core.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("#6975 embeddings-only custom model must appear in the combo builder output", async () => {
   await modelsDb.addCustomModel(
-    "opencode",
+    "uncloseai",
     "zzz-embed-6975",
     "Embed Model 6975",
     "manual",
@@ -32,7 +32,7 @@ test("#6975 embeddings-only custom model must appear in the combo builder output
 
 test("#6975 rerank-only custom model must appear in the combo builder output", async () => {
   await modelsDb.addCustomModel(
-    "opencode",
+    "uncloseai",
     "zzz-rerank-6975",
     "Rerank Model 6975",
     "manual",

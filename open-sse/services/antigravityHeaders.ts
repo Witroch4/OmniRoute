@@ -4,9 +4,11 @@ import {
   resolveAntigravityVersion,
 } from "./antigravityVersion.ts";
 import {
+  ANTIGRAVITY_CLI_OAUTH_USER_AGENT,
   getAntigravityCliCloudCodeHeaders,
   getAntigravityCliLoadCodeAssistMetadata,
 } from "../config/antigravityCliClient.ts";
+import type { AntigravityClientProfile } from "@/shared/constants/antigravityClientProfile";
 
 /**
  * Antigravity header utilities.
@@ -94,6 +96,31 @@ export function getAntigravityHeaders(
 ): Record<string, string> {
   void profile;
   return getAntigravityCliCloudCodeHeaders(accessToken);
+}
+
+/**
+ * Headers for a Cloud Code call made on behalf of a connection with a known client profile
+ * (upstream API name). `cli` — the default — is the official CLI replica and nothing else
+ * (antigravityCliClient.ts). `ide` is the legacy opt-in profile; its full content-request
+ * identity is applied by `applyAntigravityClientProfileHeaders`.
+ */
+export function getAntigravityContentHeaders(
+  profile: AntigravityClientProfile,
+  accessToken?: string | null
+): Record<string, string> {
+  if (profile !== "ide") return getAntigravityCliCloudCodeHeaders(accessToken);
+  return withOptionalBearerAuth(
+    {
+      "Content-Type": "application/json",
+      "User-Agent": antigravityUserAgent(),
+    },
+    accessToken
+  );
+}
+
+/** User-Agent for the Google OAuth token/userinfo calls of a profile (upstream API name). */
+export function getAntigravityOAuthUserAgent(profile: AntigravityClientProfile): string {
+  return profile === "ide" ? antigravityNativeOAuthUserAgent() : ANTIGRAVITY_CLI_OAUTH_USER_AGENT;
 }
 
 /** X-Goog-Api-Client used by Antigravity's credit probe path. */

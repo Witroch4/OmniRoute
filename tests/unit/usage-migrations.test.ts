@@ -18,6 +18,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 delete process.env.NEXT_PHASE;
 
 const migrations = await import("../../src/lib/usage/migrations.ts");
+const { getCallLogsDir } = await import("../../src/lib/usage/callLogArtifacts.ts");
 const { getDbInstance } = await import("../../src/lib/db/core.ts");
 
 const LEGACY_DATA_DIR = path.join(TEST_HOME_DIR, ".omniroute");
@@ -38,13 +39,14 @@ function writeJson(filePath, value) {
 
 function removePath(targetPath) {
   if (!targetPath) return;
-  fs.rmSync(targetPath, { recursive: true, force: true });
+  fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 function resetDbTables() {
   const db = getDbInstance();
   db.prepare("DELETE FROM usage_history").run();
   db.prepare("DELETE FROM call_logs").run();
+  db.prepare("DELETE FROM provider_connections").run();
 }
 
 function readJson(filePath) {
@@ -66,7 +68,7 @@ test.beforeEach(() => {
   removePath(`${CALL_LOGS_JSON_FILE}.migrated`);
   removePath(CURRENT_REQUEST_LOGS_DIR);
   removePath(CURRENT_REQUEST_SUMMARY_FILE);
-  removePath(migrations.CALL_LOGS_DIR);
+  removePath(getCallLogsDir());
   removePath(migrations.LOG_ARCHIVES_DIR);
   resetDbTables();
 });
@@ -139,7 +141,22 @@ test("migrateLegacyUsageFiles copies legacy JSON files once and does not overwri
   assert.deepEqual(readJson(CALL_LOGS_JSON_FILE), { logs: [{ id: "current-call" }] });
 });
 
-test("migrateUsageJsonToSqlite migrates usage history aliases and TTFT fallbacks", () => {
+test("migrateUsageJsonToSqlite migrates usage history aliases, TTFT, and account snapshots", () => {
+  const db = getDbInstance();
+  db.prepare(
+    `INSERT INTO provider_connections
+      (id, provider, auth_type, email, provider_specific_data, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    "conn-openai",
+    "openai",
+    "oauth",
+    "member@example.com",
+    JSON.stringify({ username: "member" }),
+    "2026-01-01T00:00:00.000Z",
+    "2026-01-01T00:00:00.000Z"
+  );
+
   writeJson(USAGE_JSON_FILE, {
     history: [
       {
@@ -182,13 +199,13 @@ test("migrateUsageJsonToSqlite migrates usage history aliases and TTFT fallbacks
 
   assert.equal(fs.existsSync(`${USAGE_JSON_FILE}.migrated`), true);
 
-  const db = getDbInstance();
   const rows = db
     .prepare(
       `
-        SELECT provider, model, connection_id, api_key_id, api_key_name,
-               tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation,
-               tokens_reasoning, status, success, latency_ms, ttft_ms, error_code
+        SELECT provider, model, connection_id, account_key, account_label,
+               account_label_priority, api_key_id, api_key_name, tokens_input, tokens_output,
+               tokens_cache_read, tokens_cache_creation, tokens_reasoning, status, success,
+               latency_ms, ttft_ms, error_code
         FROM usage_history
         ORDER BY timestamp ASC
       `
@@ -201,6 +218,9 @@ test("migrateUsageJsonToSqlite migrates usage history aliases and TTFT fallbacks
       provider: "openai",
       model: "gpt-4o-mini",
       connection_id: "conn-openai",
+      account_key: '["oauth","openai","email","member@example.com","username","member"]',
+      account_label: "member@example.com",
+      account_label_priority: 3,
       api_key_id: "key-1",
       api_key_name: "Primary Key",
       tokens_input: 11,
@@ -218,6 +238,9 @@ test("migrateUsageJsonToSqlite migrates usage history aliases and TTFT fallbacks
       provider: "gemini",
       model: "gemini-2.5-flash",
       connection_id: null,
+      account_key: '["connection","gemini","unknown"]',
+      account_label: "unknown",
+      account_label_priority: 0,
       api_key_id: null,
       api_key_name: null,
       tokens_input: 9,

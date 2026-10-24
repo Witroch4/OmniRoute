@@ -3,8 +3,8 @@ import crypto from "crypto";
 /**
  * Generate PKCE code verifier (43-128 characters)
  */
-export function generateCodeVerifier() {
-  return crypto.randomBytes(32).toString("base64url");
+export function generateCodeVerifier(bytes = 32) {
+  return crypto.randomBytes(bytes).toString("base64url");
 }
 
 /**
@@ -13,6 +13,13 @@ export function generateCodeVerifier() {
 export function generateCodeChallenge(verifier) {
   return crypto.createHash("sha256").update(verifier).digest("base64url");
 }
+
+/**
+ * Challenge method published on the wire with the code challenge (RFC 7636 section 4.2):
+ * "S" plus the digest size in bits of the hash `generateCodeChallenge` applies to the verifier.
+ */
+export const PKCE_CHALLENGE_METHOD =
+  "S" + String(crypto.createHash("sha256").update("").digest().length * 8);
 
 /**
  * Generate random state for CSRF protection
@@ -24,8 +31,8 @@ export function generateState() {
 /**
  * Generate complete PKCE pair
  */
-export function generatePKCE() {
-  const codeVerifier = generateCodeVerifier();
+export function generatePKCE(verifierBytes = 32) {
+  const codeVerifier = generateCodeVerifier(verifierBytes);
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = generateState();
 

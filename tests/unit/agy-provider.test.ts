@@ -11,6 +11,7 @@ import {
 import { supportsTokenRefresh, REFRESH_LEAD_MS } from "../../open-sse/services/tokenRefresh.ts";
 import {
   AGY_PUBLIC_MODELS,
+  isDiscoverableAgyModelId,
   isUserCallableAgyModelId,
   getClientVisibleAgyModelName,
 } from "../../open-sse/config/agyModels.ts";
@@ -46,7 +47,7 @@ test("agy reuses the identical antigravity Google OAuth credentials (no new embe
   assert.equal(OAUTH_PROVIDER_IDS.AGY, "agy");
 });
 
-test("agy ships its own catalog including the Claude models antigravity omits", () => {
+test("agy ships its own live callable model catalog", () => {
   const ids = REGISTRY.agy.models.map((m) => m.id);
   // 2026-10-10: Claude moved 4.6 -> 5.5 (three effort tiers per family) on this backend.
   for (const family of ["opus", "sonnet"]) {
@@ -87,6 +88,10 @@ test("agy ships its own catalog including the Claude models antigravity omits", 
   ]) {
     assert.ok(!ids.includes(retiredId), `${retiredId} is retired and must not be advertised`);
   }
+  // The static catalog carries no Argon (live discovery may still publish it) and no
+  // `-tiered` alias ids.
+  assert.ok(!ids.some((id) => id.includes("argon")), "static catalog must not carry Argon");
+  assert.ok(!ids.some((id) => id.endsWith("-tiered")), "tiers are real ids, never -tiered");
   // Tab-completion models are not chat-callable and must be excluded.
   assert.ok(!ids.includes("tab_flash_lite_preview"));
   assert.ok(!ids.includes("tab_jump_flash_lite_preview"));
@@ -105,6 +110,37 @@ test("agy model helpers resolve catalog ids and display names", () => {
   assert.equal(getClientVisibleAgyModelName("claude-sonnet-5-5-low"), "Claude Sonnet 5.5 (Low)");
   assert.equal(getClientVisibleAgyModelName("gemini-3.8-flash-high"), "Gemini 3.8 Flash (High)");
   assert.equal(getClientVisibleAgyModelName("unknown-model", "Fallback"), "Fallback");
+});
+
+test("agy live discovery accepts new chat models while excluding tab-completion models", () => {
+  assert.equal(isDiscoverableAgyModelId("gemini-new-live-tier"), true);
+  assert.equal(isDiscoverableAgyModelId("gemini-3.6-flash-high"), false);
+  assert.equal(isDiscoverableAgyModelId("gemini-3-flash-agent"), false);
+  // Fork: Gemini 2.5 is still published on agy, so upstream's retired-list entry for it must
+  // not hide it from live discovery.
+  assert.equal(isDiscoverableAgyModelId("gemini-2.5-flash"), true);
+  assert.equal(isDiscoverableAgyModelId("gemini-3.7-flash-high"), false);
+  assert.equal(isDiscoverableAgyModelId("gemini-pro-agent"), false);
+  assert.equal(isDiscoverableAgyModelId("tab_flash_lite_preview"), false);
+  assert.equal(isDiscoverableAgyModelId("tab_jump_flash_lite_preview"), false);
+  assert.equal(isDiscoverableAgyModelId("gemini_weekly"), false);
+  assert.equal(isDiscoverableAgyModelId("claude_gpt_weekly"), false);
+  assert.equal(isDiscoverableAgyModelId(""), false);
+});
+
+const quotaNormalize = await import("../../src/lib/usage/providerLimits/quotaNormalize.ts");
+
+test("test 9: agy live catalog is authoritative; quota keys use discoverable denylist", () => {
+  assert.equal(REGISTRY.agy.liveCatalogAuthoritative, true);
+  assert.equal(REGISTRY.antigravity.liveCatalogAuthoritative, true);
+  const { isUsageQuotaKeyAllowed } = quotaNormalize;
+  assert.equal(isDiscoverableAgyModelId("gemini-new-live-tier"), true);
+  assert.equal(isUsageQuotaKeyAllowed("agy", "gemini-new-live-tier"), true);
+  assert.equal(isUserCallableAgyModelId("gemini-new-live-tier"), false);
+  assert.equal(isUsageQuotaKeyAllowed("agy", "tab_flash_lite_preview"), false);
+  assert.equal(isUsageQuotaKeyAllowed("agy", "gemini_weekly"), true);
+  assert.equal(isUsageQuotaKeyAllowed("antigravity", "gemini_weekly"), true);
+  assert.equal(isUsageQuotaKeyAllowed("antigravity", "claude_gpt_weekly"), true);
 });
 
 test("agy token refresh is wired on the Google (non-rotating) refresh path", () => {

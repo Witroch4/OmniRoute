@@ -14,6 +14,10 @@ vi.mock("next-intl", () => ({
   },
 }));
 
+// Imported once at module scope: the shared Modal is a kit Dialog (KEA-7886) and the first
+// import of the kit pays its transform cost, which must not land inside a 5 s test budget.
+const { default: ProxyConfigModal } = await import("@/shared/components/ProxyConfigModal");
+
 type FetchCall = {
   url: string;
   method: string;
@@ -75,7 +79,6 @@ async function flushEffects() {
 }
 
 async function renderProxyConfigModal(props?: Partial<React.ComponentProps<any>>) {
-  const { default: ProxyConfigModal } = await import("@/shared/components/ProxyConfigModal");
   const container = makeContainer();
   const root: Root = createRoot(container);
   cleanupCallbacks.push(() => root.unmount());
@@ -93,8 +96,9 @@ async function renderProxyConfigModal(props?: Partial<React.ComponentProps<any>>
       />
     );
   });
-  await waitForModalToLoad(container);
-  return { container, root };
+  // The dialog is portaled to document.body (KEA-7886): that is the query root.
+  await waitForModalToLoad(document.body);
+  return { container: document.body, root };
 }
 
 async function waitForModalToLoad(container: HTMLElement) {
@@ -388,4 +392,70 @@ describe("ProxyConfigModal custom registry saves", () => {
       )
     ).toBe(false);
   });
+});
+
+describe("ProxyConfigModal test connection (saved proxy)", () => {
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    fetchCalls = [];
+  });
+
+  afterEach(() => {
+    while (cleanupCallbacks.length > 0) {
+      cleanupCallbacks.pop()?.();
+    }
+    document.body.innerHTML = "";
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("includes proxyId when testing a saved SOCKS5 registry proxy so the server can load its stored credentials", async () => {
+    installFetchMock((url, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      if (method === "GET" && url === "/api/settings/proxies") {
+        return {
+          body: {
+            items: [
+              {
+                id: "socks5-1",
+                name: "Geonode SOCKS5",
+                type: "socks5",
+                host: "proxy.geonode.io",
+                port: 12000,
+                username: "***",
+                password: "***",
+                source: "manual",
+              },
+            ],
+            total: 1,
+            socks5Enabled: true,
+          },
+        };
+      }
+      if (url.startsWith("/api/settings/proxies/assignments?") && url.includes("scope=provider")) {
+        return {
+          body: {
+            items: [{ proxyId: "socks5-1", scope: "provider", scopeId: "claude" }],
+            total: 1,
+          },
+        };
+      }
+      if (method === "POST" && url === "/api/settings/proxy/test") {
+        return { body: { success: true, publicIp: "1.2.3.4", latencyMs: 500 } };
+      }
+      return defaultProxyConfigResponses(url) || { status: 404, body: {} };
+    });
+
+    const { container } = await renderProxyConfigModal();
+    await clickButton(container, "testConnection");
+    await waitForCall((call) => call.method === "POST" && call.url === "/api/settings/proxy/test");
+
+    const testCall = fetchCalls.find(
+      (call) => call.method === "POST" && call.url === "/api/settings/proxy/test"
+    );
+    expect(testCall).toBeTruthy();
+    expect(testCall?.body?.proxyId).toBe("socks5-1");
+  }, 20000);
 });
