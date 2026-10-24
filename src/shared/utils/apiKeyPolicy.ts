@@ -80,6 +80,8 @@ export interface ApiKeyMetadata {
   id: string;
   name?: string;
   allowedModels?: string[];
+  /** Deny-list patterns; they win over allowedModels (see isModelAllowedForKey). */
+  blockedModels?: string[] | null;
   allowedCombos?: string[];
   allowedConnections?: string[];
   allowedQuotas?: string[];
@@ -580,9 +582,12 @@ export async function enforceApiKeyPolicy(
     }
   }
 
+  // A deny-list alone is a restriction too: with an empty allowlist (= every model) a key that only
+  // blocks a family must still reach isModelAllowedForKey, where blockedModels is evaluated.
   const hasModelRestrictions =
     !isQuotaExclusive &&
     ((apiKeyInfo.allowedModels && apiKeyInfo.allowedModels.length > 0) ||
+      (apiKeyInfo.blockedModels && apiKeyInfo.blockedModels.length > 0) ||
       (apiKeyInfo as { disableNonPublicModels?: boolean }).disableNonPublicModels === true);
 
   if (!requestedComboName && modelStr && hasModelRestrictions) {

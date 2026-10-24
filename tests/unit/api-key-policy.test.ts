@@ -529,6 +529,26 @@ test("enforceApiKeyPolicy rejects disallowed models and exhausted budgets", asyn
   assert.match(await readErrorMessage(overBudget.rejection), /Daily budget exceeded/);
 });
 
+test("enforceApiKeyPolicy enforces a deny-list on a key without an allowlist", async () => {
+  // Model checks used to run only when allowedModels was non-empty, so a key that only blocks a
+  // family (empty allowlist = every model) reached the blocked provider anyway.
+  const denyOnlyKey = await createKeyWithPolicy({ blockedModels: ["opencode-go/*"] });
+  const policy = await loadPolicy("deny-list-only");
+
+  const blocked = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(denyOnlyKey.key),
+    "opencode-go/glm-5.3-flash"
+  );
+  assert.equal(blocked.rejection?.status, 403);
+  assert.match(await readErrorMessage(blocked.rejection), /not allowed/);
+
+  const allowed = await policy.enforceApiKeyPolicy(
+    makePolicyRequest(denyOnlyKey.key),
+    "openai/gpt-4.1"
+  );
+  assert.equal(allowed.rejection, null);
+});
+
 test("enforceApiKeyPolicy's budget Check 4 enforces the cap against normalized (billed) spend, not real spend, on a model-budget redirect", async () => {
   const budgetedKey = await createKeyWithPolicy();
   const policy = await loadPolicy("normalized-budget-4");
