@@ -29,7 +29,9 @@ describe("proxyHealth IPv6-literal reachability", () => {
     const cases = [
       { url: "http://[::1]:3128", host: "::1", port: 3128 },
       { url: "socks5://user:secret@[2001:db8::1]:1080", host: "2001:db8::1", port: 1080 },
-      { url: "http://[fe80::1]", host: "fe80::1", port: 8080 },
+      // Fork: upstream #14157/#14184 made a portless http proxy probe its scheme default (80),
+      // not 8080 — the WHATWG URL parser drops `:80`, so "no port" means 80.
+      { url: "http://[fe80::1]", host: "fe80::1", port: 80 },
       { url: "http://127.0.0.1:8081", host: "127.0.0.1", port: 8081 },
     ];
     for (const { url } of cases) {

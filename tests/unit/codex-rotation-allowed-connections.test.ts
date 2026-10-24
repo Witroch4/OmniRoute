@@ -214,7 +214,17 @@ for (const stream of [false, true]) {
 
     const result = await sendCodex(key.key, stream);
 
-    assert.notEqual(result.status, 200, result.text);
+    if (stream) {
+      // Fork: a streaming Codex client retries on the HTTP status before it reads the body, so
+      // "all accounts exhausted" travels IN-BAND on a 200 stream as an `insufficient_quota`
+      // error (codexFailover.ts buildCodexExhaustedStreamBody) instead of a bare 429.
+      assert.equal(result.status, 200, result.text);
+      assert.match(result.text, /All Codex accounts have reached their usage limit/);
+      assert.match(result.text, /insufficient_quota/);
+      assert.doesNotMatch(result.text, /from (allowed|outside) account/);
+    } else {
+      assert.notEqual(result.status, 200, result.text);
+    }
     assert.ok(
       upstreamCalls.every((call) => call.token !== TOKENS.outside),
       "an account outside the key allowlist must never be called"

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeyById } from "@/lib/db/apiKeys";
@@ -8,13 +9,16 @@ import {
   replaceFamilyMultipliers,
   type FamilyMultiplierRuleInput,
 } from "@/lib/db/apiKeyModelFamilyMultipliers";
+import { validateBody } from "@/shared/validation/helpers";
 import * as log from "@/sse/utils/logger";
 
-function requireText(value: unknown, field: string): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  if (!text) throw new Error(`${field} is required`);
-  return text;
-}
+// Fork: Hard Rule #7 / t06 route-validation gate — the PUT body is validated with Zod
+// (messages kept verbatim: the dashboard shows `error` as-is and the route tests match it).
+const requiredText = (field: string) =>
+  z
+    .string({ error: `${field} is required` })
+    .trim()
+    .min(1, { error: `${field} is required` });
 
 /**
  * Accepts a plain number OR a decimal string using either `.` or `,` as the
@@ -23,36 +27,56 @@ function requireText(value: unknown, field: string): string {
  * `familyMultipliersPayload.ts`: this route must never trust the client to
  * have already normalized the value.
  */
-function parseMultiplierInput(value: unknown): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string" && value.trim()) {
-    return Number(value.trim().replace(",", "."));
-  }
-  return Number.NaN;
-}
+const multiplierInput = z
+  .union([z.number(), z.string()], { error: "multiplier must be a positive number" })
+  .transform((value) =>
+    typeof value === "string"
+      ? value.trim()
+        ? Number(value.trim().replace(",", "."))
+        : Number.NaN
+      : value
+  )
+  .refine((value) => Number.isFinite(value) && value > 0, {
+    error: "multiplier must be a positive number",
+    abort: true,
+  })
+  .refine((value) => value <= MAX_FAMILY_MULTIPLIER, {
+    error: `multiplier must be ${MAX_FAMILY_MULTIPLIER} or less`,
+  });
+
+// Key order is the order issues are reported in: the multiplier is checked first, as before.
+const familyMultiplierSchema = z.object({
+  multiplier: multiplierInput,
+  provider: requiredText("provider"),
+  familyGlob: requiredText("familyGlob"),
+  enabled: z
+    .unknown()
+    .optional()
+    .transform((value) => value !== false),
+  priority: z
+    .unknown()
+    .optional()
+    .transform((value) => (Number.isFinite(Number(value)) ? Number(value) : 0)),
+});
+
+const familyMultipliersPayloadSchema = z.object(
+  {
+    // A null/undefined entry is an empty rule (reports the first missing field), not a type error.
+    rules: z.array(
+      z.preprocess((entry) => entry ?? {}, familyMultiplierSchema),
+      { error: "rules must be an array" }
+    ),
+  },
+  { error: "rules must be an array" }
+);
 
 /** Exported for unit tests — validates the PUT body without touching the DB. */
 export function normalizeFamilyMultipliersPayload(payload: unknown): FamilyMultiplierRuleInput[] {
-  const rules = (payload as { rules?: unknown })?.rules;
-  if (!Array.isArray(rules)) throw new Error("rules must be an array");
-
-  return rules.map((entry) => {
-    const record = (entry ?? {}) as Record<string, unknown>;
-    const multiplier = parseMultiplierInput(record.multiplier);
-    if (!Number.isFinite(multiplier) || multiplier <= 0) {
-      throw new Error("multiplier must be a positive number");
-    }
-    if (multiplier > MAX_FAMILY_MULTIPLIER) {
-      throw new Error(`multiplier must be ${MAX_FAMILY_MULTIPLIER} or less`);
-    }
-    return {
-      enabled: record.enabled !== false,
-      priority: Number.isFinite(Number(record.priority)) ? Number(record.priority) : 0,
-      provider: requireText(record.provider, "provider"),
-      familyGlob: requireText(record.familyGlob, "familyGlob"),
-      multiplier,
-    };
-  });
+  const validation = validateBody(familyMultipliersPayloadSchema, payload);
+  if (!validation.success) {
+    throw new Error(validation.error.details[0]?.message ?? "Invalid payload");
+  }
+  return validation.data.rules;
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {

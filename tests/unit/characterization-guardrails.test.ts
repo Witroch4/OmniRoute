@@ -83,12 +83,15 @@ test("guardrails barrel (src/lib/guardrails/index.ts) exports exactly this surfa
   ]);
 });
 
-test("importing the barrel registers the six default guardrails in priority order", () => {
+// Fork: a seventh default guardrail, `document-input-support` (priority 6, registered after the
+// audio bridge so the stable sort keeps it between audio-bridge and video-bridge).
+test("importing the barrel registers the seven default guardrails in priority order", () => {
   assert.deepEqual(
     guardrailRegistry.list().map((g) => [g.name, g.priority, g.enabled]),
     [
       ["vision-bridge", 5, true],
       ["audio-bridge", 6, true],
+      ["document-input-support", 6, true],
       ["video-bridge", 7, true],
       ["pii-masker", 10, true],
       ["prompt-injection", 20, true],

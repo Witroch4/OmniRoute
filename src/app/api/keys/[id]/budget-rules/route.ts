@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeyById } from "@/lib/db/apiKeys";
@@ -7,35 +8,60 @@ import {
   replaceModelBudgetRules,
   type ModelBudgetRuleInput,
 } from "@/lib/db/apiKeyModelBudgetRules";
+import { validateBody } from "@/shared/validation/helpers";
 import * as log from "@/sse/utils/logger";
 
-function requireText(value: unknown, field: string): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  if (!text) throw new Error(`${field} is required`);
-  return text;
-}
+// Fork: Hard Rule #7 / t06 route-validation gate — the PUT body is validated with Zod
+// (messages kept verbatim: the dashboard shows `error` as-is and the route tests match it).
+const requiredText = (field: string) =>
+  z
+    .string({ error: `${field} is required` })
+    .trim()
+    .min(1, { error: `${field} is required` });
+
+/** A positive number sent as a number or a numeric string ("100" from a text input). */
+const positiveLimit = z
+  .union([z.number(), z.string()], { error: "weeklyLimitUsd must be a positive number" })
+  .transform((value) => (typeof value === "string" && !value.trim() ? Number.NaN : Number(value)))
+  .refine((value) => Number.isFinite(value) && value > 0, {
+    error: "weeklyLimitUsd must be a positive number",
+  });
+
+// Key order is the order issues are reported in: the limit is checked first, as before.
+const budgetRuleSchema = z.object({
+  weeklyLimitUsd: positiveLimit,
+  sourceProvider: requiredText("sourceProvider"),
+  sourceFamily: requiredText("sourceFamily"),
+  targetProvider: requiredText("targetProvider"),
+  targetFamily: requiredText("targetFamily"),
+  enabled: z
+    .unknown()
+    .optional()
+    .transform((value) => value !== false),
+  priority: z
+    .unknown()
+    .optional()
+    .transform((value) => (Number.isFinite(Number(value)) ? Number(value) : 0)),
+});
+
+const budgetRulesPayloadSchema = z.object(
+  {
+    // A null/undefined entry is an empty rule (reports the first missing field), not a type error.
+    rules: z.array(
+      z.preprocess((entry) => entry ?? {}, budgetRuleSchema),
+      { error: "rules must be an array" }
+    ),
+  },
+  { error: "rules must be an array" }
+);
 
 /** Exported for unit tests — validates the PUT body without touching the DB. */
 export function normalizeBudgetRulesPayload(payload: unknown): ModelBudgetRuleInput[] {
-  const rules = (payload as { rules?: unknown })?.rules;
-  if (!Array.isArray(rules)) throw new Error("rules must be an array");
-
-  return rules.map((entry) => {
-    const record = (entry ?? {}) as Record<string, unknown>;
-    const weeklyLimitUsd = Number(record.weeklyLimitUsd);
-    if (!Number.isFinite(weeklyLimitUsd) || weeklyLimitUsd <= 0) {
-      throw new Error("weeklyLimitUsd must be a positive number");
-    }
-    return {
-      enabled: record.enabled !== false,
-      priority: Number.isFinite(Number(record.priority)) ? Number(record.priority) : 0,
-      sourceProvider: requireText(record.sourceProvider, "sourceProvider"),
-      sourceFamily: requireText(record.sourceFamily, "sourceFamily"),
-      weeklyLimitUsd,
-      targetProvider: requireText(record.targetProvider, "targetProvider"),
-      targetFamily: requireText(record.targetFamily, "targetFamily"),
-    };
-  });
+  const validation = validateBody(budgetRulesPayloadSchema, payload);
+  if (!validation.success) {
+    throw new Error(validation.error.details[0]?.message ?? "Invalid payload");
+  }
+  return validation.data.rules;
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {

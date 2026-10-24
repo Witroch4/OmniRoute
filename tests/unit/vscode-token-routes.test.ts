@@ -317,11 +317,17 @@ test("vscode tokenized models route exposes reasoning effort metadata for import
     new Request(`http://localhost/api/v1/vscode/${encodeURIComponent(key.key)}/models`)
   );
   const body = (await response.json()) as any;
-  const model = (body.data || []).find((entry: any) => entry.id === "gpt-5.6-sol__provider_gh");
+  // Fork: the fork's Copilot account cannot call gpt-5.6-sol (policy.state "disabled" →
+  // `400 The requested model is not supported`), so the github registry keeps it out
+  // (open-sse/config/providers/registry/github/index.ts). gpt-5.4 is the importable
+  // Copilot chat model this assertion was written against.
+  const model = (body.data || []).find((entry: any) => entry.id === "gpt-5.4__provider_gh");
 
   assert.equal(response.status, 200);
-  assert.ok(model, "missing gpt-5.6-sol__provider_gh in tokenized VS Code models route");
-  assert.equal(model.family, "gpt-5.6-sol");
+  assert.ok(model, "missing gpt-5.4__provider_gh in tokenized VS Code models route");
+  assert.equal(model.family, "gpt-5.4");
+  // `max` is part of the upstream canonical effort vocabulary (effortStandardization.ts), so a
+  // Copilot model without declared tiers advertises it; the github import drops `xhigh` only.
   assert.deepEqual(model.supportsReasoningEffort, ["none", "low", "medium", "high", "max"]);
   assert.deepEqual(model.supportedReasoningEfforts, [
     "none",
