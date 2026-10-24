@@ -48,6 +48,10 @@ const INVENTORY = path.join(ROOT, "config/quality/vitest-exclusions.json");
 
 /** Exclusions that are tooling configuration rather than parked debt. */
 const EXEMPT = new Set([
+  // Fork: any-depth forms so nested workspace node_modules (open-sse/node_modules) and
+  // nested .git files (worktrees) are never collected as tests.
+  "**/node_modules/**",
+  "**/.git/**",
   "node_modules/**",
   "dist/**",
   "cypress/**",

@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 import { Input } from "@/shared/components";
+import Button from "@/shared/components/Button";
+import Toggle from "@/shared/components/Toggle";
 import {
   DEFAULT_RENEWAL_CYCLE_MONTHS,
   MAX_RENEWAL_CYCLE_MONTHS,
@@ -108,34 +110,28 @@ export function RenewalCycleSettings({
   const daysLeft = preview.cutoff ? daysUntilCutoff(preview.cutoff, nowMs) : null;
 
   return (
-    <div className="flex flex-col gap-3 p-3 rounded-lg border border-violet-500/25 bg-violet-500/5">
+    <div className="flex flex-col gap-3 p-3 rounded-lg border border-primary/25 bg-primary/5">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium text-text-main">{labels.title}</p>
           <p className="text-xs text-text-muted">{labels.description}</p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={draft.enabled}
-          onClick={() => onDraftChange({ ...draft, enabled: !draft.enabled })}
-          className={`inline-flex shrink-0 items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-            draft.enabled
-              ? "bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30"
-              : "bg-black/5 dark:bg-white/5 text-text-muted border border-border"
-          }`}
-        >
-          <span className="material-symbols-outlined text-[14px]">event_repeat</span>
-          {draft.enabled ? labels.on : labels.off}
-        </button>
+        <Toggle
+          size="sm"
+          className="shrink-0"
+          checked={draft.enabled}
+          onChange={(enabled) => onDraftChange({ ...draft, enabled })}
+          ariaLabel={labels.title}
+          title={draft.enabled ? labels.on : labels.off}
+        />
       </div>
 
       {draft.enabled && (
         <>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="min-w-0 flex-1">
-              <label className="text-xs text-text-muted mb-1 block">{labels.baseDate}</label>
-              <input
+              <Input
+                label={labels.baseDate}
                 type="datetime-local"
                 value={toLocalDateTimeInputValue(draft.anchorAt)}
                 onChange={(event) => {
@@ -149,12 +145,11 @@ export function RenewalCycleSettings({
                     onDraftChange({ ...draft, anchorAt: date.toISOString() });
                   }
                 }}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded-md bg-background text-text-main"
               />
             </div>
             <div className="w-full sm:w-32">
-              <label className="text-xs text-text-muted mb-1 block">{labels.everyMonths}</label>
               <Input
+                label={labels.everyMonths}
                 type="number"
                 min={MIN_RENEWAL_CYCLE_MONTHS}
                 max={MAX_RENEWAL_CYCLE_MONTHS}
@@ -182,10 +177,10 @@ export function RenewalCycleSettings({
                 <span
                   className={`text-[11px] font-medium ${
                     daysLeft !== null && daysLeft > 7
-                      ? "text-emerald-600 dark:text-emerald-400"
+                      ? "text-success"
                       : daysLeft !== null && daysLeft >= 0
-                        ? "text-amber-600 dark:text-amber-400"
-                        : "text-red-600 dark:text-red-400"
+                        ? "text-warning"
+                        : "text-error"
                   }`}
                 >
                   {daysLeft === null
@@ -199,19 +194,20 @@ export function RenewalCycleSettings({
               <span className="text-xs text-text-muted">{labels.noBaseDate}</span>
             )}
 
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
+              icon="autorenew"
+              className="shrink-0"
               disabled={!draft.anchorAt || draft.renewNow}
               onClick={() => onDraftChange({ ...draft, renewNow: true })}
-              className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[14px]">autorenew</span>
               {labels.renewNow}
-            </button>
+            </Button>
           </div>
 
           {draft.renewNow && preview.cutoff && (
-            <p className="text-[11px] font-medium text-violet-700 dark:text-violet-300">
+            <p className="text-[11px] font-medium text-primary">
               {labels.renewQueued(formatCutoff(preview.cutoff, locale))}
             </p>
           )}

@@ -6,13 +6,9 @@
 // the shipped JSX structure and grouping logic directly:
 //  1. Grouping still produces one header per distinct provider with the
 //     correct account count ("N account(s)").
-//  2. Each provider group's card grid sizes its tracks by the group's CONTAINER
-//     width — `repeat(auto-fill|auto-fit, minmax(<min>px, 1fr))` — never by a
-//     viewport-breakpoint ladder (`grid-cols-2 md:grid-cols-3 xl:grid-cols-4`).
-//     Tailwind breakpoints key off the VIEWPORT, so the ladder clipped cards
-//     whenever the group was narrower than the page (fork fix 4695512925,
-//     2026-07-26). The fork keeps a 220px floor so wide screens show several
-//     cards per row; upstream's native fix uses 280px auto-fit.
+//  2. Each provider group's cards auto-fit into as many 280px columns as that
+//     group's actual width supports, while a card can shrink to the group's
+//     width when its container is narrower than 280px.
 //  3. Provider groups themselves are one-column expandable sections, not a
 //     two-column masonry flow.
 //
@@ -147,29 +143,18 @@ test("QuotaCardGrid — provider sections and accounts use quota monitoring prio
   );
 });
 
-test("QuotaCardGrid (#3520) — per-group card grid fills horizontal space by container width", () => {
+test("QuotaCardGrid (#3520) — cards follow actual group width with a narrow-container fallback", () => {
   const classNames = extractDivClassNames(COMPONENT_PATH);
   const cardGridClassName = classNames.find((c) => /\bgrid\b/.test(c) && /grid-cols-/.test(c));
-  assert.ok(cardGridClassName, "expected to find the per-group card grid's className");
-
-  // Track count must follow the real container width (auto-fill/auto-fit + minmax) ...
-  const track = cardGridClassName!.match(
-    /(?:^|\s)grid-cols-\[repeat\(auto-(?:fill|fit),minmax\((\d+)px,1fr\)\)\](?=\s|$)/
+  assert.ok(cardGridClassName, "expected to find the actual-width per-group card grid's className");
+  assert.match(
+    cardGridClassName,
+    /(?:^|\s)grid-cols-\[repeat\(auto-fit,minmax\(min\(100%,280px\),1fr\)\)\](?:\s|$)/,
+    "expected 280px auto-fit columns that can shrink to 100% in a narrower group container"
   );
-  assert.ok(
-    track,
-    `card grid must size tracks by container width (repeat(auto-fill, minmax(Npx, 1fr))), got "${cardGridClassName}"`
-  );
-  // ... never a fixed or viewport-breakpoint column count, which ignores the width of
-  // the section the grid actually lives in and clips cards.
-  assert.doesNotMatch(cardGridClassName!, /(?:^|\s)(?:[a-z0-9]+:)*grid-cols-\d+(?=\s|$)/);
-
-  // Two cards plus the gap-3 (12px) gutter must fit in ~600px, so even a half-width
-  // window next to the dashboard sidebar still shows several cards per row (#3520).
-  const minCardPx = Number(track![1]);
-  assert.ok(
-    2 * minCardPx + 12 <= 600,
-    `minimum card width ${minCardPx}px is too wide for two cards per ~600px row`
+  assert.doesNotMatch(
+    cardGridClassName,
+    /(?:^|\s)(?:grid-cols-2|md:grid-cols-3|xl:grid-cols-4)(?:\s|$)/
   );
 });
 

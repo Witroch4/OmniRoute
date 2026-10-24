@@ -26,8 +26,8 @@ export default defineConfig({
       "open-sse/services/**/__tests__/**/*.test.ts",
     ],
     exclude: [
-      // Standard Vitest / tooling exclusions (the "**/" forms also cover nested
-      // workspace node_modules, e.g. open-sse/node_modules).
+      // Standard Vitest / tooling exclusions (the recursive "any depth" forms also cover
+      // nested workspace node_modules, e.g. open-sse/node_modules).
       "**/node_modules/**",
       "**/.git/**",
       "node_modules/**",

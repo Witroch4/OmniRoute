@@ -1549,7 +1549,7 @@ function PricingGapAlert({ gaps }: { gaps?: UsageAnalyticsPricingGap[] }) {
           <span className="font-mono text-text-main">
             {gap.provider}/{gap.model}
           </span>
-          <span className={tone === "red" ? "text-red-300/80" : "text-amber-300/80"}>
+          <span className={tone === "red" ? "text-error/80" : "text-warning/80"}>
             {numberFormatter.format(gap.totalTokens)} {t("pricingGapTokens")}
           </span>
         </li>
@@ -1560,12 +1560,12 @@ function PricingGapAlert({ gaps }: { gaps?: UsageAnalyticsPricingGap[] }) {
   return (
     <div className="flex flex-col gap-3">
       {missing.length > 0 && (
-        <Card className="p-4 border-red-500/40 bg-red-500/10">
+        <Card className="p-4 border-error/40 bg-error/10">
           <div className="flex items-start gap-3">
-            <span className="material-symbols-outlined text-red-400 text-xl shrink-0">error</span>
+            <Icon name="error" size={20} className="text-error" />
             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-red-400">{t("pricingGapTitle")}</h3>
-              <p className="text-xs text-red-200/80 mt-1">{t("pricingGapBody")}</p>
+              <h3 className="text-sm font-bold text-error">{t("pricingGapTitle")}</h3>
+              <p className="text-xs text-error/80 mt-1">{t("pricingGapBody")}</p>
               {renderRows(missing, "red")}
             </div>
           </div>
@@ -1573,14 +1573,12 @@ function PricingGapAlert({ gaps }: { gaps?: UsageAnalyticsPricingGap[] }) {
       )}
 
       {anchored.length > 0 && (
-        <Card className="p-4 border-amber-500/40 bg-amber-500/10">
+        <Card className="p-4 border-warning/40 bg-warning/10">
           <div className="flex items-start gap-3">
-            <span className="material-symbols-outlined text-amber-400 text-xl shrink-0">
-              warning
-            </span>
+            <Icon name="warning" size={20} className="text-warning" />
             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-amber-400">{t("pricingAnchorTitle")}</h3>
-              <p className="text-xs text-amber-200/80 mt-1">{t("pricingAnchorBody")}</p>
+              <h3 className="text-sm font-bold text-warning">{t("pricingAnchorTitle")}</h3>
+              <p className="text-xs text-warning/80 mt-1">{t("pricingAnchorBody")}</p>
               {renderRows(anchored, "amber")}
             </div>
           </div>

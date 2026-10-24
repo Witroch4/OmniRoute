@@ -1,6 +1,7 @@
 "use client";
 
 import { Input } from "@/shared/components";
+import Toggle from "@/shared/components/Toggle";
 
 export function MinSpendGuaranteeSettings({
   enabled,
@@ -14,7 +15,7 @@ export function MinSpendGuaranteeSettings({
   onGuaranteeUsdChange: (value: string) => void;
 }) {
   return (
-    <div className="mt-1 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+    <div className="mt-1 rounded-lg border border-warning/20 bg-warning/5 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium text-text-main">Minimum spend guarantee</p>
@@ -24,24 +25,17 @@ export function MinSpendGuaranteeSettings({
             cutoff applies again.
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          onClick={() => onEnabledChange(!enabled)}
-          className={`inline-flex shrink-0 items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-            enabled
-              ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30"
-              : "bg-black/5 dark:bg-white/5 text-text-muted border border-border"
-          }`}
-        >
-          <span className="material-symbols-outlined text-[14px]">savings</span>
-          {enabled ? "On" : "Off"}
-        </button>
+        <Toggle
+          size="sm"
+          className="shrink-0"
+          checked={enabled}
+          onChange={onEnabledChange}
+          ariaLabel="Minimum spend guarantee"
+        />
       </div>
       <div className="mt-3">
-        <label className="text-xs text-text-muted mb-1 block">Minimum spend / week (USD)</label>
         <Input
+          label="Minimum spend / week (USD)"
           type="number"
           min={0}
           step="0.01"

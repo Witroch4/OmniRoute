@@ -19,8 +19,6 @@ const ROOT = path.resolve(
 );
 const SRC_ROOT = path.resolve(__dirname, "../../../src");
 
-const SRC_ROOT = path.resolve(__dirname, "../../../src");
-
 function read(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), "utf8");
 }

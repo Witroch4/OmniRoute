@@ -1,6 +1,9 @@
 "use client";
 
 import { Input } from "@/shared/components";
+import Button from "@/shared/components/Button";
+import Checkbox from "@/shared/components/Checkbox";
+import Icon from "@/shared/components/Icon";
 import { ProviderField } from "./ModelBudgetRoutingSettings";
 
 export interface FamilyMultiplierDraft {
@@ -80,7 +83,7 @@ export function ModelFamilyMultiplierSettings({
   const editingDisabled = loadStatus !== "loaded";
 
   return (
-    <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+    <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium text-text-main">Model family spend multiplier</p>
@@ -95,17 +98,16 @@ export function ModelFamilyMultiplierSettings({
             matching spend read as free.
           </p>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
+          icon="add"
+          className="shrink-0"
           disabled={editingDisabled}
           onClick={() => onRulesChange([...rules, { ...EMPTY_FAMILY_MULTIPLIER }])}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/15 px-2.5 py-1.5 text-xs font-semibold text-amber-700 transition-colors dark:text-amber-300 ${
-            editingDisabled ? "cursor-not-allowed opacity-50" : ""
-          }`}
         >
-          <span className="material-symbols-outlined text-[14px]">add</span>
           Add multiplier
-        </button>
+        </Button>
       </div>
 
       {loadStatus === "loading" && (
@@ -115,19 +117,15 @@ export function ModelFamilyMultiplierSettings({
       )}
 
       {loadStatus === "error" && (
-        <div className="mt-3 flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2">
-          <span className="material-symbols-outlined text-[16px] text-red-500">error</span>
-          <p className="flex-1 text-sm text-red-700 dark:text-red-300">
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2">
+          <Icon name="error" size={16} className="text-error" />
+          <p className="flex-1 text-sm text-error">
             Couldn&apos;t load this key&apos;s existing family multipliers. Nothing was changed —
             retry before adding or removing rules here.
           </p>
-          <button
-            type="button"
-            onClick={onRetryLoad}
-            className="shrink-0 text-xs font-semibold text-red-700 underline dark:text-red-300"
-          >
+          <Button variant="ghost" size="sm" className="shrink-0 text-error" onClick={onRetryLoad}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -148,45 +146,37 @@ export function ModelFamilyMultiplierSettings({
                 placeholder="provider"
                 onChange={(value) => update(index, { provider: value })}
               />
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">Family</label>
-                <Input
-                  list="omniroute-family-multiplier-presets"
-                  value={rule.familyGlob}
-                  onChange={(e) => update(index, { familyGlob: e.target.value })}
-                  placeholder="claude-sonnet-*"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">
-                  Multiplier (1.0 = neutral)
-                </label>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={rule.multiplier}
-                  onChange={(e) =>
-                    update(index, { multiplier: normalizeDecimalInput(e.target.value) })
-                  }
-                  placeholder="1.0"
-                />
-              </div>
+              <Input
+                label="Family"
+                list="omniroute-family-multiplier-presets"
+                value={rule.familyGlob}
+                onChange={(e) => update(index, { familyGlob: e.target.value })}
+                placeholder="claude-sonnet-*"
+              />
+              <Input
+                label="Multiplier (1.0 = neutral)"
+                type="text"
+                inputMode="decimal"
+                value={rule.multiplier}
+                onChange={(e) =>
+                  update(index, { multiplier: normalizeDecimalInput(e.target.value) })
+                }
+                placeholder="1.0"
+              />
               <div className="flex items-end justify-between">
-                <label className="flex items-center gap-2 text-[11px] text-text-muted">
-                  <input
-                    type="checkbox"
-                    checked={rule.enabled}
-                    onChange={(e) => update(index, { enabled: e.target.checked })}
-                  />
-                  Enabled
-                </label>
-                <button
-                  type="button"
+                <Checkbox
+                  label="Enabled"
+                  checked={rule.enabled}
+                  onChange={(e) => update(index, { enabled: e.target.checked })}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-error"
                   onClick={() => onRulesChange(rules.filter((_, i) => i !== index))}
-                  className="text-[11px] text-red-500"
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             </div>
           </div>

@@ -1,6 +1,10 @@
 "use client";
 
 import { Input } from "@/shared/components";
+import Button from "@/shared/components/Button";
+import Checkbox from "@/shared/components/Checkbox";
+import Icon from "@/shared/components/Icon";
+import Select from "@/shared/components/Select";
 
 export interface ModelBudgetRuleDraft {
   enabled: boolean;
@@ -39,13 +43,11 @@ export const EMPTY_BUDGET_RULE: ModelBudgetRuleDraft = {
   targetFamily: "",
 };
 
-const SELECT_CLASSNAME =
-  "w-full px-3 py-2 text-sm border border-border rounded-lg bg-background text-text-main focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed";
-
 /**
- * Provider is a closed set on this instance (whatever has a connection), so it's a
- * `<select>` rather than free text — a mistyped provider used to save silently and just
- * never match anything, with no error anywhere. Two things this still has to get right:
+ * Provider is a closed set on this instance (whatever has a connection), so it's a select
+ * (the kit `Select` adapter) rather than free text — a mistyped provider used to save
+ * silently and just never match anything, with no error anywhere. Two things this still has
+ * to get right:
  *
  * 1. Empty `providers` (connections not loaded yet, or the fetch failed) must not render
  *    a `<select>` with zero real options — that would trap the admin into being unable to
@@ -73,28 +75,30 @@ export function ProviderField({
 }) {
   if (providers.length === 0) {
     return (
-      <div>
-        <label className="mb-1 block text-xs text-text-muted">{label}</label>
-        <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
-      </div>
+      <Input
+        label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
     );
   }
 
   const isKnownOrEmpty = value === "" || providers.includes(value);
 
+  const options = [
+    { value: "", label: "Select provider…" },
+    ...(isKnownOrEmpty ? [] : [{ value, label: `${value} (no longer connected)` }]),
+    ...providers.map((provider) => ({ value: provider, label: provider })),
+  ];
+
   return (
-    <div>
-      <label className="mb-1 block text-xs text-text-muted">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className={SELECT_CLASSNAME}>
-        <option value="">Select provider…</option>
-        {!isKnownOrEmpty && <option value={value}>{value} (no longer connected)</option>}
-        {providers.map((provider) => (
-          <option key={provider} value={provider}>
-            {provider}
-          </option>
-        ))}
-      </select>
-    </div>
+    <Select
+      label={label}
+      value={value}
+      options={options}
+      onChange={(e) => onChange(e.target.value)}
+    />
   );
 }
 
@@ -122,7 +126,7 @@ export function ModelBudgetRoutingSettings({
   const editingDisabled = loadStatus !== "loaded";
 
   return (
-    <div className="mt-1 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+    <div className="mt-1 rounded-lg border border-info/20 bg-info/5 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium text-text-main">Model budget routing</p>
@@ -132,17 +136,16 @@ export function ModelBudgetRoutingSettings({
             charged at the original family&apos;s rates.
           </p>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
+          icon="add"
+          className="shrink-0"
           disabled={editingDisabled}
           onClick={() => onRulesChange([...rules, { ...EMPTY_BUDGET_RULE }])}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/15 px-2.5 py-1.5 text-xs font-semibold text-sky-700 transition-colors dark:text-sky-300 ${
-            editingDisabled ? "cursor-not-allowed opacity-50" : ""
-          }`}
         >
-          <span className="material-symbols-outlined text-[14px]">add</span>
           Add rule
-        </button>
+        </Button>
       </div>
 
       {loadStatus === "loading" && (
@@ -150,19 +153,15 @@ export function ModelBudgetRoutingSettings({
       )}
 
       {loadStatus === "error" && (
-        <div className="mt-3 flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2">
-          <span className="material-symbols-outlined text-[16px] text-red-500">error</span>
-          <p className="flex-1 text-sm text-red-700 dark:text-red-300">
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2">
+          <Icon name="error" size={16} className="text-error" />
+          <p className="flex-1 text-sm text-error">
             Couldn&apos;t load this key&apos;s existing budget rules. Nothing was changed — retry
             before adding or removing rules here.
           </p>
-          <button
-            type="button"
-            onClick={onRetryLoad}
-            className="shrink-0 text-xs font-semibold text-red-700 underline dark:text-red-300"
-          >
+          <Button variant="ghost" size="sm" className="shrink-0 text-error" onClick={onRetryLoad}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -183,26 +182,22 @@ export function ModelBudgetRoutingSettings({
                 placeholder="from provider"
                 onChange={(value) => update(index, { sourceProvider: value })}
               />
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">From family</label>
-                <Input
-                  list="omniroute-family-presets"
-                  value={rule.sourceFamily}
-                  onChange={(e) => update(index, { sourceFamily: e.target.value })}
-                  placeholder="claude-opus-*"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">Weekly limit (USD)</label>
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={rule.weeklyLimitUsd}
-                  onChange={(e) => update(index, { weeklyLimitUsd: e.target.value })}
-                  placeholder="USD / week"
-                />
-              </div>
+              <Input
+                label="From family"
+                list="omniroute-family-presets"
+                value={rule.sourceFamily}
+                onChange={(e) => update(index, { sourceFamily: e.target.value })}
+                placeholder="claude-opus-*"
+              />
+              <Input
+                label="Weekly limit (USD)"
+                type="number"
+                min={0}
+                step="0.01"
+                value={rule.weeklyLimitUsd}
+                onChange={(e) => update(index, { weeklyLimitUsd: e.target.value })}
+                placeholder="USD / week"
+              />
               <ProviderField
                 label="To provider"
                 value={rule.targetProvider}
@@ -210,32 +205,28 @@ export function ModelBudgetRoutingSettings({
                 placeholder="to provider"
                 onChange={(value) => update(index, { targetProvider: value })}
               />
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">To family</label>
-                <Input
-                  list="omniroute-family-presets"
-                  value={rule.targetFamily}
-                  onChange={(e) => update(index, { targetFamily: e.target.value })}
-                  placeholder="claude-sonnet-*"
-                />
-              </div>
+              <Input
+                label="To family"
+                list="omniroute-family-presets"
+                value={rule.targetFamily}
+                onChange={(e) => update(index, { targetFamily: e.target.value })}
+                placeholder="claude-sonnet-*"
+              />
             </div>
             <div className="mt-2 flex items-center justify-between">
-              <label className="flex items-center gap-2 text-[11px] text-text-muted">
-                <input
-                  type="checkbox"
-                  checked={rule.enabled}
-                  onChange={(e) => update(index, { enabled: e.target.checked })}
-                />
-                Enabled
-              </label>
-              <button
-                type="button"
+              <Checkbox
+                label="Enabled"
+                checked={rule.enabled}
+                onChange={(e) => update(index, { enabled: e.target.checked })}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-error"
                 onClick={() => onRulesChange(rules.filter((_, i) => i !== index))}
-                className="text-[11px] text-red-500"
               >
                 Remove
-              </button>
+              </Button>
             </div>
           </div>
         ))}

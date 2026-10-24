@@ -190,9 +190,11 @@ function ProviderQuotaSection({
         </div>
       </summary>
       <div className="px-3 pb-3">
-        {/* Fork (4695512925): tracks follow the CONTAINER width with a 220px floor, so a
-            wide screen shows several cards per row and none is squeezed/clipped. */}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+        {/* Fork (4695512925) fixed card clipping by making the tracks follow the CONTAINER width
+            (viewport breakpoints stacked inside the outer masonry columns squeezed each card).
+            The upstream auto-fit form (#6815/#7072) does the same with a safer 280px floor and a
+            single-column fallback on narrow containers, so the fork's 220px auto-fill is dropped. */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-3">
           {connections.map((conn) => (
             <QuotaCard
               key={conn.id}
