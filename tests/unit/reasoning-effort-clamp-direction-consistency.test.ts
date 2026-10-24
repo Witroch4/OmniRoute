@@ -31,24 +31,22 @@ test("clampToLearned: nearest-tier medium -> high when accepted is {low,high,max
 test("sanitizeReasoningEffortForProvider maps medium identically for a LEARNED-only model and a DECLARED model with the same {low,high,max} accepted set", () => {
   // Learned side: a custom OpenAI-compatible connection that has no static
   // registry entry — the only source of truth is the reactively-learned set.
-  recordLearnedReasoningEffort("acme-oai-compatible", "custom-reasoner", [
-    "low",
-    "high",
-    "max",
-  ]);
+  recordLearnedReasoningEffort("acme-oai-compatible", "custom-reasoner", ["low", "high", "max"]);
   const learnedResult = sanitizeReasoningEffortForProvider(
     { reasoning_effort: "medium" },
     "acme-oai-compatible",
     "custom-reasoner"
   ) as Record<string, unknown>;
 
-  // Declared side: opencode-go/ox-alpha-free, whose registry entry declares
-  // supportedThinkingEfforts: ["low", "high", "max"] (see reasoningEffort.ts
-  // comment referencing the Console Go 400 case).
+  // Declared side: zai/glm-5.3, whose registry entry declares
+  // supportedThinkingEfforts: ["low", "high", "max"].
+  // Fork: upstream used opencode-go/ox-alpha-free (the Console Go 400 case in reasoningEffort.ts),
+  // but the fork's OpenCode Go v2 catalog (models.dev, 2026-10-24) no longer lists that row, so
+  // the declared side uses another registry model with the same accepted set.
   const declaredResult = sanitizeReasoningEffortForProvider(
     { reasoning_effort: "medium" },
-    "opencode-go",
-    "ox-alpha-free"
+    "zai",
+    "glm-5.3"
   ) as Record<string, unknown>;
 
   assert.equal(learnedResult.reasoning_effort, "high");
@@ -57,11 +55,7 @@ test("sanitizeReasoningEffortForProvider maps medium identically for a LEARNED-o
 });
 
 test("sub-floor request (none) on a learned-only model with floor {low,high,max} maps to low, not a pass-through null-clamp", () => {
-  recordLearnedReasoningEffort("acme-oai-compatible", "custom-reasoner-2", [
-    "low",
-    "high",
-    "max",
-  ]);
+  recordLearnedReasoningEffort("acme-oai-compatible", "custom-reasoner-2", ["low", "high", "max"]);
   const result = sanitizeReasoningEffortForProvider(
     { reasoning_effort: "none" },
     "acme-oai-compatible",

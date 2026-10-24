@@ -192,9 +192,10 @@ for (const model of ANTIGRAVITY_GEMINI_MODELS) {
 
 test("Antigravity Gemini-family regression covers every current callable tier", () => {
   const coveredModels = new Set(ANTIGRAVITY_GEMINI_MODELS);
+  // Fork: Gemini 3.1 Pro (`gemini-3.1-pro-low`, `gemini-pro-agent`) and Gemini 3.5/3.6/3.7 Flash
+  // are retired on the Antigravity backend and refused before credential selection
+  // (antigravityRetiredModels.ts), so the live Gemini tiers are 3.8 Flash and 3.1 Flash Lite.
   for (const model of [
-    "gemini-pro-agent",
-    "gemini-3.1-pro-low",
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",

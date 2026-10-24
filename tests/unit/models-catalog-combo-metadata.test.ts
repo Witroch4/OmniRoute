@@ -622,11 +622,18 @@ test("mixed DeepSeek combos advertise the efforts accepted by every V4 target", 
     isActive: true,
     testStatus: "active",
   });
+  // Fork: OpenCode Go v2 (models.dev `opencode-go`, 2026-10-24) serves `deepseek-v4-pro` but no
+  // longer `deepseek-v4-flash` (Zen-only), so the Flash combo pairs the native DeepSeek API with
+  // OpenCode Zen (`opencode/`), whose Flash row declares the same none/low/high/max tiers.
+  const secondTarget: Record<string, string> = {
+    "deepseek-v4-flash": "opencode/deepseek-v4-flash",
+    "deepseek-v4-pro": "opencode-go/deepseek-v4-pro",
+  };
   for (const modelId of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
     await combosDb.createCombo({
       name: `${modelId}-combo`,
       strategy: "auto",
-      models: [`deepseek/${modelId}`, `opencode-go/${modelId}`],
+      models: [`deepseek/${modelId}`, secondTarget[modelId]],
     });
   }
 

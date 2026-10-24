@@ -1,12 +1,18 @@
 /**
- * DeepSeek V4 Flash Vision (exp) catalog registration.
+ * DeepSeek V4 Flash vision catalog registration.
  *
  * OpenCode Go has no `modelsUrl`, so a model missing from its static registry is
  * unreachable from the catalog. Command Code does sync a live catalog, but the
  * static list is what `/v1/models` and capability resolution fall back to. Both
  * rows declare `supportsVision: true` explicitly so the vision filter and the
  * Vision Bridge do not depend on the `-vision` id heuristic alone, while the
- * text-only `deepseek-v4-flash` sibling must stay vision-false.
+ * text-only siblings must stay vision-false.
+ *
+ * Fork: OpenCode Go v2 (models.dev `opencode-go` section, 2026-10-24) no longer serves
+ * `deepseek-v4-flash-vision-exp` (deprecated, Zen-only) or `deepseek-v4-flash`; its vision
+ * DeepSeek is `deepseek-v4.1-flash` and the text-only one is `deepseek-v4-pro`, both over
+ * /chat/completions. The opencode-go cases below follow that catalog; the Command Code cases are
+ * unchanged. `opencode-go-v2-routing.test.ts` also asserts `deepseek-v4-flash` stays out.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,21 +30,22 @@ function findRow(models: readonly unknown[] | undefined, id: string): Row | unde
   return (models as Row[] | undefined)?.find((m) => m.id === id);
 }
 
-test("opencode-go registers deepseek-v4-flash-vision-exp with explicit vision", () => {
-  const row = findRow(opencode_goProvider.models, "deepseek-v4-flash-vision-exp");
-  assert.ok(row, "deepseek-v4-flash-vision-exp must be in the opencode-go static catalog");
+test("opencode-go registers deepseek-v4.1-flash with explicit vision", () => {
+  const row = findRow(opencode_goProvider.models, "deepseek-v4.1-flash");
+  assert.ok(row, "deepseek-v4.1-flash must be in the opencode-go static catalog");
   assert.equal(row.supportsVision, true);
   assert.equal(row.supportsReasoning, true);
-  // Same transport and effort vocabulary as the deepseek-v4-flash sibling.
-  const sibling = findRow(opencode_goProvider.models, "deepseek-v4-flash");
-  assert.ok(sibling, "deepseek-v4-flash sibling must still be registered");
-  assert.equal(row.targetFormat, sibling.targetFormat);
-  assert.deepEqual(row.supportedThinkingEfforts, sibling.supportedThinkingEfforts);
-  assert.match(String(row.name), /exp/i, "experimental model must say so in its name");
+  // The text-only DeepSeek sibling on Go must not claim vision.
+  const sibling = findRow(opencode_goProvider.models, "deepseek-v4-pro");
+  assert.ok(sibling, "deepseek-v4-pro sibling must still be registered");
+  assert.equal(sibling.supportsVision, false);
+  // Retired on Go v2: no deepseek-v4-flash row, no vision-exp row.
+  assert.equal(findRow(opencode_goProvider.models, "deepseek-v4-flash"), undefined);
+  assert.equal(findRow(opencode_goProvider.models, "deepseek-v4-flash-vision-exp"), undefined);
 });
 
 test("opencode-go registry lookup resolves the vision row", () => {
-  const model = findRow(getRegistryEntry("opencode-go")?.models, "deepseek-v4-flash-vision-exp");
+  const model = findRow(getRegistryEntry("opencode-go")?.models, "deepseek-v4.1-flash");
   assert.ok(model, "the opencode-go registry entry must expose the vision row");
   assert.equal(model.supportsVision, true);
 });
@@ -58,9 +65,9 @@ test("command-code registers deepseek/deepseek-v4-flash-vision-exp with explicit
   assert.equal(row.maxOutputTokens, sibling.maxOutputTokens);
 });
 
-test("resolved capabilities: vision on the exp rows, off on the text-only flash siblings", () => {
+test("resolved capabilities: vision on the vision rows, off on the text-only siblings", () => {
   for (const modelId of [
-    "opencode-go/deepseek-v4-flash-vision-exp",
+    "opencode-go/deepseek-v4.1-flash",
     "command-code/deepseek/deepseek-v4-flash-vision-exp",
   ]) {
     assert.equal(
@@ -70,7 +77,7 @@ test("resolved capabilities: vision on the exp rows, off on the text-only flash 
     );
   }
   for (const modelId of [
-    "opencode-go/deepseek-v4-flash",
+    "opencode-go/deepseek-v4-pro",
     "command-code/deepseek/deepseek-v4-flash",
   ]) {
     assert.notEqual(

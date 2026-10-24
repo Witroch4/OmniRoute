@@ -154,13 +154,22 @@ test("shared set is case-sensitive like the runtime guard", () => {
 });
 
 test("shared set excludes manual aliases that never intercept nodes at runtime", () => {
-  // Verified against src/sse/services/model.ts behavior: xiaomi/llamacpp/aq are
+  // Verified against src/sse/services/model.ts behavior: xiaomi/llamacpp are
   // not REGISTRY members and do NOT shadow compatible nodes, so rejecting them
   // would be a false positive.
   assert.equal(RESERVED_PROVIDER_PREFIXES.has("qwen"), false);
   assert.equal(RESERVED_PROVIDER_PREFIXES.has("xiaomi"), false);
   assert.equal(RESERVED_PROVIDER_PREFIXES.has("llamacpp"), false);
-  assert.equal(RESERVED_PROVIDER_PREFIXES.has("aq"), false);
+});
+
+test("Amazon Q registry id and alias are reserved", () => {
+  // Fork: `aq` used to be a manual alias outside the REGISTRY (upstream's premise in the test
+  // above). The fork registers Amazon Q in the REGISTRY (registry/amazonq/index.ts: id "amazon-q",
+  // alias "aq", so /v1/models and the model picker expose its Kiro-shared catalog), which makes
+  // `aq/...` resolve to that provider and shadow any compatible node with that prefix.
+  assert.equal(RESERVED_PROVIDER_PREFIXES.has("amazon-q"), true);
+  assert.equal(RESERVED_PROVIDER_PREFIXES.has("aq"), true);
+  assert.equal(isReservedProviderPrefix("aq"), true);
 });
 
 test("shared set size includes live REGISTRY and retired Designer + Felo + Qwen Web prefixes", () => {
@@ -217,7 +226,9 @@ test("shared set size includes live REGISTRY and retired Designer + Felo + Qwen 
   // CodeBuddy International (#15173) adds id "codebuddy-intl" plus alias "cbai" (429 -> 431).
   // Measured on the merged tree: RESERVED_PROVIDER_PREFIXES.size = 431.
   // The current catalog removes the Free provider id and oc alias (432 -> 430).
-  assert.equal(RESERVED_PREFIX_COUNT, 432);
+  // Fork: the Amazon Q registry entry adds id "amazon-q" + alias "aq" (432 -> 434); measured on the
+  // 3.8.53 merge, RESERVED_PROVIDER_PREFIXES.size = 434.
+  assert.equal(RESERVED_PREFIX_COUNT, 434);
 });
 
 test("notrack-web registry id and alias stay reserved", () => {
@@ -346,7 +357,8 @@ test("createProviderNodeSchema accepts mixed-case 'TokenRouter' (no runtime coll
 });
 
 test("createProviderNodeSchema accepts non-reserved prefixes", () => {
-  for (const prefix of ["my-gateway", "llamacpp", "aq", "xiaomi"]) {
+  // Fork: `aq` is reserved (Amazon Q is a REGISTRY provider), so it is no longer a free prefix.
+  for (const prefix of ["my-gateway", "llamacpp", "xiaomi"]) {
     const result = createProviderNodeSchema.safeParse({
       name: "Free Prefix",
       prefix,

@@ -32,7 +32,7 @@
     },
     "amazon-q": {
       "className": "KiroExecutor",
-      "configSource": "kiro",
+      "configSource": "amazon-q",
       "provider": "amazon-q"
     },
     "antigravity": {

@@ -24,6 +24,9 @@ type LogicalCandidate = {
   allowedConnectionIds?: string[];
 };
 
+// Fork: Google retired Claude 4.6 on the Antigravity backend (2026-10-10) and the curated catalog
+// serves Claude 5.5 effort tiers instead (agyModels.ts / antigravityModelAliases.ts). The tests
+// below use the live `claude-sonnet-5-5-high` id wherever upstream used `claude-sonnet-4-6`.
 async function resetStorage() {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -93,7 +96,7 @@ test("credentialed providers expose one logical candidate per visible registry m
     "provider/model candidates must not be duplicated per connection"
   );
   for (const model of [
-    "antigravity/claude-sonnet-4-6",
+    "antigravity/claude-sonnet-5-5-high",
     "antigravity/gemini-3.8-flash-low",
     "antigravity/gemini-3.8-flash-medium",
     "antigravity/gemini-3.8-flash-high",
@@ -117,7 +120,8 @@ test("candidate transparency expands a logical model into per-account rows", asy
   const result = await candidateHandler.getAutoComboCandidates("auto", null);
   const sonnetRows = result.candidates.filter(
     (candidate) =>
-      candidate.provider === "antigravity" && candidate.model === "antigravity/claude-sonnet-4-6"
+      candidate.provider === "antigravity" &&
+      candidate.model === "antigravity/claude-sonnet-5-5-high"
   );
 
   assert.deepEqual(
@@ -142,20 +146,20 @@ test("connection model exclusions narrow only that model's account allowlist", a
   }
 
   const sonnet = candidates.find(
-    (candidate) => candidate.model === "antigravity/claude-sonnet-4-6"
+    (candidate) => candidate.model === "antigravity/claude-sonnet-5-5-high"
   );
-  assert.ok(sonnet, "Claude Sonnet 5 should remain in the candidate pool");
+  assert.ok(sonnet, "Claude Sonnet 5.5 should remain in the candidate pool");
   assert.deepEqual([...(sonnet.allowedConnectionIds ?? [])].sort(), [first.id, second.id].sort());
 });
 
 test("hiding the first registry model does not drop the credentialed provider", async () => {
   await seedConnections();
-  modelsDb.setModelIsHidden("antigravity", "claude-sonnet-4-6", true);
+  modelsDb.setModelIsHidden("antigravity", "claude-sonnet-5-5-high", true);
 
   const combo = await virtualFactory.createVirtualAutoCombo(undefined);
   const modelStrings = antigravityCandidates(combo).map((candidate) => candidate.model);
 
-  assert.equal(modelStrings.includes("antigravity/claude-sonnet-4-6"), false);
+  assert.equal(modelStrings.includes("antigravity/claude-sonnet-5-5-high"), false);
   for (const model of [
     "antigravity/gemini-3.8-flash-low",
     "antigravity/gemini-3.8-flash-medium",

@@ -86,7 +86,8 @@ test("#7623: credentialed provider drops a connection from allowedConnectionIds 
     tokenExpiresAt,
   });
 
-  const lockedModel = "claude-sonnet-4-6";
+  // Fork: Claude 4.6 is retired on the Antigravity backend; the catalog serves the 5.5 tiers.
+  const lockedModel = "claude-sonnet-5-5-high";
   accountFallback.lockModel("antigravity", locked.id, lockedModel, "rate_limited", 60_000);
 
   const combo = await virtualFactory.createVirtualAutoCombo(undefined);

@@ -7,6 +7,12 @@
 // upstream body carries `input`, not `messages`, and the plain-turn cache key must
 // be built from the pivot transcript `translateRequest` reports instead.
 //
+// Fork: OpenCode Go v2 serves DeepSeek on /chat/completions and no longer lists
+// `deepseek-v4-flash` in its static registry (models.dev `opencode-go`, 2026-10-24), so this lane is
+// reached the way the fork reaches any model the registry has never seen: the runtime OpenCode
+// protocol catalog (opencodeCatalog.ts, same payload shape as models.dev) says the id is served
+// over `@ai-sdk/openai`, i.e. /responses. The test seeds that catalog; nothing else is stubbed.
+//
 // Same convention as the sibling file: mock fetch, call the real handleChatCore,
 // assert real behavior — here the observable behavior is the SECOND turn's upstream
 // request body: a client that replays history without `reasoning_content` must
@@ -26,11 +32,27 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const { handleChatCore } = await import("../../open-sse/handlers/chatCore.ts");
 const { clearReasoningCacheAll } = await import("../../open-sse/services/reasoningCache.ts");
 const core = await import("../../src/lib/db/core.ts");
+const opencodeCatalog = await import("../../open-sse/services/opencodeCatalog.ts");
 
 type JsonRecord = Record<string, unknown>;
 
 const PROVIDER = "opencode-go";
 const MODEL = "deepseek-v4-flash";
+
+// models.dev-shaped payload: the provider default is chat completions, this model is Responses.
+const seeded = await opencodeCatalog.refreshOpencodeCatalog({
+  fetchImpl: (async () =>
+    new Response(
+      JSON.stringify({
+        "opencode-go": {
+          npm: "@ai-sdk/openai-compatible",
+          models: { [MODEL]: { provider: { npm: "@ai-sdk/openai" } } },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch,
+});
+assert.equal(seeded.ok, true, "the OpenCode protocol catalog must load the Responses row");
 const REASONING = "The user only wants a greeting, so no tool is needed.";
 const TOOLS = [
   {
@@ -236,6 +258,7 @@ test.after(() => {
   try {
     clearReasoningCacheAll();
   } catch {}
+  opencodeCatalog.resetOpencodeCatalogForTests();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 

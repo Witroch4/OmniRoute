@@ -31,7 +31,10 @@ const formerlyMisclassifiedIds = [
 describe("#17028 SiliconFlow pay-as-you-go model protection", () => {
   it("retains honest release catalog counts and never counts SiliconFlow as statically uncapped", () => {
     const totals = computeFreeModelTotals();
-    assert.equal(totals.modelCount, 471);
+    // Fork: 471 upstream + 7 — the agy rows follow the fork's curated catalog (agyModels.ts): the
+    // 4 retired Gemini 3.1 Pro / Claude 4.6 rows out; Claude Opus/Sonnet 5.5 (3 tiers each), Gemini
+    // 3.1 Flash Image and Gemini 2.5 Pro/Flash/Flash Thinking/Flash Lite in.
+    assert.equal(totals.modelCount, 478);
     assert.equal(totals.poolCount, 34);
     assert.equal(totals.uncappedProviders.includes("siliconflow"), false);
   });

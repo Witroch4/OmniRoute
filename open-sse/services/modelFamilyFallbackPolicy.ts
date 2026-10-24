@@ -24,19 +24,30 @@ type RequestFamilyPolicy = {
 
 /** Only registry-backed effort/mode aliases collapse; snapshots and versions stay distinct. */
 export function isSameModelVersion(current: string, candidate: string, provider: string): boolean {
+  const effortSuffixes = [...STANDARD_REASONING_EFFORTS, ...EXTENDED_REASONING_EFFORTS];
   const registered = new Set(
     getRegistryEntry(provider)?.models.map((model) => model.id.replace(/\./g, "-")) ?? []
   );
+  // Fork: Antigravity effort tiers are REAL upstream ids (`gemini-3.8-flash-high|medium|low`,
+  // `claude-sonnet-5-5-high|medium|low`) with no bare or `-tiered` base model in the registry
+  // (the upstream registry declares `liveCatalogIds: ["gemini-3.8-flash-tiered"]` for this; the
+  // fork refuses that alias). A stem that two or more registered ids carry as an effort suffix
+  // is a registry-declared tier group, so its members are effort siblings of one version.
+  const tierGroupSize = new Map<string, number>();
+  for (const id of registered) {
+    const { baseModel, effort } = splitSyncedEffortSuffix(id, effortSuffixes);
+    if (effort) tierGroupSize.set(baseModel, (tierGroupSize.get(baseModel) ?? 0) + 1);
+  }
   const version = (model: string) => {
     const modelId = parseModel(model).model || model;
     const declaredBase = getRegisteredProviderEffortBaseModelId(provider, modelId);
     if (declaredBase) return declaredBase.replace(/\./g, "-");
     const bare = modelId.replace(/\./g, "-");
-    const effort = splitSyncedEffortSuffix(bare, [
-      ...STANDARD_REASONING_EFFORTS,
-      ...EXTENDED_REASONING_EFFORTS,
-    ]);
+    const effort = splitSyncedEffortSuffix(bare, effortSuffixes);
     if (effort.effort && registered.has(effort.baseModel)) return effort.baseModel;
+    if (effort.effort && registered.has(bare) && (tierGroupSize.get(effort.baseModel) ?? 0) > 1) {
+      return effort.baseModel;
+    }
     const modeBase = bare.replace(/-(thinking|tiered)$/, "");
     return registered.has(modeBase) ? modeBase : bare;
   };

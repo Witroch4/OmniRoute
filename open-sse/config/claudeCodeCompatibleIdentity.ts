@@ -15,7 +15,15 @@ export const CLAUDE_CODE_COMPATIBLE_USER_AGENT = getClaudeCodeUserAgent("sdk-cli
 export { getClaudeCodeUserAgent };
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_PACKAGE_VERSION = CLAUDE_CODE_SDK_PACKAGE_VERSION;
 export const CLAUDE_CODE_COMPATIBLE_STAINLESS_RUNTIME_VERSION = CLAUDE_CODE_RUNTIME_VERSION;
-const CONTEXT_1M_NATIVE_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5"];
+// Fork: Claude Haiku 5.5 (1M context, registered in the claude/anthropic catalogs) is served at 1M
+// without the `context-1m` beta — prompts over 300K went through OM with no beta header — so it is
+// native like Opus 5.5 and Fable 5.1, not a beta-gated Sonnet.
+const CONTEXT_1M_NATIVE_MODELS = [
+  "claude-fable-5-1",
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-haiku-5-5",
+];
 
 export function modelHasNativeContext1m(model: string | null | undefined): boolean {
   const normalizedModel = String(model || "")

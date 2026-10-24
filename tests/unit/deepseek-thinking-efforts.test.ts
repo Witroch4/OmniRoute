@@ -29,11 +29,20 @@ test.after(() => {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
+// Fork: OpenCode Go v2 (models.dev `opencode-go` section, 2026-10-24) serves only `deepseek-v4-pro`
+// and `deepseek-v4.1-flash` (both over /chat/completions); `deepseek-v4-flash` and its vision-exp
+// sibling are Zen-only/deprecated there (opencode-go-v2-routing.test.ts asserts the retirement). The V4
+// effort-tier catalog tests therefore cover Flash on the native DeepSeek API only.
+const V4_MODELS_BY_PROVIDER: Record<string, string[]> = {
+  deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"],
+  "opencode-go": ["deepseek-v4-pro"],
+};
+
 test("DeepSeek registries declare none/low/high/max on both V4 models", () => {
   const expectedEfforts = ["none", "low", "high", "max"];
-  for (const providerId of ["deepseek", "opencode-go"]) {
+  for (const [providerId, v4Models] of Object.entries(V4_MODELS_BY_PROVIDER)) {
     const models = new Map((REGISTRY[providerId]?.models || []).map((model) => [model.id, model]));
-    for (const modelId of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+    for (const modelId of v4Models) {
       assert.deepEqual(models.get(modelId)?.supportedThinkingEfforts, expectedEfforts);
       for (const effort of expectedEfforts) {
         assert.equal(
@@ -91,7 +100,7 @@ test("OpenCode Go catalog derives the declared V4 effort aliases from base model
   const models = new Map(body.data.map((model) => [model.id, model]));
   const expectedEfforts = ["none", "low", "high", "max"];
 
-  for (const modelId of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+  for (const modelId of V4_MODELS_BY_PROVIDER["opencode-go"]) {
     const baseId = `opencode-go/${modelId}`;
     assert.deepEqual(models.get(baseId)?.capabilities?.effort_tiers, expectedEfforts);
     for (const effort of expectedEfforts) {
@@ -213,7 +222,7 @@ test("hardcoded DeepSeek effort suffixes resolve through the static registry", a
 });
 
 test("OpenCode Go V4 suffixes resolve from base-model effort metadata", async () => {
-  for (const modelId of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+  for (const modelId of V4_MODELS_BY_PROVIDER["opencode-go"]) {
     for (const effort of ["none", "low", "high", "max"]) {
       const info = await getModelInfo(`opencode-go/${modelId}-${effort}`);
       assert.equal(info.provider, "opencode-go");
