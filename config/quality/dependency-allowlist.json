@@ -21,6 +21,7 @@
     "@swc/helpers",
     "@tailwindcss/postcss",
     "@tensorflow/tfjs",
+    "@testing-library/dom",
     "@testing-library/jest-dom",
     "@testing-library/react",
     "@toon-format/toon",
