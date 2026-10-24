@@ -126,12 +126,38 @@ type GeminiToolNameOptions = {
 // that invalid alternation through. Merge adjacent same-role entries by concatenating
 // their parts, the same normalization the Kiro and Claude request paths already apply
 // (9router#2191).
-export function mergeConsecutiveSameRoleContents(contents: GeminiContent[]): GeminiContent[] {
+function isFunctionResponsePart(part: unknown): boolean {
+  return !!part && typeof part === "object" && "functionResponse" in (part as object);
+}
+
+/**
+ * Where a merged turn's functionResponse parts go, by called model:
+ * - Claude (served through Antigravity) requires tool results BEFORE any text in
+ *   the same user turn (upstream #17256);
+ * - Gemini 4 rejects a functionResponse followed by text (upstream #16642,
+ *   9router#4802);
+ * - everything else keeps history order, which is what this merge always did.
+ */
+function orderMergedParts(parts: GeminiContent["parts"], model: string): GeminiContent["parts"] {
+  const id = model.toLowerCase();
+  const isClaude = id.includes("claude");
+  const isGemini4 = /(^|\/)gemini-4/.test(id);
+  if (!isClaude && !isGemini4) return parts;
+  const responses = parts.filter(isFunctionResponsePart);
+  if (responses.length === 0) return parts;
+  const others = parts.filter((part) => !isFunctionResponsePart(part));
+  return isClaude ? [...responses, ...others] : [...others, ...responses];
+}
+
+export function mergeConsecutiveSameRoleContents(
+  contents: GeminiContent[],
+  model = ""
+): GeminiContent[] {
   const merged: GeminiContent[] = [];
   for (const entry of contents) {
     const last = merged[merged.length - 1];
     if (last && last.role === entry.role) {
-      last.parts.push(...entry.parts);
+      last.parts = orderMergedParts([...last.parts, ...entry.parts], model);
     } else {
       // Shallow-copy the entry and its `parts` array so a later same-role merge
       // (`last.parts.push(...)`) never mutates the caller's input objects.
@@ -520,7 +546,7 @@ function openaiToGeminiBase(
   }
 
   // Collapse any consecutive same-role contents Gemini would reject (9router#2191).
-  result.contents = mergeConsecutiveSameRoleContents(result.contents ?? []);
+  result.contents = mergeConsecutiveSameRoleContents(result.contents ?? [], model);
 
   // Convert tools
   const bodyTools = body.tools as Array<Record<string, unknown>> | undefined;
