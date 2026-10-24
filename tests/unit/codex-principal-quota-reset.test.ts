@@ -290,7 +290,12 @@ test("a qualified wildcard cannot claim an unrelated unprefixed model's provider
   assert.equal(status.weeklyResetAtIso, nextReset);
 });
 
-test("unchanged percentage with a moved expiry is persisted without erasing prior spend", async () => {
+test("unchanged percentage with a moved expiry is persisted without erasing prior spend", async (t) => {
+  // setQuotaCache stamps the snapshot and the reset-event observation with the wall clock.
+  // The scenario is an expiry moved while the 2026-10-20 window is still running, so the
+  // observation must happen at the fixture's `now`: observed after 2026-10-20 the same move
+  // is (correctly) a window roll that starts the budget at the old expiry.
+  t.mock.timers.enable({ apis: ["Date"], now });
   quotaCache.setQuotaCache(principalId, "codex", {
     session: { used: 10, total: 100, resetAt: nextReset },
   });
@@ -305,7 +310,10 @@ test("unchanged percentage with a moved expiry is persisted without erasing prio
     )
     .get(principalId);
   assert.equal(row?.next_reset_at, adjusted);
-  const status = await limits.getApiKeyUsageLimitStatus({ id: "jean", allowedModels: ["codex/*"] });
+  const status = await limits.getApiKeyUsageLimitStatus(
+    { id: "jean", allowedModels: ["codex/*"] },
+    { now: () => now }
+  );
   assert.equal(status.weeklyWindowStartIso, start);
 });
 
