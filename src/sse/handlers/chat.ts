@@ -21,6 +21,10 @@ import { getModelInfo, getComboForModel } from "../services/model";
 import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/services/model.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
+import {
+  findRetiredAntigravityModel,
+  retiredAntigravityModelMessage,
+} from "@omniroute/open-sse/config/antigravityRetiredModels.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { isSelfInflictedUpstreamTimeout } from "@omniroute/open-sse/handlers/chatCore/cooldownClassification.ts";
 import { buildCodexExhaustedStreamBody } from "@omniroute/open-sse/handlers/chatCore/codexFailover.ts";
@@ -1094,6 +1098,22 @@ async function handleSingleModelChat(
     extendedContext,
     apiFormat,
   } = resolved;
+
+  // Retired Antigravity models (Gemini 3.5/3.6/3.7 Flash, 3.1 Pro, ...): refuse here, before
+  // credential selection, instead of forwarding them. `passthroughModels` would send them to
+  // Google, where 3.5 answers a fixed notice as HTTP 200 and the rest answer 404 — which reads
+  // as an account fault and arms the per-model lockout. Sitting in handleSingleModelChat (not in
+  // the pre-call guardrails) means a combo member is refused per target and the combo moves on.
+  const retiredModel = findRetiredAntigravityModel(resolvedProvider, model);
+  if (retiredModel) {
+    log.warn("RETIRED_MODEL", `Refusing ${resolvedProvider}/${model}: ${retiredModel.family}`, {
+      replacement: retiredModel.replacement,
+    });
+    return errorResponse(
+      HTTP_STATUS.NOT_FOUND,
+      retiredAntigravityModelMessage(String(resolvedProvider), String(model), retiredModel)
+    );
+  }
 
   // Snapshot the client's requested model BEFORE the budget-redirect mutation below
   // can overwrite body.model with the served model (see the HAZARD comment further
