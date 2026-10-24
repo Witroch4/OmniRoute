@@ -368,7 +368,7 @@ test("Antigravity -> OpenAI preserves the required array on Draft 2020-12 tool s
   assert.deepEqual(params.required, ["path", "contents"]);
   // Types are still lowered and Draft 2020-12 meta keywords are stripped.
   assert.equal(params.type, "object");
-  assert.equal(params.properties.path.type, "string");
+  assert.equal((params.properties as Record<string, { type?: unknown }>).path.type, "string");
   assert.equal(params.$schema, undefined);
   assert.equal(params.$defs, undefined);
   assert.equal(params.additionalProperties, undefined);

@@ -50,7 +50,8 @@ test("SSE-collect helpers are callable and tolerate empty/garbage input", async 
 test("processAntigravitySSEPayload extracts cachedContentTokenCount into usage", async () => {
   const { processAntigravitySSEPayload } =
     await import("../../open-sse/executors/antigravity/sseCollect.ts");
-  const collected = { textContent: "", toolCalls: [], usage: null };
+  const collected: import("../../open-sse/executors/antigravity/sseCollect.ts").AntigravityCollectedStream =
+    { textContent: "", finishReason: "", toolCalls: [], usage: null, remainingCredits: null };
   const payload = JSON.stringify({
     response: {
       candidates: [{ content: { parts: [{ text: "hello" }] } }],
@@ -65,5 +66,9 @@ test("processAntigravitySSEPayload extracts cachedContentTokenCount into usage",
   processAntigravitySSEPayload(payload, collected);
   assert.equal(collected.usage?.prompt_tokens, 1000);
   assert.equal(collected.usage?.completion_tokens, 50);
-  assert.equal(collected.usage?.prompt_tokens_details?.cached_tokens, 800);
+  assert.equal(
+    (collected.usage?.prompt_tokens_details as { cached_tokens?: number } | undefined)
+      ?.cached_tokens,
+    800
+  );
 });
