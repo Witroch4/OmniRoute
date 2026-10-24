@@ -15,10 +15,7 @@ vi.mock("react-markdown", () => ({
   ),
 }));
 
-function setInputValue(
-  el: HTMLTextAreaElement | HTMLInputElement,
-  value: string,
-): void {
+function setInputValue(el: HTMLTextAreaElement | HTMLInputElement, value: string): void {
   const nativeSetter =
     el instanceof HTMLTextAreaElement
       ? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set
@@ -28,12 +25,10 @@ function setInputValue(
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-const { DEFAULT_PARAMS } = await import(
-  "../../../src/app/(dashboard)/dashboard/playground/components/ParamSliders"
-);
-const { default: BuildTab } = await import(
-  "../../../src/app/(dashboard)/dashboard/playground/components/tabs/BuildTab"
-);
+const { DEFAULT_PARAMS } =
+  await import("../../../src/app/(dashboard)/dashboard/playground/components/ParamSliders");
+const { default: BuildTab } =
+  await import("../../../src/app/(dashboard)/dashboard/playground/components/tabs/BuildTab");
 
 const BASE_CONFIG = {
   endpoint: "chat.completions" as const,
@@ -64,6 +59,52 @@ function renderBuildTab(config = BASE_CONFIG): HTMLDivElement {
   return el;
 }
 
+// ── BuildWizard navigation helpers ──────────────────────────────────────────
+//
+// BuildTab renders behind a 3-step wizard (build/BuildWizard.tsx):
+//   step 1 — pick a mode (Tools / JSON / Both)
+//   step 2 — configure tools and/or the JSON schema, depending on the mode
+//   step 3 — run button + toolbar badges + prompt textarea
+//
+// next-intl is mocked to echo keys, so buttons are located by their
+// playground.build.* key (nextButton, modeJsonTitle, modeBothTitle, runButton).
+
+type BuildMode = "tools" | "json" | "both";
+
+function findButton(el: HTMLDivElement, text: string): HTMLButtonElement {
+  const btn = Array.from(el.querySelectorAll("button")).find((b) => b.textContent?.includes(text));
+  expect(btn, `button containing "${text}"`).toBeDefined();
+  return btn as HTMLButtonElement;
+}
+
+function clickNext(el: HTMLDivElement): void {
+  const nextBtn = findButton(el, "nextButton");
+  act(() => {
+    nextBtn.click();
+  });
+}
+
+function selectMode(el: HTMLDivElement, mode: BuildMode): void {
+  // Step 1 starts on "tools"; only click a card when another mode is needed.
+  if (mode === "tools") return;
+  const card = findButton(el, mode === "json" ? "modeJsonTitle" : "modeBothTitle");
+  act(() => {
+    card.click();
+  });
+}
+
+/** Drive the wizard from step 1 to step 2, selecting `mode` along the way. */
+function goToStep2(el: HTMLDivElement, mode: BuildMode = "tools"): void {
+  selectMode(el, mode);
+  clickNext(el);
+}
+
+/** Drive the wizard from step 1 to step 3 (run screen). */
+function goToStep3(el: HTMLDivElement, mode: BuildMode = "tools"): void {
+  goToStep2(el, mode);
+  clickNext(el);
+}
+
 afterEach(() => {
   for (const { root, el } of containers) {
     act(() => root.unmount());
@@ -74,40 +115,55 @@ afterEach(() => {
 });
 
 describe("BuildTab", () => {
+  it("starts on the mode picker (step 1)", () => {
+    const el = renderBuildTab();
+    expect(el.textContent).toContain("step1Title");
+    expect(el.textContent).toContain("modeToolsTitle");
+    expect(el.textContent).toContain("modeJsonTitle");
+    expect(el.textContent).toContain("modeBothTitle");
+  });
+
   it("renders Run button", () => {
     const el = renderBuildTab();
-    const runBtn = el.querySelector("[class*='bg-primary']");
-    expect(runBtn?.textContent).toContain("runLabel");
+    goToStep3(el);
+    findButton(el, "runButton");
   });
 
   it("renders Function calling section", () => {
     const el = renderBuildTab();
-    expect(el.textContent).toContain("Function calling");
+    goToStep2(el, "tools");
+    expect(el.textContent).toContain("toolsLabel");
     expect(el.textContent).toContain("Add tool");
+    expect(el.textContent).not.toContain("structuredOutputLabel");
   });
 
   it("renders Structured output section", () => {
     const el = renderBuildTab();
-    expect(el.textContent).toContain("Structured output");
+    goToStep2(el, "json");
+    expect(el.textContent).toContain("structuredOutputLabel");
     expect(el.textContent).toContain("JSON mode");
+    expect(el.textContent).not.toContain("toolsLabel");
   });
 
   it("adds a tool and shows it in function calling UI", async () => {
     const el = renderBuildTab();
+    goToStep2(el, "tools");
 
-    // Find add tool form inputs in the right panel
+    // Find add tool form inputs in the tools panel
     const allInputs = el.querySelectorAll("input[type='text']") as NodeListOf<HTMLInputElement>;
-    // The first or second input should be the function name
+    // The first input is the function name
     const nameInput = allInputs[0];
     act(() => setInputValue(nameInput, "search_web"));
 
     const addBtns = el.querySelectorAll("button");
     const addToolBtn = Array.from(addBtns).find(
-      (b) => b.textContent?.trim() === "+ Add tool",
+      (b) => b.textContent?.trim() === "+ Add tool"
     ) as HTMLButtonElement;
     expect(addToolBtn).not.toBeNull();
 
-    await act(async () => { addToolBtn.click(); });
+    await act(async () => {
+      addToolBtn.click();
+    });
 
     expect(el.textContent).toContain("search_web");
     expect(el.textContent).toContain("Tools (1)");
@@ -115,6 +171,7 @@ describe("BuildTab", () => {
 
   it("shows validation error for invalid JSON in tool params", async () => {
     const el = renderBuildTab();
+    goToStep2(el, "tools");
 
     const allInputs = el.querySelectorAll("input[type='text']") as NodeListOf<HTMLInputElement>;
     act(() => setInputValue(allInputs[0], "bad_tool"));
@@ -122,29 +179,34 @@ describe("BuildTab", () => {
     // The parameters textarea is in the Add tool form section — it has default valid JSON.
     // We need to find the textarea labeled "JSON schema for parameters" in the add form.
     const paramsTextareas = Array.from(el.querySelectorAll("textarea")).filter(
-      (t) => t.getAttribute("aria-label") === "JSON schema for parameters",
+      (t) => t.getAttribute("aria-label") === "JSON schema for parameters"
     );
-    // The last one is in the Add tool form (the first may be the message prompt textarea)
+    // The last one is in the Add tool form
     const paramsTextarea = paramsTextareas[paramsTextareas.length - 1] as HTMLTextAreaElement;
     act(() => setInputValue(paramsTextarea, "NOT JSON {{{"));
 
     const addBtns = el.querySelectorAll("button");
     const addToolBtn = Array.from(addBtns).find(
-      (b) => b.textContent?.trim() === "+ Add tool",
+      (b) => b.textContent?.trim() === "+ Add tool"
     ) as HTMLButtonElement;
 
-    await act(async () => { addToolBtn.click(); });
+    await act(async () => {
+      addToolBtn.click();
+    });
 
     expect(el.textContent).toContain("valid JSON");
   });
 
   it("enables JSON mode toggle and shows schema editor", async () => {
     const el = renderBuildTab();
+    goToStep2(el, "json");
 
     const toggle = el.querySelector("[role='switch']") as HTMLButtonElement;
     expect(toggle).not.toBeNull();
 
-    await act(async () => { toggle.click(); });
+    await act(async () => {
+      toggle.click();
+    });
 
     // JSON mode should be enabled
     expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -153,17 +215,22 @@ describe("BuildTab", () => {
 
   it("shows tool badge in toolbar when tools are added", async () => {
     const el = renderBuildTab();
+    goToStep2(el, "tools");
 
     const allInputs = el.querySelectorAll("input[type='text']") as NodeListOf<HTMLInputElement>;
     act(() => setInputValue(allInputs[0], "my_tool"));
 
     const addBtns = el.querySelectorAll("button");
     const addToolBtn = Array.from(addBtns).find(
-      (b) => b.textContent?.trim() === "+ Add tool",
+      (b) => b.textContent?.trim() === "+ Add tool"
     ) as HTMLButtonElement;
-    await act(async () => { addToolBtn.click(); });
+    await act(async () => {
+      addToolBtn.click();
+    });
 
-    // Badge "1 tool" should appear in toolbar
+    clickNext(el); // step 2 -> step 3
+
+    // Badge "1 tool" should appear in the step-3 toolbar
     expect(el.textContent).toContain("1 tool");
   });
 
@@ -176,33 +243,40 @@ describe("BuildTab", () => {
             JSON.stringify({
               choices: [{ message: { content: "Result", role: "assistant" } }],
             }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-        ),
-      ) as typeof fetch,
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+        )
+      ) as typeof fetch
     );
 
     const el = renderBuildTab();
+    goToStep2(el, "tools");
 
     // Add a tool
     const allInputs = el.querySelectorAll("input[type='text']") as NodeListOf<HTMLInputElement>;
     act(() => setInputValue(allInputs[0], "tool_one"));
     const addBtns = el.querySelectorAll("button");
     const addToolBtn = Array.from(addBtns).find(
-      (b) => b.textContent?.trim() === "+ Add tool",
+      (b) => b.textContent?.trim() === "+ Add tool"
     ) as HTMLButtonElement;
-    await act(async () => { addToolBtn.click(); });
+    await act(async () => {
+      addToolBtn.click();
+    });
 
-    // Type a prompt
-    const promptTextarea = el.querySelector("textarea[placeholder*='message']") as HTMLTextAreaElement;
+    clickNext(el); // step 2 -> step 3
+
+    // Type a prompt (placeholder is the promptPlaceholder key via mocked t())
+    const promptTextarea = el.querySelector(
+      "textarea[placeholder='promptPlaceholder']"
+    ) as HTMLTextAreaElement;
+    expect(promptTextarea).not.toBeNull();
     act(() => setInputValue(promptTextarea, "Run this tool"));
 
-    // Click Run (label is "runLabel" via mocked t())
-    const runBtns = el.querySelectorAll("button");
-    const runBtn = Array.from(runBtns).find(
-      (b) => b.textContent?.includes("runLabel") && !b.textContent?.includes("clearAll"),
-    ) as HTMLButtonElement;
-    await act(async () => { runBtn.click(); });
+    // Click Run (label is the runButton key via mocked t())
+    const runBtn = findButton(el, "runButton");
+    await act(async () => {
+      runBtn.click();
+    });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -210,7 +284,10 @@ describe("BuildTab", () => {
 
     // fetch should be called
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
-    const [, opts] = (vi.mocked(fetch) as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    const [, opts] = (vi.mocked(fetch) as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
     const body = JSON.parse(opts.body as string) as Record<string, unknown>;
     expect(body["tools"]).toBeDefined();
     expect(Array.isArray(body["tools"])).toBe(true);
@@ -218,8 +295,16 @@ describe("BuildTab", () => {
 
   it("shows JSON mode badge in toolbar when JSON mode is enabled", async () => {
     const el = renderBuildTab();
+    goToStep2(el, "json");
     const toggle = el.querySelector("[role='switch']") as HTMLButtonElement;
-    await act(async () => { toggle.click(); });
+    await act(async () => {
+      toggle.click();
+    });
+
+    clickNext(el); // step 2 -> step 3
+
+    // Step 3 has no schema editor, so this "JSON mode" can only be the toolbar badge.
+    expect(el.querySelector("[role='switch']")).toBeNull();
     expect(el.textContent).toContain("JSON mode");
   });
 });
