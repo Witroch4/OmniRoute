@@ -698,7 +698,10 @@ function wrapInCloudCodeEnvelope(model, cloudCodeRequest, credentials = null) {
       sessionId: getAntigravitySessionId(credentials),
       contents: cloudCodeRequest.contents,
       systemInstruction: cloudCodeRequest.systemInstruction,
-      generationConfig: applyAntigravityGenerationDefaults(cloudCodeRequest.generationConfig),
+      generationConfig: applyAntigravityGenerationDefaults(
+        cloudCodeRequest.generationConfig,
+        cleanModel
+      ),
       tools: cloudCodeRequest.tools,
       safetySettings: cloudCodeRequest.safetySettings,
     },

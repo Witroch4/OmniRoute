@@ -8,6 +8,11 @@ import {
   type ProviderCredentials,
 } from "./base.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
+import {
+  fitThinkingBudgetIntoOutput,
+  reconcileThinkingBudget,
+  usesFittedThinkingBudget,
+} from "../config/thinkingBudgetFit.ts";
 import { buildAntigravityUpstreamError } from "./antigravityUpstreamError.ts";
 import { maybeTriggerReactiveModelSync } from "@/lib/providerModels/reactiveModelSync.ts";
 import {
@@ -394,7 +399,8 @@ function getRequestTargetModel(body: Record<string, unknown>): string {
 
 function applyAntigravityGenerationDefaults(
   request: Record<string, unknown>,
-  maxOutputTokensCeiling: number = DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS
+  maxOutputTokensCeiling: number = DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS,
+  model: string | null = null
 ): void {
   const generationConfig =
     request.generationConfig && typeof request.generationConfig === "object"
@@ -408,19 +414,10 @@ function applyAntigravityGenerationDefaults(
     generationConfig.topP = 1.0;
   }
 
-  const thinkingConfig =
-    generationConfig.thinkingConfig && typeof generationConfig.thinkingConfig === "object"
-      ? (generationConfig.thinkingConfig as Record<string, unknown>)
-      : null;
-  const thinkingBudget = Number(thinkingConfig?.thinkingBudget);
-  const maxOutputTokens = Number(generationConfig.maxOutputTokens);
-  if (
-    Number.isFinite(thinkingBudget) &&
-    thinkingBudget > 0 &&
-    (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= thinkingBudget)
-  ) {
-    generationConfig.maxOutputTokens = Math.floor(thinkingBudget) + 1;
-  }
+  // Thinking budget must stay below maxOutputTokens (which includes thoughts). For
+  // Gemini it also keeps room for the answer (thinkingBudgetFit.ts); Claude and
+  // model-less callers keep the legacy budget + 1.
+  reconcileThinkingBudget(generationConfig, model);
 
   // Final cap (after the thinkingBudget bump may have raised the value):
   // oversized envelopes (GitHub Copilot Agent commonly sends 32K–65K) trigger
@@ -437,6 +434,8 @@ function applyAntigravityGenerationDefaults(
   if (Number.isFinite(finalMax) && finalMax > ceiling) {
     generationConfig.maxOutputTokens = ceiling;
   }
+  // The ceiling may have pulled a Gemini cap back under the budget: refit.
+  if (usesFittedThinkingBudget(model)) fitThinkingBudgetIntoOutput(generationConfig, ceiling);
 
   request.generationConfig = generationConfig;
 }
@@ -746,7 +745,8 @@ export class AntigravityExecutor extends BaseExecutor {
 
     applyAntigravityGenerationDefaults(
       transformedRequest,
-      resolveAntigravityMaxOutputTokens(upstreamModel)
+      resolveAntigravityMaxOutputTokens(upstreamModel),
+      upstreamModel
     );
 
     const {

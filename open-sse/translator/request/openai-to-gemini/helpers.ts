@@ -5,6 +5,8 @@
 // the host imports them back internally (these were module-private — no public API
 // change). The GeminiGenerationConfig shape lives here with its only mutator.
 
+import { reconcileThinkingBudget } from "../../../config/thinkingBudgetFit.ts";
+
 export type GeminiGenerationConfig = {
   temperature?: unknown;
   topP?: unknown;
@@ -77,7 +79,10 @@ export function deepCleanUndefined(value: unknown, depth = 0): void {
   }
 }
 
-export function applyAntigravityGenerationDefaults(generationConfig: GeminiGenerationConfig) {
+export function applyAntigravityGenerationDefaults(
+  generationConfig: GeminiGenerationConfig,
+  model: string | null = null
+) {
   const config = { ...generationConfig };
   if (config.topK === undefined) {
     config.topK = 40;
@@ -86,15 +91,13 @@ export function applyAntigravityGenerationDefaults(generationConfig: GeminiGener
     config.topP = 1;
   }
 
-  const thinkingBudget = Number(config.thinkingConfig?.thinkingBudget);
-  const maxOutputTokens = Number(config.maxOutputTokens);
-  if (
-    Number.isFinite(thinkingBudget) &&
-    thinkingBudget > 0 &&
-    (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= thinkingBudget)
-  ) {
-    config.maxOutputTokens = Math.floor(thinkingBudget) + 1;
+  // Thinking budget must stay below maxOutputTokens (which includes thoughts). For
+  // Gemini it also keeps room for the answer (thinkingBudgetFit.ts); Claude and
+  // model-less callers keep the legacy budget + 1.
+  if (config.thinkingConfig && typeof config.thinkingConfig === "object") {
+    config.thinkingConfig = { ...config.thinkingConfig };
   }
+  reconcileThinkingBudget(config as Record<string, unknown>, model);
 
   return config;
 }
