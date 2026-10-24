@@ -61,10 +61,18 @@ test("CircuitBreaker: rejects requests when open", async () => {
   );
 });
 
-test("CircuitBreaker: transitions to HALF_OPEN after reset timeout", async () => {
+// The breaker measures its cooldown with Date.now(). These two cases pin that clock with
+// mock timers and advance it explicitly: real sleeps against a few-ms resetTimeout made the
+// OPEN/HALF_OPEN assertions depend on event-loop latency and flake under parallel load.
+const CLOCK_START = Date.parse("2026-01-01T00:00:00.000Z");
+
+test("CircuitBreaker: transitions to HALF_OPEN after reset timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: CLOCK_START });
+  const transitions: string[] = [];
   const cb = new CircuitBreaker(`test-halfopen${cbSuffix}`, {
     failureThreshold: 1,
     resetTimeout: 10,
+    onStateChange: (_name, from, to) => transitions.push(`${from}->${to}`),
   });
 
   try {
@@ -75,19 +83,28 @@ test("CircuitBreaker: transitions to HALF_OPEN after reset timeout", async () =>
 
   assert.equal(cb.state, STATE.OPEN);
 
-  // Wait for reset timeout
-  await new Promise((r) => setTimeout(r, 15));
+  // 1ms before the reset timeout the breaker still refuses.
+  t.mock.timers.tick(9);
+  await assert.rejects(
+    () => cb.execute(async () => "too early"),
+    (err) => err instanceof CircuitBreakerOpenError
+  );
+  assert.equal(cb.state, STATE.OPEN);
 
-  // Next call should transition to HALF_OPEN
+  // At the reset timeout the next call is let through as the HALF_OPEN probe.
+  t.mock.timers.tick(1);
   const result = await cb.execute(async () => "recovered");
   assert.equal(result, "recovered");
   assert.equal(cb.state, STATE.CLOSED);
+  assert.deepEqual(transitions, [
+    `${STATE.CLOSED}->${STATE.OPEN}`,
+    `${STATE.OPEN}->${STATE.HALF_OPEN}`,
+    `${STATE.HALF_OPEN}->${STATE.CLOSED}`,
+  ]);
 });
 
-test("CircuitBreaker: status reads refresh OPEN providers after reset timeout", async () => {
-  // resetTimeout must leave real headroom: with 10ms, any event-loop contention
-  // between execute() and the first getStatus() already lazily refreshes the
-  // state to HALF_OPEN and the OPEN assert flakes (seen on CI shard runners).
+test("CircuitBreaker: status reads refresh OPEN providers after reset timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: CLOCK_START });
   const cb = new CircuitBreaker(`test-status-refresh${cbSuffix}`, {
     failureThreshold: 1,
     resetTimeout: 250,
@@ -100,8 +117,10 @@ test("CircuitBreaker: status reads refresh OPEN providers after reset timeout", 
   } catch {}
 
   assert.equal(cb.getStatus().state, STATE.OPEN);
+  t.mock.timers.tick(249);
+  assert.equal(cb.getStatus().state, STATE.OPEN, "still OPEN 1ms before the reset timeout");
 
-  await new Promise((r) => setTimeout(r, 300));
+  t.mock.timers.tick(1);
 
   assert.equal(cb.getStatus().state, STATE.HALF_OPEN);
   assert.equal(cb.canExecute(), true);

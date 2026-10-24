@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -24,7 +24,9 @@ function makeTmpPlugin(name: string, manifest: Record<string, unknown> = {}) {
 }
 
 function cleanup(name: string) {
-  try { db.deletePlugin(name); } catch {}
+  try {
+    db.deletePlugin(name);
+  } catch {}
 }
 
 describe("pluginManager lifecycle", () => {
@@ -35,9 +37,18 @@ describe("pluginManager lifecycle", () => {
     // before any lifecycle call touches it — uses the real migration, not an
     // inline CREATE TABLE, so a missing/renumbered migration fails loudly.
     getDbInstance();
-    // Clean up test plugins
+  });
+
+  afterEach(async () => {
+    // activate() spawns a plugin host child process (plugins/loader.ts) that only
+    // deactivate() kills. Deleting the DB row alone left that child running, and it
+    // kept the test process alive after the last test (`npm test` hung without
+    // --test-force-exit). Deactivate whatever a case left loaded, then drop the rows.
     for (const name of testPlugins) {
-      try { db.deletePlugin(name); } catch {}
+      if (mod.pluginManager.getLoaded(name)) await mod.pluginManager.deactivate(name);
+      try {
+        db.deletePlugin(name);
+      } catch {}
     }
     testPlugins.length = 0;
   });

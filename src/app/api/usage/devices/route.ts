@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { getDbInstance } from "@/lib/db/core";
+import { getApiKeyDeviceUsageRows } from "@/lib/db/usageAnalytics";
 import { getTailnetDevicesByIp } from "@/lib/tailnet/tailnetDevices";
 import { priceUsageRows, type UsageCostRow } from "@/lib/usage/apiKeyUsageLimits";
-import { longContextSumColumns } from "@/lib/usage/longContextSql";
 import * as log from "@/sse/utils/logger";
 
 /**
@@ -31,35 +30,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "since/until must be ISO timestamps" }, { status: 400 });
     }
 
-    const rows = getDbInstance()
-      .prepare(
-        `SELECT api_key_id as apiKeyId, MAX(api_key_name) as apiKeyName, client_ip as clientIp,
-                LOWER(provider) as provider, LOWER(model) as model,
-                COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-                COUNT(*) as requests, SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as succeeded,
-                COALESCE(SUM(tokens_input), 0) as promptTokens,
-                COALESCE(SUM(tokens_output), 0) as completionTokens,
-                COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
-                COALESCE(SUM(tokens_cache_creation), 0) as cacheCreationTokens,
-                COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
-                ${longContextSumColumns()},
-                MAX(timestamp) as lastSeen
-           FROM usage_history
-          WHERE timestamp >= @since AND timestamp < @until
-            AND api_key_id IS NOT NULL
-            AND (@apiKeyId IS NULL OR api_key_id = @apiKeyId)
-          GROUP BY api_key_id, client_ip, LOWER(provider), LOWER(model), serviceTier`
-      )
-      .all({ since, until, apiKeyId }) as Array<
-      UsageCostRow & {
-        apiKeyId: string;
-        apiKeyName: string | null;
-        clientIp: string | null;
-        requests: number;
-        succeeded: number;
-        lastSeen: string;
-      }
-    >;
+    const rows = getApiKeyDeviceUsageRows({ since, until, apiKeyId });
 
     const devicesByIp = getTailnetDevicesByIp();
     const groups = new Map<

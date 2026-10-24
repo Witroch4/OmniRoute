@@ -43,6 +43,8 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "apiKeyColumnFallbacks", // db-internal: importado só por db/apiKeys.ts (API_KEY_COLUMN_FALLBACKS — fallbacks de coluna split do apiKeys.ts)
   "apiKeyMinSpendFields", // db-internal: importado só por db/apiKeys.ts (parseApiKeyMinSpendFields/ApiKeyMinSpendGuaranteeFields — helpers de campo de garantia de spend mínimo; mig 123). PRE-EXISTING: módulo já existia na branch antes da Task 6 de model-budget-routing; a entrada no allowlist só nunca tinha sido adicionada (achado + corrigido na revisão da Task 6, fix-round 1, 2026-08-04 — não introduzido por essa task)
   "apiKeyModelBudgetRules", // intentionally-internal: consumido via import direto "@/lib/db/apiKeyModelBudgetRules" fora de db/ por src/lib/usage/modelBudgetRouting.ts (Rule #2). Módulo novo da feature de model-budget-routing (Task 4); entrada adicionada na revisão da Task 6 (fix-round 1, 2026-08-04)
+  "apiKeyModelFamilyMultipliers", // intentionally-internal: consumido via import direto "@/lib/db/apiKeyModelFamilyMultipliers" por src/lib/usage/modelFamilyMultiplier.ts (resolveFamilyMultiplier, único leitor autorizado) e src/app/api/keys/[id]/family-multipliers/route.ts (Rule #2). Módulo do fork (multiplicador de custo por família de modelo); a entrada faltava desde que o módulo entrou (2026-10-24)
+  "apiKeyRenewalCycleFields", // db-internal: importado só por db/apiKeys.ts (parseApiKeyRenewalCycleFields/resolveRenewalCycleExpiry — helpers de campo do ciclo de renovação split do apiKeys.ts, mesmo padrão de apiKeyMinSpendFields/apiKeyUsageLimitFields). Módulo do fork; a entrada faltava (2026-10-24)
   "apiKeyUsageLimitFields", // db-internal: importado só por db/apiKeys.ts (helpers de campo de limite de uso split do apiKeys.ts; mig 101)
   "caseMapping", // db-internal: importado só por db/core.ts (toSnakeCase/toCamelCase/objToSnake — column-mapping snake↔camel split do core.ts, #4947)
   "cleanup", // intentionally-internal: 3 API routes (purge-quota-snapshots, purge-call-logs, purge-detailed-logs)
@@ -67,6 +69,7 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "providerNodeSelect", // db-internal: importado só por db/providers.ts (selectProviderNodeForConnection — lógica pura de seleção de provider node split do providers.ts, #4421)
   "providerStats", // intentionally-internal: src/app/api/provider-stats/route.ts
   "proxyLatency", // intentionally-internal: imported directly by src/lib/db/proxies.ts (anti-barrel, #6798)
+  "quotaResetReferences", // intentionally-internal: consumido via import direto "@/lib/db/quotaResetReferences" por src/lib/usage/{quotaResetReference,apiKeyUsageLimits,internalUsageCommand}.ts + db/quotaResetEvents.ts (Rule #2). Módulo do fork (referência de reset de cota por provider); a entrada faltava (2026-10-24)
   "recovery", // intentionally-internal: bin/cli/runtime.mjs (import() dinâmico) + tests
   "schemaColumns", // db-internal: importado só por db/core.ts (ensureProviderConnections/UsageHistory/CallLogsColumns + hasColumn/hasTable/getTableColumns — schema-column reconciliation split do core.ts, #4948)
   "secrets", // intentionally-internal: src/instrumentation-node.ts (import() dinâmico na inicialização)

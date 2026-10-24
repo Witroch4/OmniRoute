@@ -5,15 +5,6 @@ export function detectRestrictedEnvironment() {
     return { type: "github-codespaces", canOpenBrowser: false, canUseTray: false };
   }
 
-  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
-    return {
-      type: "wsl",
-      canOpenBrowser: true,
-      canUseTray: false,
-      hint: "Browser opens in Windows host.",
-    };
-  }
-
   if (process.env.GITPOD_WORKSPACE_ID) {
     return { type: "gitpod", canOpenBrowser: false, canUseTray: false };
   }
@@ -24,6 +15,17 @@ export function detectRestrictedEnvironment() {
 
   if (process.env.CI) {
     return { type: "ci", canOpenBrowser: false, canUseTray: false };
+  }
+
+  // Checked after the explicit session markers above: WSL describes the kernel, not who is
+  // at the keyboard. A CI job on a WSL runner must not pop a browser on the Windows host.
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
+    return {
+      type: "wsl",
+      canOpenBrowser: true,
+      canUseTray: false,
+      hint: "Browser opens in Windows host.",
+    };
   }
 
   if (existsSync("/.dockerenv")) {

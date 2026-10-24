@@ -154,3 +154,66 @@ test("an unbound key is not affected, and clearing the list unbinds", async () =
     null
   );
 });
+
+test("per-device usage groups by key x client IP inside [since, until)", async () => {
+  const usageAnalytics = await import("../../src/lib/db/usageAnalytics.ts");
+  const base = Date.parse("2026-10-01T12:00:00.000Z");
+  const at = (minutes: number) => new Date(base + minutes * 60_000).toISOString();
+  const save = (entry: Record<string, unknown>) =>
+    usageHistory.saveRequestUsage({
+      provider: "Claude",
+      model: "Claude-Sonnet-5-5",
+      apiKeyId: "dev-k1",
+      apiKeyName: "devices key",
+      ...entry,
+    });
+
+  await save({ tokens: { input: 10, output: 5 }, clientIp: "100.64.0.14", timestamp: at(0) });
+  await save({
+    tokens: { input: 20, output: 7 },
+    clientIp: "100.64.0.14",
+    success: false,
+    timestamp: at(1),
+  });
+  await save({ tokens: { input: 3, output: 1 }, clientIp: "100.64.0.6", timestamp: at(2) });
+  await save({ tokens: { input: 4, output: 2 }, clientIp: null, timestamp: at(3) });
+  await save({ tokens: { input: 99, output: 99 }, clientIp: "100.64.0.14", timestamp: at(60) });
+  await save({
+    apiKeyId: "dev-k2",
+    tokens: { input: 1, output: 1 },
+    clientIp: "100.64.0.14",
+    timestamp: at(4),
+  });
+
+  const rows = usageAnalytics.getApiKeyDeviceUsageRows({
+    since: at(0),
+    until: at(60),
+    apiKeyId: "dev-k1",
+  });
+  const byIp = new Map(rows.map((row) => [row.clientIp, row]));
+  assert.equal(rows.length, 3);
+
+  const marcos = byIp.get("100.64.0.14");
+  assert.ok(marcos);
+  assert.equal(marcos.apiKeyId, "dev-k1");
+  assert.equal(marcos.apiKeyName, "devices key");
+  assert.equal(marcos.provider, "claude");
+  assert.equal(marcos.model, "claude-sonnet-5-5");
+  assert.equal(marcos.serviceTier, "standard");
+  assert.equal(marcos.requests, 2);
+  assert.equal(marcos.succeeded, 1);
+  assert.equal(marcos.promptTokens, 30);
+  assert.equal(marcos.completionTokens, 12);
+  assert.equal(marcos.lcPromptTokens, 0);
+  assert.equal(marcos.lastSeen, at(1));
+
+  assert.equal(byIp.get("100.64.0.6")?.requests, 1);
+  assert.equal(byIp.get(null)?.promptTokens, 4);
+
+  const allKeys = usageAnalytics.getApiKeyDeviceUsageRows({
+    since: at(0),
+    until: at(60),
+    apiKeyId: null,
+  });
+  assert.ok(allKeys.some((row) => row.apiKeyId === "dev-k2"));
+});

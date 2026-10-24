@@ -119,10 +119,22 @@ function createMockRedisClient() {
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
-test("redisQuotaStore: consume calls INCRBYFLOAT + EXPIRE and returns sliding window value", async () => {
-  const { RedisQuotaStore, resetRedisClient } =
+test("redisQuotaStore: consume calls INCRBYFLOAT + EXPIRE and returns sliding window value", async (t) => {
+  const { RedisQuotaStore, getRedisClient, resetRedisClient } =
     await import("../../src/lib/quota/redisQuotaStore.ts");
   resetRedisClient();
+  // consume() lazily creates the module's ioredis singleton against a port nothing listens
+  // on. ioredis keeps reconnecting (a live socket + retry timer) until told to stop, which
+  // kept the test process alive after the last test: `npm test` (no --test-force-exit) hung.
+  // quit() on a client with no queued commands disconnects and cancels the reconnect loop.
+  t.after(async () => {
+    try {
+      await (await getRedisClient("redis://localhost:6399")).quit();
+    } catch {
+      // ioredis not installed — no client was ever created
+    }
+    resetRedisClient();
+  });
 
   const mock = createMockRedisClient();
 

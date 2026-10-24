@@ -6,8 +6,14 @@
 // the shipped JSX structure and grouping logic directly:
 //  1. Grouping still produces one header per distinct provider with the
 //     correct account count ("N account(s)").
-//  2. The per-group card grid starts multi-column (`grid-cols-2`), not
-//     single-column, so cards fill horizontal space sooner.
+//  2. The per-group card grid fills horizontal space by CONTAINER width:
+//     `repeat(auto-fill, minmax(<min>px, 1fr))` with a minimum small enough
+//     that one masonry column fits at least two cards. It started as a
+//     `grid-cols-2 md:grid-cols-3 xl:grid-cols-4` ladder, but Tailwind
+//     breakpoints key off the VIEWPORT, so inside the 2-column masonry below
+//     a wide screen got 4 tracks in half the page and cards were clipped
+//     (fork fix 4695512925, 2026-07-26). The guard keeps #3520's goal (more
+//     than one card per row whenever there is room) without the ladder.
 //  3. Provider groups themselves flow into multiple columns on wide screens
 //     (`columns-*`) instead of an unconditional vertical `flex flex-col`
 //     stack.
@@ -104,12 +110,31 @@ test("QuotaCardGrid (#3520) — outer container flows groups into multiple colum
   assert.notEqual(outerClassName, "flex flex-col gap-6");
 });
 
-test("QuotaCardGrid (#3520) — per-group card grid starts multi-column (grid-cols-2), not single-column", () => {
+test("QuotaCardGrid (#3520) — per-group card grid fills horizontal space by container width", () => {
   const classNames = extractDivClassNames(COMPONENT_PATH);
   const cardGridClassName = classNames.find((c) => /\bgrid\b/.test(c) && /grid-cols-/.test(c));
   assert.ok(cardGridClassName, "expected to find the per-group card grid's className");
-  assert.match(cardGridClassName!, /\bgrid-cols-2\b/);
-  assert.doesNotMatch(cardGridClassName!, /\bgrid-cols-1\b/);
+
+  // Track count must follow the real container width (auto-fill/auto-fit + minmax) ...
+  const track = cardGridClassName!.match(
+    /(?:^|\s)grid-cols-\[repeat\(auto-(?:fill|fit),minmax\((\d+)px,1fr\)\)\](?=\s|$)/
+  );
+  assert.ok(
+    track,
+    `card grid must size tracks by container width (repeat(auto-fill, minmax(Npx, 1fr))), got "${cardGridClassName}"`
+  );
+  // ... never a fixed or viewport-breakpoint column count, which ignores the masonry
+  // column the grid actually lives in and clips cards on wide screens.
+  assert.doesNotMatch(cardGridClassName!, /(?:^|\s)(?:[a-z0-9]+:)*grid-cols-\d+(?=\s|$)/);
+
+  // Two cards plus the gap-3 (12px) gutter must fit in ~600px — roughly one masonry
+  // column at the 2xl breakpoint next to the dashboard sidebar — so a wide screen
+  // still shows several cards per row (#3520), not one.
+  const minCardPx = Number(track![1]);
+  assert.ok(
+    2 * minCardPx + 12 <= 600,
+    `minimum card width ${minCardPx}px is too wide for two cards per masonry column`
+  );
 });
 
 test("QuotaCardGrid (#3520) — early-returns null when there are no connections", () => {

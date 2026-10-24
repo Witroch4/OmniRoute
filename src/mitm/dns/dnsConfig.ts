@@ -30,6 +30,35 @@ const HOSTS_FILE = IS_WIN
   : "/etc/hosts";
 
 /**
+ * The system-touching collaborators of the hosts-file writers. Production always uses the
+ * defaults; tests swap them via `__setDnsConfigDepsForTests` so they exercise the real
+ * add/remove logic against a temp file instead of running `sudo tee -a /etc/hosts`.
+ */
+interface DnsConfigDeps {
+  hostsFile: string;
+  execWithPassword: typeof execFileWithPassword;
+  elevatedPowerShell: typeof runElevatedPowerShell;
+}
+
+let deps: DnsConfigDeps = {
+  hostsFile: HOSTS_FILE,
+  execWithPassword: execFileWithPassword,
+  elevatedPowerShell: runElevatedPowerShell,
+};
+
+/**
+ * Replace the hosts-file path and/or the privileged runners (for tests).
+ * Returns a `restore()` function that puts the previous dependencies back.
+ */
+export function __setDnsConfigDepsForTests(overrides: Partial<DnsConfigDeps>): () => void {
+  const prev = deps;
+  deps = { ...prev, ...overrides };
+  return () => {
+    deps = prev;
+  };
+}
+
+/**
  * Return true if `sudo` is available on PATH. Windows always reports `true`
  * (no sudo concept — UAC handles elevation). Minimal containers without sudo
  * also report `false`, so callers can fall through to the no-elevation path.
@@ -87,7 +116,7 @@ function dnsLines(hostname: string): string[] {
  */
 function readHostsFile(): string {
   try {
-    return fs.readFileSync(HOSTS_FILE, "utf8");
+    return fs.readFileSync(deps.hostsFile, "utf8");
   } catch {
     return "";
   }
@@ -139,16 +168,16 @@ export async function addDNSEntries(hosts: string[], sudoPassword: string): Prom
   if (missingEntries.length === 0) return;
 
   if (IS_WIN) {
-    const psHostsFile = quotePowerShell(HOSTS_FILE);
+    const psHostsFile = quotePowerShell(deps.hostsFile);
     const psEntries = missingEntries.map((e) => quotePowerShell(e)).join(", ");
     const script = "Add-Content -LiteralPath " + psHostsFile + " -Value " + psEntries;
-    await runElevatedPowerShell(script);
+    await deps.elevatedPowerShell(script);
     for (const entry of missingEntries) {
       console.log(`[DNS] Added entry: ${entry}`);
     }
   } else {
     const data = missingEntries.map((e) => `${e}\n`).join("");
-    await execFileWithPassword("sudo", ["-S", "tee", "-a", HOSTS_FILE], sudoPassword, data);
+    await deps.execWithPassword("sudo", ["-S", "tee", "-a", deps.hostsFile], sudoPassword, data);
     for (const entry of missingEntries) {
       console.log(`[DNS] Added entry: ${entry}`);
     }
@@ -172,7 +201,7 @@ fs.writeFileSync(filePath, filtered.join("\\n").replace(/\\n*$/, "\\n"));
 /**
  * Remove /etc/hosts entries for every hostname in `hosts`.
  * Idempotent — silently skips hosts that are not present.
- * Complies with Hard Rule #13: HOSTS_FILE and hostname are passed as argv, not interpolated.
+ * Complies with Hard Rule #13: the hosts-file path and hostname are passed as argv, not interpolated.
  *
  * On Windows, all hostnames are filtered in a single elevated PowerShell
  * invocation so the user gets one UAC prompt instead of one per host.
@@ -184,7 +213,7 @@ export async function removeDNSEntries(hosts: string[], sudoPassword: string): P
   if (presentHosts.length === 0) return;
 
   if (IS_WIN) {
-    const psHostsFile = quotePowerShell(HOSTS_FILE);
+    const psHostsFile = quotePowerShell(deps.hostsFile);
     const psTargets = presentHosts.map((h) => quotePowerShell(h)).join(", ");
     const script =
       "$hostsFile = " +
@@ -198,15 +227,15 @@ export async function removeDNSEntries(hosts: string[], sudoPassword: string): P
       "            -not ($part.Length -ge 2 -and ($targetHosts -contains $part[1]))\n" +
       "          };\n" +
       "          Set-Content -LiteralPath $hostsFile -Value $filtered;\n        ";
-    await runElevatedPowerShell(script);
+    await deps.elevatedPowerShell(script);
     for (const hostname of presentHosts) {
       console.log(`[DNS] Removed entries for ${hostname}`);
     }
   } else {
     for (const hostname of presentHosts) {
-      await execFileWithPassword(
+      await deps.execWithPassword(
         "sudo",
-        ["-S", process.execPath, "-e", REMOVE_HOSTS_ENTRY_SCRIPT, HOSTS_FILE, hostname],
+        ["-S", process.execPath, "-e", REMOVE_HOSTS_ENTRY_SCRIPT, deps.hostsFile, hostname],
         sudoPassword
       );
       console.log(`[DNS] Removed entries for ${hostname}`);
