@@ -1,4 +1,5 @@
 import { generateModels, generateAliasMap, type RegistryModel } from "./providerRegistry.ts";
+import { getOpencodeCatalogFormat } from "../services/opencodeCatalog.ts";
 
 // Provider models - Generated from providerRegistry.js (single source of truth)
 export const PROVIDER_MODELS = generateModels();
@@ -48,6 +49,10 @@ export function findModelName(aliasOrId: string, modelId: string): string {
 }
 
 export function getModelTargetFormat(aliasOrId: string, modelId: string): string | null {
+  // OpenCode Go: the runtime models.dev catalog (what the official CLI reads) decides first, so a
+  // model published after this build still reaches the one protocol it is served on.
+  const catalogFormat = getOpencodeCatalogFormat(aliasOrId, modelId);
+  if (catalogFormat) return catalogFormat === "openai" ? null : catalogFormat;
   const models = PROVIDER_MODELS[aliasOrId];
   const found = models?.find((m) => m.id === modelId);
   if (found?.targetFormat) return found.targetFormat;

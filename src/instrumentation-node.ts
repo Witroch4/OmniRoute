@@ -418,6 +418,21 @@ export async function registerNodejs(): Promise<void> {
       console.warn("[STARTUP] models.dev sync failed to start (non-fatal):", msg);
     }
 
+    // OpenCode Go protocol catalog (models.dev): warm it so a model published after this build
+    // routes to its protocol from the first request. Non-blocking; the static registry decides
+    // until it loads, and a failure keeps it that way.
+    try {
+      const { refreshOpencodeCatalog } =
+        await import("@omniroute/open-sse/services/opencodeCatalog.ts");
+      void refreshOpencodeCatalog().then((result) => {
+        if (result.ok) console.log(`[STARTUP] OpenCode catalog: ${result.models} model protocols`);
+        else console.warn("[STARTUP] OpenCode catalog unavailable (non-fatal):", result.error);
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[STARTUP] OpenCode catalog failed to start (non-fatal):", msg);
+    }
+
     // Context-window self-correction (5004): periodically reconcile provider-declared
     // windows (from /models discovery) into auto:discovery overrides. Reuses already-synced
     // data (no new fetch); disable via CONTEXT_WINDOW_RECONCILE_INTERVAL=0. Never fatal.

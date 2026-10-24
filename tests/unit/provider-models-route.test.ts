@@ -817,9 +817,10 @@ test("provider models route falls back to cached models when a refresh fails", a
   assert.equal(body.source, "cache");
   assert.match(body.warning, /cached catalog/i);
   assert.deepEqual(body.models, [{ id: "cached-go", name: "Cached Go", source: "imported" }]);
-  // Discovery tries the registry modelsUrl (OpenCode Go v2: /inference/go/v1/models), then the T39
-  // candidates `${base}/v1/models` and `${base}/models`; all 503 here, so 3 attempts, then the cache.
-  assert.equal(fetchCalls, 3);
+  // An import first refreshes the Go protocol catalog (models.dev), then discovery tries the registry
+  // modelsUrl (OpenCode Go v2: /inference/go/v1/models) and the T39 candidates `${base}/v1/models` and
+  // `${base}/models`; all 503 here, so 4 attempts, then the cache.
+  assert.equal(fetchCalls, 4);
 });
 
 test("provider models route clears cached discovery when a refresh returns no remote models", async () => {

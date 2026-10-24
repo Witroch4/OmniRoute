@@ -100,6 +100,7 @@ import {
   type ProviderModelsConfigEntry,
   PROVIDER_MODELS_CONFIG,
 } from "./discovery/providerModelsConfig";
+import { refreshOpencodeCatalog } from "@omniroute/open-sse/services/opencodeCatalog.ts";
 import {
   buildCodexDiscoveryCatalog,
   enrichCodexModelsFromGithubCatalog,
@@ -221,6 +222,12 @@ export async function GET(
         : null;
     if (!provider) {
       return NextResponse.json({ error: "Invalid connection provider" }, { status: 400 });
+    }
+
+    // An explicit import is when a newly published Go model shows up: refresh its protocol catalog
+    // too, so the model routes to the protocol it is served on from its first request.
+    if (provider === "opencode-go" && refresh) {
+      await refreshOpencodeCatalog();
     }
 
     // Resolve proxy for this provider (provider-level → global → direct)
