@@ -103,6 +103,74 @@ describe("OpencodeExecutor routes OpenCode Go v2 models by their documented form
   });
 });
 
+describe("OpenCode Go v2 always sends x-opencode-session (400 MissingSessionID without it)", () => {
+  let calls: Array<{ headers: Record<string, string> }>;
+  let originalFetch: typeof fetch;
+  const session = (index: number) => calls[index].headers["x-opencode-session"];
+
+  beforeEach(() => {
+    calls = [];
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, options: RequestInit) => {
+      calls.push({ headers: options.headers as Record<string, string> });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function turn(model: string, messages: Array<{ role: string; content: string }>) {
+    return { ...input(model), body: { model, stream: true, messages } };
+  }
+
+  it("a client that sends no conversation id gets one session per conversation", async () => {
+    const executor = new OpencodeExecutor("opencode-go");
+    const first = [{ role: "user", content: "refatore o parser" }];
+    await executor.execute(turn("glm-5.3-flash", first));
+    await executor.execute(
+      turn("glm-5.3-flash", [
+        ...first,
+        { role: "assistant", content: "feito" },
+        { role: "user", content: "agora os testes" },
+      ])
+    );
+    await executor.execute(turn("glm-5.3-flash", [{ role: "user", content: "outra conversa" }]));
+
+    assert.match(session(0), /^ses_[0-9a-f]{26}$/);
+    assert.equal(session(1), session(0), "a later turn of the same conversation keeps the session");
+    assert.notEqual(session(2), session(0), "a different conversation gets its own session");
+  });
+
+  it("the client's own conversation id wins over the derived one", async () => {
+    await new OpencodeExecutor("opencode-go").execute({
+      ...input("glm-5.3-flash"),
+      clientHeaders: { "x-claude-code-session-id": "cc-123" },
+    });
+    assert.equal(session(0), "cc-123");
+  });
+
+  it("covers the Anthropic and Google formats too", async () => {
+    const executor = new OpencodeExecutor("opencode-go");
+    await executor.execute(input("claude-haiku-5-5"));
+    await executor.execute({
+      ...input("gemini-4-argon-contributor", false),
+      body: { contents: [{ role: "user", parts: [{ text: "oi" }] }] },
+    });
+    assert.match(session(0), /^ses_/);
+    assert.match(session(1), /^ses_/);
+  });
+
+  it("leaves OpenCode Zen as it was: no session is invented there", async () => {
+    await new OpencodeExecutor("opencode-zen").execute(input("big-pickle"));
+    assert.equal(session(0), undefined);
+  });
+});
+
 describe("OpenCode Go v2 catalog", () => {
   const ids = (opencode_goProvider.models ?? []).map((model) => model.id);
 

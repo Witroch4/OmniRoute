@@ -33,34 +33,21 @@ function getModel(providerId: string, modelId: string): ModelEntry | undefined {
 
 // ── opencode-go ─────────────────────────────────────────────────────────────
 
-test("#2822 opencode-go/qwen3.8-max deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.8-max");
-  assert.ok(model, "qwen3.8-max deve estar registrado em opencode-go");
-  assert.notEqual(
-    model.supportsVision,
-    true,
-    "opencode-go/qwen3.8-max não suporta visão — supportsVision deve ser false ou ausente"
-  );
-  assert.strictEqual(
-    model.supportsVision,
-    false,
-    "opencode-go/qwen3.8-max deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
-  );
+// The text-only Qwen models of #2822 (qwen3.7-max, qwen3.6-plus, qwen3.5-plus) are no longer served by
+// OpenCode Go. Their successors accept images per OpenCode's models.dev catalog (2026-10-24), the same
+// metadata the official CLI uses to decide whether to attach an image.
+test("#2822 opencode-go no longer lists the text-only Qwen models", () => {
+  for (const retired of ["qwen3.7-max", "qwen3.6-plus", "qwen3.5-plus"]) {
+    assert.equal(getModel("opencode-go", retired), undefined, `${retired} is retired on Go`);
+  }
 });
 
-test("#2822 opencode-go/qwen3.8-flash deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.8-flash");
-  assert.ok(model, "qwen3.8-flash deve estar registrado em opencode-go");
-  assert.notEqual(
-    model.supportsVision,
-    true,
-    "opencode-go/qwen3.8-flash não suporta visão — supportsVision deve ser false ou ausente"
-  );
-  assert.strictEqual(
-    model.supportsVision,
-    false,
-    "opencode-go/qwen3.8-flash deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
-  );
+test("opencode-go Qwen successors declare vision explicitly, as the catalog states", () => {
+  for (const id of ["qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus"]) {
+    const model = getModel("opencode-go", id);
+    assert.ok(model, `${id} deve estar registrado em opencode-go`);
+    assert.strictEqual(model.supportsVision, true);
+  }
 });
 
 // #3328 — o oposto do #2822: MiniMax M3 (opencode) É multimodal (verificado
@@ -73,21 +60,6 @@ test("#3328 opencode/minimax-m3-free deve ter supportsVision: true", () => {
     model.supportsVision,
     true,
     "opencode/minimax-m3-free é multimodal — supportsVision deve ser true"
-  );
-});
-
-test("#2822 opencode-go/qwen3.7-plus deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.7-plus");
-  assert.ok(model, "qwen3.7-plus deve estar registrado em opencode-go");
-  assert.notEqual(
-    model.supportsVision,
-    true,
-    "opencode-go/qwen3.7-plus não suporta visão — supportsVision deve ser false ou ausente"
-  );
-  assert.strictEqual(
-    model.supportsVision,
-    false,
-    "opencode-go/qwen3.7-plus deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
   );
 });
 

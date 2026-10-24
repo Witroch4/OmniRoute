@@ -45,7 +45,8 @@ describe("MiniMax M3 model registration (#3110)", () => {
     assert.ok(m3, "minimax-m3 must be in opencode-go models");
     assert.equal(m3.name, "MiniMax M3");
     assert.equal(m3.targetFormat, "claude");
-    assert.equal(m3.contextLength, 1_048_576);
+    // OpenCode's models.dev catalog states 1,000,000 for the Go route (2026-10-24).
+    assert.equal(m3.contextLength, 1_000_000);
   });
 
   it("opencode-zen provider has minimax-m3 with 1M context", () => {

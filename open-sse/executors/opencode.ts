@@ -6,7 +6,7 @@ import {
   isThinkingMessageModel,
 } from "../utils/reasoningContentInjector.ts";
 import { runWithProxyContext } from "../utils/proxyFetch.ts";
-import { forwardOpencodeClientHeaders } from "../utils/opencodeHeaders.ts";
+import { forwardOpencodeClientHeaders, withOpencodeGoSession } from "../utils/opencodeHeaders.ts";
 
 /**
  * Per-account proxy configuration, persisted by NoAuthAccountCard under
@@ -160,7 +160,16 @@ export class OpencodeExecutor extends BaseExecutor {
     return `${fingerprint.slice(0, 8)}…`;
   }
 
-  async execute(input: ExecuteInput) {
+  async execute(rawInput: ExecuteInput) {
+    // Go v2 answers 400 MissingSessionID to any request without x-opencode-session. Carried on the
+    // per-call clientHeaders rather than executor state: this executor is shared by every request.
+    const input =
+      this.provider === "opencode-go"
+        ? {
+            ...rawInput,
+            clientHeaders: withOpencodeGoSession(rawInput.clientHeaders, rawInput.body),
+          }
+        : rawInput;
     this._requestFormat = getModelTargetFormat(this.provider, input.model) || "openai";
     try {
       this.syncAccountsFromCredentials(input.credentials);

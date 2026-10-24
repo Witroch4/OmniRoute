@@ -195,7 +195,10 @@ describe("OpencodeExecutor", () => {
         createInput("minimax-m3", true, { apiKey: "claude-key" })
       );
 
-      assert.deepEqual(result.headers, {
+      // Go v2 requires x-opencode-session on every request (400 MissingSessionID without it).
+      const { "x-opencode-session": session, ...rest } = result.headers;
+      assert.match(session, /^ses_/);
+      assert.deepEqual(rest, {
         "x-api-key": "claude-key",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -267,7 +270,9 @@ describe("OpencodeExecutor", () => {
 
       const result = await goExecutor.execute(createInput("glm-5.1"));
 
-      assert.deepEqual(result.headers, {
+      const { "x-opencode-session": session, ...rest } = result.headers;
+      assert.match(session, /^ses_/);
+      assert.deepEqual(rest, {
         Authorization: "Bearer test-key",
         "Content-Type": "application/json",
         Accept: "text/event-stream",

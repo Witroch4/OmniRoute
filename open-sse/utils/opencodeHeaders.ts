@@ -1,5 +1,6 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { setUserAgentHeader } from "../executors/base.ts";
+import { generateSessionId } from "../services/sessionManager.ts";
 
 /**
  * Header keys that are forwarded from the client to the upstream provider.
@@ -30,6 +31,46 @@ const SESSION_HEADER_FALLBACKS = [
  */
 function findHeader(headers: Record<string, string>, name: string): string | undefined {
   return Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+}
+
+/**
+ * OpenCode Go v2 refuses any request without `x-opencode-session` (400 MissingSessionID on every
+ * format base, measured 2026-10-24) but does not validate its value. Returns the client headers with
+ * a session the request can carry: the client's own conversation id when it sends one (forwarded
+ * below), otherwise a `ses_` id derived from the conversation (model, system prompt, first user
+ * message, tools), so every turn of one conversation keeps one upstream session.
+ */
+export function withOpencodeGoSession(
+  clientHeaders: Record<string, string> | null | undefined,
+  body: unknown
+): Record<string, string> {
+  const headers = clientHeaders ?? {};
+  const hasSession = ["x-opencode-session", ...SESSION_HEADER_FALLBACKS].some((name) => {
+    const value = findHeader(headers, name);
+    return typeof value === "string" && value.trim().length > 0 && value.length <= 256;
+  });
+  if (hasSession) return headers;
+  const seed = generateSessionId(sessionBodyOf(body)) ?? randomUUID();
+  const digest = createHash("sha256").update(`opencode-go\u0000${seed}`).digest("hex");
+  return { ...headers, "x-opencode-session": `ses_${digest.slice(0, 26)}` };
+}
+
+/** Fingerprint inputs of any wire format; Google keeps them in `contents`/`systemInstruction`. */
+function sessionBodyOf(body: unknown): Parameters<typeof generateSessionId>[0] {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  const contents = Array.isArray(record.contents)
+    ? (record.contents as Array<{ role?: string; parts?: unknown }>)
+    : undefined;
+  return {
+    model: typeof record.model === "string" ? record.model : undefined,
+    system: record.system ?? record.systemInstruction,
+    tools: Array.isArray(record.tools) ? record.tools : undefined,
+    messages: Array.isArray(record.messages)
+      ? record.messages
+      : contents?.map((content) => ({ role: content?.role, content: content?.parts })),
+    input: Array.isArray(record.input) ? record.input : undefined,
+  };
 }
 
 /**
