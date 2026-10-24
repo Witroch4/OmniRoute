@@ -273,9 +273,11 @@ describe("claudeTlsClient", () => {
 
       await tlsFetchClaude("https://claude.ai/test", {});
 
-      // The proxyUrl should reflect environment resolution
+      // The override receives the proxy the real path would use: with no
+      // per-call proxyUrl, the HTTPS_PROXY env fallback.
+      expect(mockFn).toHaveBeenCalledOnce();
       const callOptions = mockFn.mock.calls[0][1];
-      expect(callOptions).toHaveProperty("proxyUrl");
+      expect(callOptions.proxyUrl).toBe("http://env-proxy:8080");
 
       __setTlsFetchOverrideForTesting(null);
       delete process.env.HTTPS_PROXY;

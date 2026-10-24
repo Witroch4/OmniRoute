@@ -1,5 +1,16 @@
-import { describe, it } from "node:test";
+import { describe, it, vi } from "vitest";
 import assert from "node:assert/strict";
+
+// recommendStrategyOverride() is gated on the global `adaptiveVolumeRouting`
+// setting (read through a dynamic import of @/lib/localDb). Without a mock the
+// read fails (no initialised SQLite in this suite), the catch branch returns
+// noOverride and none of the routing rules below ever runs. Enable the gate so
+// these cases exercise the rules; the gate itself is covered by the last case.
+const settingsState = { adaptiveVolumeRouting: true };
+vi.mock("@/lib/localDb", () => ({
+  getSettings: vi.fn(async () => ({ ...settingsState })),
+}));
+
 import { detectVolumeSignals, recommendStrategyOverride } from "../volumeDetector";
 
 describe("volumeDetector", async () => {
@@ -113,6 +124,18 @@ describe("volumeDetector", async () => {
       const override = await recommendStrategyOverride(signals, "priority");
       assert.equal(override.shouldOverride, false);
       assert.equal(override.preferEconomy, false);
+    });
+
+    it("never overrides while adaptiveVolumeRouting is disabled", async () => {
+      settingsState.adaptiveVolumeRouting = false;
+      try {
+        const signals = detectVolumeSignals({ input: Array(60).fill("item") });
+        const override = await recommendStrategyOverride(signals, "priority");
+        assert.equal(override.shouldOverride, false);
+        assert.equal(override.strategy, null);
+      } finally {
+        settingsState.adaptiveVolumeRouting = true;
+      }
     });
   });
 });

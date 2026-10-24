@@ -42,10 +42,15 @@ function okJson(data: unknown) {
   return Promise.resolve({ ok: true, json: () => Promise.resolve(data) } as Response);
 }
 
+// Mirrors GET /api/settings/free-proxies: { success, data: { proxies, total, ... } }.
+function proxiesPage(proxies: unknown[] = []) {
+  return { success: true, data: { proxies, total: proxies.length, hasMore: false } };
+}
+
 function setupFetch(items: unknown[] = [], stats = defaultStats) {
   const mockFetch = vi.fn((url: string) => {
     if (String(url).includes("/stats")) return okJson({ stats });
-    return okJson({ items });
+    return okJson(proxiesPage(items));
   });
   vi.stubGlobal("fetch", mockFetch);
   return mockFetch;
@@ -91,13 +96,13 @@ afterEach(() => {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("FreePoolTab source toggles", () => {
-  it("renders a toggle group with exactly 3 buttons", async () => {
+  it("renders a toggle group with one button per source (4)", async () => {
     const el = renderTab();
     await waitForCondition(() => el.querySelector("[role='group']") !== null);
     const bar = el.querySelector("[role='group']")!;
     expect(bar).toBeTruthy();
     const buttons = bar.querySelectorAll("button");
-    expect(buttons.length).toBe(3);
+    expect(buttons.length).toBe(4);
   });
 
   it("all toggles start enabled (aria-pressed=true)", async () => {
@@ -160,7 +165,7 @@ describe("FreePoolTab source toggles", () => {
     expect(stored).toContain("1proxy");
   });
 
-  it("button labels are 1proxy, Proxifly, IPLocate", async () => {
+  it("button labels are 1proxy, Proxifly, IPLocate, Webshare", async () => {
     const el = renderTab();
     await waitForCondition(() => el.querySelector("[role='group']") !== null);
     const texts = Array.from(el.querySelector("[role='group']")!.querySelectorAll("button")).map(
@@ -169,14 +174,36 @@ describe("FreePoolTab source toggles", () => {
     expect(texts).toContain("1proxy");
     expect(texts).toContain("Proxifly");
     expect(texts).toContain("IPLocate");
+    expect(texts).toContain("Webshare");
   });
 });
 
 describe("FreePoolTab data loading", () => {
-  it("shows 'No proxies found' message when list is empty", async () => {
+  it("shows the empty-list message when list is empty", async () => {
     const el = renderTab();
-    await waitForCondition(() => el.textContent?.includes("No proxies found") === true);
-    expect(el.textContent).toMatch(/No proxies found/i);
+    // next-intl is mocked to echo keys, so the empty state renders its key.
+    await waitForCondition(() => el.textContent?.includes("proxyFreePoolEmpty") === true);
+    expect(el.textContent).toContain("proxyFreePoolEmpty");
+  });
+
+  it("renders the proxies the list route returns under data.proxies", async () => {
+    setupFetch([
+      {
+        id: "p1",
+        source: "proxifly",
+        host: "203.0.113.7",
+        port: 8080,
+        type: "http",
+        countryCode: "US",
+        qualityScore: 80,
+        latencyMs: 120,
+        anonymity: "elite",
+        inPool: false,
+      },
+    ]);
+    const el = renderTab();
+    await waitForCondition(() => el.textContent?.includes("203.0.113.7") === true);
+    expect(el.textContent).not.toContain("proxyFreePoolEmpty");
   });
 
   it("calls /api/settings/free-proxies on mount", async () => {
@@ -200,7 +227,7 @@ describe("FreePoolTab data loading", () => {
   it("disabling a source re-fetches with sources= filter", async () => {
     const mockFetch = vi.fn((url: string) => {
       if (String(url).includes("/stats")) return okJson({ stats: defaultStats });
-      return okJson({ items: [] });
+      return okJson(proxiesPage());
     });
     vi.stubGlobal("fetch", mockFetch);
 
@@ -232,9 +259,10 @@ describe("FreePoolTab data loading", () => {
   it("displays stats when available", async () => {
     setupFetch([], { total: 7, inPool: 2, avgQuality: null, lastSyncAt: null });
     const el = renderTab();
-    await waitForCondition(() => el.textContent?.includes("Total: 7") === true);
-    expect(el.textContent).toMatch(/Total: 7/);
-    expect(el.textContent).toMatch(/In pool: 2/);
+    // next-intl is mocked to echo keys: "<key>: <value>".
+    await waitForCondition(() => el.textContent?.includes("proxyFreePoolTotal: 7") === true);
+    expect(el.textContent).toContain("proxyFreePoolTotal: 7");
+    expect(el.textContent).toContain("proxyFreePoolInPool: 2");
   });
 });
 
@@ -253,7 +281,7 @@ describe("FreePoolTab sync error surfacing (#5595)", () => {
         });
       }
       if (String(url).includes("/stats")) return okJson({ stats: defaultStats });
-      return okJson({ items: [] });
+      return okJson(proxiesPage());
     });
     vi.stubGlobal("fetch", mockFetch);
 

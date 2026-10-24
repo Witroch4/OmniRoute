@@ -78,9 +78,12 @@ export default function FreePoolTab() {
         fetch("/api/settings/free-proxies/stats"),
       ]);
       if (proxiesRes.ok) {
-        const data = await proxiesRes.json();
-        setProxies(data.items || []);
-        setTotal(data.total ?? 0);
+        // GET /api/settings/free-proxies answers { success, data: { proxies, total, ... } }
+        // since pagination landed; keep reading the legacy { items, total } shape too.
+        const body = await proxiesRes.json();
+        const payload = body?.data ?? body;
+        setProxies(payload.proxies ?? payload.items ?? []);
+        setTotal(payload.total ?? 0);
       }
       if (statsRes.ok) {
         const data = await statsRes.json();
@@ -106,9 +109,22 @@ export default function FreePoolTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setSyncErrors(data.errors ?? null);
+      // #5595: the sync route answers 200 with per-source results; a source that
+      // failed carries its messages in results[source].errors. Surface them so a
+      // partial/empty sync explains itself instead of silently showing "Total: 0".
+      const data = await res.json().catch(() => null);
+      if (data?.results) {
+        const errors: Record<string, string[]> = {};
+        for (const [source, result] of Object.entries(
+          data.results as Record<string, { errors?: string[] }>
+        )) {
+          if (Array.isArray(result?.errors) && result.errors.length > 0) {
+            errors[source] = result.errors;
+          }
+        }
+        if (Object.keys(errors).length > 0) setSyncErrors(errors);
+      } else if (!res.ok) {
+        setSyncErrors(data?.errors ?? null);
       }
       await loadData();
     } catch {}
@@ -135,6 +151,16 @@ export default function FreePoolTab() {
     setAddingIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
+      return next;
+    });
+  };
+
+  const handleToggleSource = (source: SourceId) => {
+    setDisabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) next.delete(source);
+      else next.add(source);
+      saveDisabledSources(next);
       return next;
     });
   };
