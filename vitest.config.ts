@@ -39,6 +39,11 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Mirrors tsconfig paths. Without it, "@omniroute/open-sse/*" falls through to the
+      // node_modules/@omniroute/open-sse symlink, which resolves against the checkout that
+      // owns node_modules — in a git worktree sharing node_modules that is a DIFFERENT
+      // checkout, so UI tests silently exercise someone else's open-sse code.
+      "@omniroute/open-sse": path.resolve(__dirname, "./open-sse"),
     },
   },
 });
