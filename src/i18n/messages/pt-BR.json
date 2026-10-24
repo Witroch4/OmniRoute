@@ -1885,6 +1885,7 @@
     "searchTools": "Search Tools",
     "searchToolsDesc": "Advanced search testing with provider comparison",
     "compareProviders": "Compare Providers",
+    "maxCompareProviders": "É possível comparar no máximo {count} provedores por vez.",
     "rerankResults": "Rerank Results",
     "searchHistory": "Search History",
     "urlOverlap": "URL Overlap",

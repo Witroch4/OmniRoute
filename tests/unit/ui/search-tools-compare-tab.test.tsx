@@ -153,7 +153,7 @@ describe("CompareTab", () => {
     expect(fifthBtn?.disabled).toBe(true);
     // Warning message should appear
     const warning = el.querySelector(".text-warning");
-    expect(warning?.textContent).toContain("4");
+    expect(warning?.textContent).toContain("maxCompareProviders");
   });
 
   it("D22 — can select up to 4 providers", () => {

@@ -1900,6 +1900,7 @@
     "searchTools": "Search Tools",
     "searchToolsDesc": "Advanced search testing with provider comparison",
     "compareProviders": "Compare Providers",
+    "maxCompareProviders": "A maximum of {count} providers can be compared at once.",
     "rerankResults": "Rerank Results",
     "searchHistory": "Search History",
     "urlOverlap": "URL Overlap",

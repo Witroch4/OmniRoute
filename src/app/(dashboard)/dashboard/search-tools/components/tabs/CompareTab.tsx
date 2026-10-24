@@ -258,7 +258,7 @@ export default function CompareTab({ providers, onMetrics }: CompareTabProps) {
           </div>
           {selectedProviderIds.length >= MAX_COMPARE_PROVIDERS && (
             <p className="text-warning text-[10px] mb-2">
-              A maximum of {MAX_COMPARE_PROVIDERS} providers can be compared at once.
+              {t("maxCompareProviders", { count: MAX_COMPARE_PROVIDERS })}
             </p>
           )}
           <div className="flex flex-wrap gap-2">
