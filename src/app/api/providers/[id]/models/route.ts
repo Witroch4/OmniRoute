@@ -625,8 +625,20 @@ export async function GET(
         base = base.slice(0, -3);
       }
 
+      // A registry `modelsUrl` is the provider's documented catalog endpoint; try it first unless the
+      // connection overrides the base URL (then the registry host may be the wrong one). It matters when
+      // the catalog is not under the chat base: OpenCode Go v2 serves chat at /inference/go/openai/v1 but
+      // lists models at /inference/go/v1/models. For the others it equals a derived candidate (deduped).
+      const registryModelsUrl =
+        !getProviderBaseUrl(connection.providerSpecificData) &&
+        typeof registryEntry?.modelsUrl === "string" &&
+        registryEntry.modelsUrl.length > 0
+          ? registryEntry.modelsUrl
+          : null;
+
       // T39: Try multiple endpoint formats
       const endpoints = [
+        ...(registryModelsUrl ? [registryModelsUrl] : []),
         `${base}/v1/models`,
         `${base}/models`,
         `${baseUrl.replace(/\/$/, "")}/models`, // Original fallback

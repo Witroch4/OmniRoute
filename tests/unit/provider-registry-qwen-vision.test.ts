@@ -33,33 +33,33 @@ function getModel(providerId: string, modelId: string): ModelEntry | undefined {
 
 // ── opencode-go ─────────────────────────────────────────────────────────────
 
-test("#2822 opencode-go/qwen3.7-max deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.7-max");
-  assert.ok(model, "qwen3.7-max deve estar registrado em opencode-go");
+test("#2822 opencode-go/qwen3.8-max deve ter supportsVision !== true", () => {
+  const model = getModel("opencode-go", "qwen3.8-max");
+  assert.ok(model, "qwen3.8-max deve estar registrado em opencode-go");
   assert.notEqual(
     model.supportsVision,
     true,
-    "opencode-go/qwen3.7-max não suporta visão — supportsVision deve ser false ou ausente"
+    "opencode-go/qwen3.8-max não suporta visão — supportsVision deve ser false ou ausente"
   );
   assert.strictEqual(
     model.supportsVision,
     false,
-    "opencode-go/qwen3.7-max deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
+    "opencode-go/qwen3.8-max deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
   );
 });
 
-test("#2822 opencode-go/qwen3.6-plus deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.6-plus");
-  assert.ok(model, "qwen3.6-plus deve estar registrado em opencode-go");
+test("#2822 opencode-go/qwen3.8-flash deve ter supportsVision !== true", () => {
+  const model = getModel("opencode-go", "qwen3.8-flash");
+  assert.ok(model, "qwen3.8-flash deve estar registrado em opencode-go");
   assert.notEqual(
     model.supportsVision,
     true,
-    "opencode-go/qwen3.6-plus não suporta visão — supportsVision deve ser false ou ausente"
+    "opencode-go/qwen3.8-flash não suporta visão — supportsVision deve ser false ou ausente"
   );
   assert.strictEqual(
     model.supportsVision,
     false,
-    "opencode-go/qwen3.6-plus deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
+    "opencode-go/qwen3.8-flash deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
   );
 });
 
@@ -76,18 +76,18 @@ test("#3328 opencode/minimax-m3-free deve ter supportsVision: true", () => {
   );
 });
 
-test("#2822 opencode-go/qwen3.5-plus deve ter supportsVision !== true", () => {
-  const model = getModel("opencode-go", "qwen3.5-plus");
-  assert.ok(model, "qwen3.5-plus deve estar registrado em opencode-go");
+test("#2822 opencode-go/qwen3.7-plus deve ter supportsVision !== true", () => {
+  const model = getModel("opencode-go", "qwen3.7-plus");
+  assert.ok(model, "qwen3.7-plus deve estar registrado em opencode-go");
   assert.notEqual(
     model.supportsVision,
     true,
-    "opencode-go/qwen3.5-plus não suporta visão — supportsVision deve ser false ou ausente"
+    "opencode-go/qwen3.7-plus não suporta visão — supportsVision deve ser false ou ausente"
   );
   assert.strictEqual(
     model.supportsVision,
     false,
-    "opencode-go/qwen3.5-plus deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
+    "opencode-go/qwen3.7-plus deve ter supportsVision: false explícito para bloquear seleção em combo com imagens"
   );
 });
 

@@ -110,17 +110,17 @@ describe("OpencodeExecutor", () => {
 
     it("routes claude target format models to messages endpoint", async () => {
       const m27Result = await goExecutor.execute(
-        createInput("minimax-m2.7", true, { apiKey: "claude-key" })
+        createInput("minimax-m3", true, { apiKey: "claude-key" })
       );
-      assert.equal(m27Result.url, "https://opencode.ai/zen/go/v1/messages");
-      assert.equal(fetchCalls[0].url, "https://opencode.ai/zen/go/v1/messages");
+      assert.equal(m27Result.url, "https://opencode.ai/inference/go/anthropic/v1/messages");
+      assert.equal(fetchCalls[0].url, "https://opencode.ai/inference/go/anthropic/v1/messages");
       assert.equal(m27Result.headers["anthropic-version"], "2023-06-01");
 
       const m25Result = await goExecutor.execute(
-        createInput("minimax-m2.5", true, { apiKey: "claude-key" })
+        createInput("claude-haiku-5-5", true, { apiKey: "claude-key" })
       );
-      assert.equal(m25Result.url, "https://opencode.ai/zen/go/v1/messages");
-      assert.equal(fetchCalls[1].url, "https://opencode.ai/zen/go/v1/messages");
+      assert.equal(m25Result.url, "https://opencode.ai/inference/go/anthropic/v1/messages");
+      assert.equal(fetchCalls[1].url, "https://opencode.ai/inference/go/anthropic/v1/messages");
       assert.equal(m25Result.headers["anthropic-version"], "2023-06-01");
     });
 
@@ -192,7 +192,7 @@ describe("OpencodeExecutor", () => {
 
     it("adds anthropic version for claude target format", async () => {
       const result = await goExecutor.execute(
-        createInput("minimax-m2.7", true, { apiKey: "claude-key" })
+        createInput("minimax-m3", true, { apiKey: "claude-key" })
       );
 
       assert.deepEqual(result.headers, {
@@ -233,32 +233,32 @@ describe("OpencodeExecutor", () => {
 
       // glm-5.1
       const glm51 = await goExecutor.execute(createInput("glm-5.1"));
-      assert.equal(glm51.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(glm51.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // kimi-k2.6
       const kimi26 = await goExecutor.execute(createInput("kimi-k2.6"));
-      assert.equal(kimi26.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(kimi26.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // mimo-v2.5-pro
       const mimoPro = await goExecutor.execute(createInput("mimo-v2.5-pro"));
-      assert.equal(mimoPro.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(mimoPro.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // mimo-v2.5
       const mimo = await goExecutor.execute(createInput("mimo-v2.5"));
-      assert.equal(mimo.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(mimo.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
     });
 
     it("routes opencode-go qwen models to claude messages endpoint", async () => {
       const qwen36 = await goExecutor.execute(
-        createInput("qwen3.6-plus", true, { apiKey: "claude-key" })
+        createInput("qwen3.8-max", true, { apiKey: "claude-key" })
       );
-      assert.equal(qwen36.url, "https://opencode.ai/zen/go/v1/messages");
+      assert.equal(qwen36.url, "https://opencode.ai/inference/go/anthropic/v1/messages");
       assert.equal(qwen36.headers["anthropic-version"], "2023-06-01");
 
       const qwen35 = await goExecutor.execute(
-        createInput("qwen3.5-plus", true, { apiKey: "claude-key" })
+        createInput("qwen3.7-plus", true, { apiKey: "claude-key" })
       );
-      assert.equal(qwen35.url, "https://opencode.ai/zen/go/v1/messages");
+      assert.equal(qwen35.url, "https://opencode.ai/inference/go/anthropic/v1/messages");
       assert.equal(qwen35.headers["anthropic-version"], "2023-06-01");
     });
 
@@ -284,19 +284,19 @@ describe("OpencodeExecutor", () => {
 
       // glm-6-max
       const glm6 = await goExecutor.execute(createInput("glm-6-max"));
-      assert.equal(glm6.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(glm6.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // mimo-v2.5-pro
       const mimoPro = await goExecutor.execute(createInput("mimo-v2.5-pro"));
-      assert.equal(mimoPro.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(mimoPro.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // mimo-v2.5
       const mimo = await goExecutor.execute(createInput("mimo-v2.5"));
-      assert.equal(mimo.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(mimo.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
 
       // hy3-preview
       const hy3 = await goExecutor.execute(createInput("hy3-preview"));
-      assert.equal(hy3.url, "https://opencode.ai/zen/go/v1/chat/completions");
+      assert.equal(hy3.url, "https://opencode.ai/inference/go/openai/v1/chat/completions");
     });
   });
 

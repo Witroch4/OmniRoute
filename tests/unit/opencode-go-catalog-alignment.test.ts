@@ -49,5 +49,6 @@ test("opencode-go preserves the pre-existing minimax-m3 and qwen routing via tar
     (opencode_goProvider.models ?? []).map((m) => [m.id, m as Record<string, unknown>])
   );
   assert.equal(byId.get("minimax-m3")?.targetFormat, "claude");
-  assert.equal(byId.get("qwen3.7-max")?.targetFormat, "claude");
+  assert.equal(byId.get("qwen3.8-max")?.targetFormat, "claude");
+  assert.equal(byId.get("claude-haiku-5-5")?.targetFormat, "claude");
 });

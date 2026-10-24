@@ -53,6 +53,20 @@ function parseDeepSeekEffortLevel(model: string): { baseModel: string; effort: s
   return { baseModel: "deepseek-v4-pro", effort: matchedLevel };
 }
 
+/**
+ * OpenCode Go v2 serves one base per wire format under `…/inference/<plan>/<format>/…` (docs,
+ * 2026-10-24): `openai/v1` for chat completions and responses, `anthropic/v1` for messages and
+ * `google/v1beta` for generateContent. The registry stores the OpenAI base; derive the other two from
+ * it. Any other base (Zen, legacy `zen/go/v1`, custom) is returned unchanged.
+ */
+export function opencodeFormatBaseUrl(base: string, format: string | null): string {
+  const match = /^(.*\/inference\/[^/]+)\/openai\/v1\/?$/.exec(base);
+  if (!match) return base;
+  if (format === "claude") return `${match[1]}/anthropic/v1`;
+  if (format === "gemini") return `${match[1]}/google/v1beta`;
+  return base.replace(/\/$/, "");
+}
+
 export class OpencodeExecutor extends BaseExecutor {
   _requestFormat: string | null = null;
 
@@ -210,7 +224,7 @@ export class OpencodeExecutor extends BaseExecutor {
     void urlIndex;
     void credentials;
 
-    const base = this.config.baseUrl;
+    const base = opencodeFormatBaseUrl(this.config.baseUrl, this._requestFormat);
     switch (this._requestFormat) {
       case "claude":
         return `${base}/messages`;
@@ -242,6 +256,11 @@ export class OpencodeExecutor extends BaseExecutor {
 
     if (this._requestFormat === "claude") {
       headers["anthropic-version"] = "2023-06-01";
+    }
+    // Google wire format (OpenCode Go v2 `/inference/go/google/v1beta`): the @ai-sdk/google client the
+    // docs name authenticates with this header; Bearer is kept alongside for the older routes.
+    if (key && this._requestFormat === "gemini") {
+      headers["x-goog-api-key"] = key;
     }
 
     if (stream) {

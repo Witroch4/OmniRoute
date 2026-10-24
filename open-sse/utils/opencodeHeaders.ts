@@ -12,6 +12,19 @@ const OPENCODE_HEADER_KEYS = [
   "x-opencode-client",
 ] as const;
 
+/** Client headers that carry a conversation id, in priority order (after x-opencode-session itself). */
+const SESSION_HEADER_FALLBACKS = [
+  "x-session-affinity",
+  "x-session-id",
+  "x-claude-code-session-id",
+  "session_id",
+  "session-id",
+  "x-session_id",
+  "thread_id",
+  "thread-id",
+  "x-thread-id",
+] as const;
+
 /**
  * Case-insensitive lookup for a header in a headers record.
  */
@@ -62,8 +75,12 @@ export function forwardOpencodeClientHeaders(
 
   // 3. OpencodeExecutor-only: synthesize session/request id from fallback headers
   if (options?.synthesizeRequestId && !headers["x-opencode-session"]) {
-    const sessionAffinity =
-      findHeader(clientHeaders, "x-session-affinity") || findHeader(clientHeaders, "x-session-id");
+    // OpenCode Go asks for a STABLE session id per conversation. Reuse whichever conversation id the
+    // client already sends (Claude Code sends x-claude-code-session-id) instead of leaving it unset or
+    // minting a fresh UUID per request. Same header list as upstream's opencodeSessionIdentity.
+    const sessionAffinity = SESSION_HEADER_FALLBACKS.map((name) =>
+      findHeader(clientHeaders, name)
+    ).find((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 256);
     if (sessionAffinity) {
       headers["x-opencode-session"] = sessionAffinity;
 

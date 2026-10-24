@@ -405,7 +405,8 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     parseResponse: (data) => data.data || data.models || [],
   },
   "opencode-go": {
-    url: "https://opencode.ai/zen/go/v1/models",
+    // OpenCode Go v2: the models list lives at /inference/go/v1/models (docs, 2026-10-24).
+    url: "https://opencode.ai/inference/go/v1/models",
     method: "GET",
     headers: { "Content-Type": "application/json" },
     authHeader: "Authorization",

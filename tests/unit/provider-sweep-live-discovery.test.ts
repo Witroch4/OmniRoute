@@ -63,7 +63,7 @@ const LIVE_CASES: Array<{ provider: string; liveUrl: string }> = [
   { provider: "sambanova", liveUrl: "https://api.sambanova.ai/v1/models" },
   { provider: "orcarouter", liveUrl: "https://api.orcarouter.ai/v1/models" },
   { provider: "uncloseai", liveUrl: "https://hermes.ai.unturf.com/v1/models" },
-  { provider: "opencode-go", liveUrl: "https://opencode.ai/zen/go/v1/models" },
+  { provider: "opencode-go", liveUrl: "https://opencode.ai/inference/go/v1/models" },
   { provider: "baseten", liveUrl: "https://inference.baseten.co/v1/models" },
   { provider: "hyperbolic", liveUrl: "https://api.hyperbolic.xyz/v1/models" },
   { provider: "nebius", liveUrl: "https://api.tokenfactory.nebius.com/v1/models" },

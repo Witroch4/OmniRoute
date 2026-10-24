@@ -763,7 +763,7 @@ test("provider models route caches discovered opencode-go models per connection"
 
   globalThis.fetch = async (url, init = {}) => {
     fetchCalls += 1;
-    assert.equal(String(url), "https://opencode.ai/zen/go/v1/models");
+    assert.equal(String(url), "https://opencode.ai/inference/go/v1/models");
     assert.equal(init.method, "GET");
     assert.equal(init.headers.Authorization, "Bearer opencode-go-key");
     return Response.json({
@@ -817,9 +817,9 @@ test("provider models route falls back to cached models when a refresh fails", a
   assert.equal(body.source, "cache");
   assert.match(body.warning, /cached catalog/i);
   assert.deepEqual(body.models, [{ id: "cached-go", name: "Cached Go", source: "imported" }]);
-  // T39 multi-endpoint discovery probes `${base}/v1/models` then `${base}/models`
-  // before giving up; both 503 here, so it makes 2 attempts and then falls back to cache.
-  assert.equal(fetchCalls, 2);
+  // Discovery tries the registry modelsUrl (OpenCode Go v2: /inference/go/v1/models), then the T39
+  // candidates `${base}/v1/models` and `${base}/models`; all 503 here, so 3 attempts, then the cache.
+  assert.equal(fetchCalls, 3);
 });
 
 test("provider models route clears cached discovery when a refresh returns no remote models", async () => {
@@ -871,7 +871,7 @@ test("provider models route honors autoFetchModels=false and skips remote discov
   assert.equal(body.source, "local_catalog");
   assert.match(body.warning, /auto-fetch disabled/i);
   assert.equal(called, false);
-  assert.ok(body.models.some((model) => model.id === "glm-5"));
+  assert.ok(body.models.some((model) => model.id === "glm-5.3-flash"));
 });
 
 test("provider models route uses synced models as the authoritative local catalog (#3148)", async () => {
