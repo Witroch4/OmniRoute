@@ -1,3 +1,7 @@
+import {
+  isClaudeServerWebSearchTool,
+  isSoleClaudeServerWebSearchTool,
+} from "../helpers/claudeServerWebSearch.ts";
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import {
@@ -177,7 +181,17 @@ export function claudeToGeminiRequest(model, body, stream, credentials = null) {
   }
 
   // ── Convert tools ──────────────────────────────────────────────
-  const geminiTools = buildGeminiTools(body.tools, {
+  // Claude Code's WebSearch sends Anthropic's dated web-search *server* tool as the
+  // request's sole tool. `buildGeminiTools` only recognizes the non-versioned
+  // `web_search` type, so normalize the dated form to the marker it maps to
+  // `{ googleSearch: {} }`. A mixed request drops the server tool and keeps the
+  // custom functions, matching the hub lane (claude-to-openai.ts, upstream #16351).
+  const geminiToolsInput = Array.isArray(body.tools)
+    ? isSoleClaudeServerWebSearchTool(body.tools)
+      ? [{ type: "web_search" }]
+      : body.tools.filter((tool) => !isClaudeServerWebSearchTool(tool))
+    : body.tools;
+  const geminiTools = buildGeminiTools(geminiToolsInput, {
     toolNameMap,
   });
   if (geminiTools) {

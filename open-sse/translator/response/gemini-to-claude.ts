@@ -2,6 +2,52 @@ import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
 import { restoreDeclaredToolName } from "../../services/declaredToolCasing.ts";
+import {
+  buildClaudeWebSearchBlockEvents,
+  toClaudeWebSearchResults,
+} from "../helpers/claudeServerWebSearch.ts";
+
+/**
+ * Web hits out of Gemini Google Search grounding metadata (`groundingChunks[].web`,
+ * snake_case on some upstreams).
+ */
+function collectGroundingWebItems(grounding) {
+  const chunks = grounding.groundingChunks || grounding.grounding_chunks;
+  if (!Array.isArray(chunks)) return [];
+  return chunks.map((chunk) => ({ url: chunk?.web?.uri, title: chunk?.web?.title }));
+}
+
+/**
+ * Claude Code's built-in WebSearch reads its results from a paired
+ * `server_tool_use` (name "web_search") + `web_search_tool_result` block, so a
+ * Gemini/Antigravity response carrying `groundingMetadata` must surface that pair or
+ * the CLI reports zero results. Emitted at most once per message; any open text block
+ * is closed first so the pair takes fresh indices (upstream #16351).
+ */
+function emitGroundingWebSearch(candidate, state, results) {
+  if (state.groundingProcessed) return;
+  const grounding = candidate.groundingMetadata || candidate.grounding_metadata;
+  if (!grounding || typeof grounding !== "object") return;
+  const webResults = toClaudeWebSearchResults(collectGroundingWebItems(grounding));
+  if (webResults.length === 0) return;
+
+  if (state.openTextBlockIdx !== null) {
+    results.push({ type: "content_block_stop", index: state.openTextBlockIdx });
+    state.openTextBlockIdx = null;
+  }
+
+  const queries = grounding.webSearchQueries || grounding.web_search_queries;
+  const query = Array.isArray(queries) && typeof queries[0] === "string" ? queries[0] : "";
+
+  const { events, nextIndex } = buildClaudeWebSearchBlockEvents({
+    query,
+    results: webResults,
+    startIndex: state.contentBlockIndex,
+  });
+  results.push(...events);
+  state.contentBlockIndex = nextIndex;
+  state.groundingProcessed = true;
+}
 
 /**
  * Direct Gemini → Claude response translator.
@@ -166,6 +212,11 @@ export function geminiToClaudeResponse(chunk, state) {
       state.usage.cache_read_input_tokens = cachedTokens;
     }
   }
+
+  // ── Google Search grounding → server_tool_use + web_search_tool_result ──
+  // Gemini attaches groundingMetadata to the last chunk (sometimes an earlier one);
+  // emit the pair once, before the finish blocks.
+  emitGroundingWebSearch(candidate, state, results);
 
   // ── Finish reason → close open blocks + message_delta + message_stop ──
   if (candidate.finishReason) {

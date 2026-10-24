@@ -1,3 +1,7 @@
+import {
+  isClaudeServerWebSearchTool,
+  isSoleClaudeServerWebSearchTool,
+} from "../helpers/claudeServerWebSearch.ts";
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
@@ -40,16 +44,6 @@ function normalizeOpenAIReasoningEffort(effort: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function isClaudeServerWebSearchTool(tool: unknown): tool is JsonRecord {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
-  const record = tool as JsonRecord;
-  return (
-    record.name === "web_search" &&
-    typeof record.type === "string" &&
-    /^web_search_\d{8}$/.test(record.type)
-  );
-}
-
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -80,13 +74,25 @@ function hasClaudeServerWebSearchTool(tools: unknown): boolean {
   return Array.isArray(tools) && tools.some((tool) => isClaudeServerWebSearchTool(tool));
 }
 
-function shouldUseNativeResponsesWebSearch(credentials: unknown): boolean {
-  return (
-    credentials !== null &&
-    typeof credentials === "object" &&
-    !Array.isArray(credentials) &&
-    (credentials as JsonRecord)._targetFormat === FORMATS.OPENAI_RESPONSES
-  );
+// Target formats whose translator understands the native web-search marker
+// `{ type: "web_search" }` that convertClaudeServerWebSearchTool emits: OpenAI
+// Responses consumes it directly, and the Gemini/Antigravity lane maps it to
+// Google Search grounding (`{ googleSearch: {} }`) in geminiToolsSanitizer.ts.
+// Every other target keeps the previous behaviour (upstream #16351).
+const NATIVE_WEB_SEARCH_TARGET_FORMATS = new Set<string>([
+  FORMATS.OPENAI_RESPONSES,
+  FORMATS.GEMINI,
+  FORMATS.ANTIGRAVITY,
+]);
+
+function nativeWebSearchTargetFormat(credentials: unknown): string | null {
+  if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials)) {
+    return null;
+  }
+  const targetFormat = (credentials as JsonRecord)._targetFormat;
+  return typeof targetFormat === "string" && NATIVE_WEB_SEARCH_TARGET_FORMATS.has(targetFormat)
+    ? targetFormat
+    : null;
 }
 
 // Convert Claude request to OpenAI format
@@ -203,14 +209,29 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
   // unanswered tool_call receives a "[No response received]" placeholder.
   fixMissingToolResponses(result.messages);
 
-  const useNativeResponsesWebSearch = shouldUseNativeResponsesWebSearch(credentials);
+  const nativeWebSearchTarget = nativeWebSearchTargetFormat(credentials);
+  const useResponsesWebSearch = nativeWebSearchTarget === FORMATS.OPENAI_RESPONSES;
+  // Claude Code's WebSearch tool runs as a sub-request whose SOLE tool is Anthropic's
+  // web_search server tool. On Gemini/Antigravity that becomes native Google Search
+  // grounding. A turn that declares the server tool next to its own functions keeps
+  // the functions and drops the server tool: Antigravity 400s on native grounding
+  // mixed with functionDeclarations (upstream #16351).
+  const geminiGroundingTarget =
+    nativeWebSearchTarget === FORMATS.GEMINI || nativeWebSearchTarget === FORMATS.ANTIGRAVITY;
+  const useGeminiGrounding = geminiGroundingTarget && isSoleClaudeServerWebSearchTool(body.tools);
 
   // Tools
   if (body.tools && Array.isArray(body.tools)) {
     const normalizedTools = body.tools
       .map((tool) => {
-        if (useNativeResponsesWebSearch && isClaudeServerWebSearchTool(tool)) {
-          return convertClaudeServerWebSearchTool(tool);
+        if (isClaudeServerWebSearchTool(tool)) {
+          if (useResponsesWebSearch || useGeminiGrounding) {
+            return convertClaudeServerWebSearchTool(tool as JsonRecord);
+          }
+          // Mixed Gemini/Antigravity request: drop the server tool rather than
+          // degrade it to a plain `web_search` function (which the Antigravity
+          // envelope strips anyway as a builtin name).
+          if (geminiGroundingTarget) return null;
         }
 
         if (!tool || typeof tool !== "object" || Array.isArray(tool)) return null;
@@ -238,7 +259,7 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
   if (body.tool_choice) {
     result.tool_choice = convertToolChoice(
       body.tool_choice,
-      useNativeResponsesWebSearch && hasClaudeServerWebSearchTool(body.tools)
+      useResponsesWebSearch && hasClaudeServerWebSearchTool(body.tools)
     );
   }
 
