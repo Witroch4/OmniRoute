@@ -254,7 +254,11 @@ export async function tlsFetchClaude(
   url: string,
   options: TlsFetchOptions = {}
 ): Promise<TlsFetchResult> {
-  if (testOverride) return testOverride(url, options);
+  // Resolve the egress proxy before the test seam so an override observes the
+  // exact proxyUrl the real path hands to the native binding (per-call override,
+  // then context/env fallback — see resolveProxyUrl()).
+  const proxyUrl = resolveProxyUrl(options.proxyUrl);
+  if (testOverride) return testOverride(url, { ...options, proxyUrl });
   // Honor abort signals up-front. tls-client-node's koffi binding doesn't
   // accept an AbortSignal mid-flight (the binary call is opaque), so the best
   // we can do is bail before issuing the call. We also re-check after — if
@@ -283,7 +287,7 @@ export async function tlsFetchClaude(
     // explicitly. See `resolveProxyUrl()` for the lookup order. Without this
     // line, every chatgpt-web call egresses with the bare host IP regardless
     // of dashboard proxy config — see #2022.
-    proxyUrl: resolveProxyUrl(options.proxyUrl),
+    proxyUrl,
   };
 
   if (options.stream) {
