@@ -36,6 +36,14 @@
     "tests/unit/free-provider-rankings-configured-filter.test.ts": {
       "replacement": "tests/unit/freeProviderRankings-filters.test.ts",
       "reason": "v3.8.45 #6251 supersede #6245: a página Free Provider Rankings migrou do toggle client-side 'Configured Only' (#6245, configuredProviderIds no cliente) para filtros server-side configuredOnly/availableOnly (#6251). O teste antigo pinava a implementação removida (7 asserts quebrados contra código que não existe); o replacement cobre o contrato novo com 11 casos (server-side, lib helper). Verificado legítimo — supersessão documentada no CHANGELOG do #6251."
+    },
+    "tests/unit/ui/provider-plan-config.test.tsx": {
+      "replacement": "tests/unit/quota-plans-route-retired.test.ts",
+      "reason": "vitest-ui triage 2026-10-24: tests ProviderPlanConfigClient, which 2300db6cc5 (Phase C2) deleted when the standalone Plans screen was retired and its dimensions editor moved into PoolWizard step 2. The file could not even import its subject. The replacement guards the retirement (route + sidebar entry stay gone); PoolWizard has its own suites (quota-pool-wizard*.test.ts)."
+    },
+    "tests/unit/shared/components/AutoRoutingBanner.test.tsx": {
+      "replacement": "tests/unit/home-no-autorouting-banner.test.ts",
+      "reason": "vitest-ui triage 2026-10-24: leftover second copy of the AutoRoutingBanner suite. v3.8.45 #6164 deleted the component (feature removed by the maintainer) and its co-located test, already registered above; this copy under tests/unit/shared/components failed to resolve the deleted module. Same replacement guard."
     }
   },
   "tests/unit/catalog-updates-v3x.test.ts": "v3.8.45 #6248: fix(providers) remove deprecated MiMo V2 entries — os 5 asserts removidos pinavam specs de modelos mimo-v2-* que deixaram de existir no catálogo (54→49). Asserts seguem a remoção dos modelos, não enfraquecimento. Verificado legítimo. Prune após v3.8.45 mergear para main.",
