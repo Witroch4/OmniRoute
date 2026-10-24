@@ -14,16 +14,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const TEST_DATA_DIR = fs.mkdtempSync(
-  path.join(os.tmpdir(), "omniroute-vision-bridge-")
-);
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-vision-bridge-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 // Prevent vision bridge from routing through a real API
 process.env.VISION_BRIDGE_ENABLED = "false";
 
-const { callVisionModel } = await import(
-  "../../../src/lib/guardrails/visionBridgeHelpers.ts"
-);
+const { callVisionModel } = await import("../../../src/lib/guardrails/visionBridgeHelpers.ts");
+const { getFallbackModels } = await import("../../../src/lib/guardrails/visionBridgeRouter.ts");
 
 const originalFetch = globalThis.fetch;
 
@@ -37,44 +34,53 @@ test.afterEach(() => {
 });
 
 // Helper: build a minimal OpenAI-compat image data URI
-const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const TINY_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 test("callVisionModel falls through to next model when primary fails", async () => {
-  let fetchCallCount = 0;
-  const FALLBACK_RESPONSE = JSON.stringify({
-    choices: [{ message: { content: "fallback model description" } }],
-  });
+  const FALLBACK_DESCRIPTION = "fallback model description";
+  const calls: Array<{ url: string; model: string }> = [];
 
-  globalThis.fetch = async (url: RequestInfo | URL, _init?: RequestInit) => {
-    fetchCallCount++;
-    if (fetchCallCount === 1) {
+  globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+    calls.push({ url: String(url), model: String(body.model) });
+    if (calls.length === 1) {
       // First call (primary model) — simulate API error
       throw new Error("mock: primary model unavailable");
     }
-    // Second call (fallback model) — return valid response
-    return new Response(FALLBACK_RESPONSE, {
+    // Second call (fallback model) — answer in the wire format of the API the
+    // fallback is called through. The router ranks fallbacks by tier, and since
+    // credential-less gateways stopped being candidates the top fallback is an
+    // Anthropic model (Messages API), not an OpenAI-compatible one.
+    const anthropic = String(url).endsWith("/v1/messages");
+    const payload = anthropic
+      ? { content: [{ type: "text", text: FALLBACK_DESCRIPTION }] }
+      : { choices: [{ message: { content: FALLBACK_DESCRIPTION } }] };
+    return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   };
 
+  const routerConfig = { fixedModel: "openai/gpt-4o-mini", maxFallbackAttempts: 2 };
+  const [expectedFallback] = getFallbackModels("openai/gpt-4o-mini", routerConfig);
+  assert.ok(expectedFallback, "the router must offer at least one fallback model");
+
   const result = await callVisionModel(
     TINY_PNG,
     { model: "openai/gpt-4o-mini", prompt: "Describe this image." },
     "sk-test-key",
-    { fixedModel: "openai/gpt-4o-mini", maxFallbackAttempts: 2 }
+    routerConfig
   );
 
+  assert.equal(calls.length, 2, "must have attempted exactly 2 models (primary + 1 fallback)");
+  assert.equal(calls[0].model, "gpt-4o-mini", "first attempt is the primary model");
   assert.equal(
-    fetchCallCount,
-    2,
-    "must have attempted exactly 2 models (primary + 1 fallback)"
+    calls[1].model,
+    expectedFallback.split("/").slice(1).join("/"),
+    "second attempt is the router's first fallback"
   );
-  assert.equal(
-    result,
-    "fallback model description",
-    "must return the fallback model's response"
-  );
+  assert.equal(result, FALLBACK_DESCRIPTION, "must return the fallback model's response");
 });
 
 test("callVisionModel throws when ALL models fail", async () => {
