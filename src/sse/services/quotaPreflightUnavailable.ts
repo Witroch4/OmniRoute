@@ -28,11 +28,15 @@ export async function markQuotaPreflightAccountUnavailable(
       connectionId,
       model: requestedModel,
       rateLimitedUntil: unavailableUntil,
+      // Fork (min-spend guarantee / bypass scope): record that this scope cooldown is OUR cutoff,
+      // not an upstream 429, so a key allowed past the cutoff can route through it.
+      rateLimitSource: "quota_preflight",
     });
     return unavailableUntil;
   }
 
   if (isAntigravityQuotaProvider(provider) && requestedModel?.trim()) {
+    // Fork: the family lock is tagged as preflight-sourced (see persistAntigravityPreflightFamilyLock).
     await persistAntigravityPreflightFamilyLock({
       provider,
       connectionId,

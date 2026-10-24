@@ -19,7 +19,12 @@ type CodexScopedQuotaPatch = {
   quotaState?: JsonRecord;
   exhaustedWindow?: "5h" | "7d" | null;
   rateLimitedUntil?: string | null;
-  rateLimitSource?: "fallback" | "quota_reset";
+  /**
+   * Origin of `rateLimitedUntil`. `quota_reset` is an upstream-authoritative deadline,
+   * `fallback` a cooldown from a real 429, `quota_preflight` (fork) OmniRoute's own quota
+   * cutoff — the only one a bypass/min-spend-guarantee key is allowed to walk through.
+   */
+  rateLimitSource?: "fallback" | "quota_reset" | "quota_preflight";
 };
 
 const CODEX_CHILD_COOLDOWN_KEYS = [
@@ -170,11 +175,15 @@ export async function updateCodexScopedQuotaState(
           typeof scopeCooldowns[scope] === "string"
             ? new Date(scopeCooldowns[scope] as string).getTime()
             : NaN;
+        const existingIsActive =
+          Number.isFinite(existingCooldownMs) && existingCooldownMs > Date.now();
         const existingIsAuthoritative =
-          sourceByScope[scope] === "quota_reset" &&
-          patch.rateLimitSource !== "quota_reset" &&
-          Number.isFinite(existingCooldownMs) &&
-          existingCooldownMs > Date.now();
+          existingIsActive &&
+          ((sourceByScope[scope] === "quota_reset" && patch.rateLimitSource !== "quota_reset") ||
+            // Fork: our own quota-preflight cutoff never replaces an active cooldown that came
+            // from the upstream (a real 429; a legacy row without a source counts as real).
+            (patch.rateLimitSource === "quota_preflight" &&
+              sourceByScope[scope] !== "quota_preflight"));
         scopeCooldowns[scope] = existingIsAuthoritative
           ? scopeCooldowns[scope]
           : patch.rateLimitedUntil;
@@ -309,10 +318,11 @@ export function liftCodexScopeCooldownOnHeadroom(id: string, scope: "codex" | "s
 export async function updateCodexScopeCooldown(
   id: string,
   scope: "codex" | "spark",
-  rateLimitedUntil: string
+  rateLimitedUntil: string,
+  rateLimitSource: "fallback" | "quota_preflight" = "fallback"
 ): Promise<JsonRecord | null> {
   return updateCodexScopedQuotaState(id, scope, {
     rateLimitedUntil,
-    rateLimitSource: "fallback",
+    rateLimitSource,
   });
 }

@@ -82,6 +82,8 @@ import {
   formatRetryAfter,
   checkFallbackError,
   isModelLocked,
+  isModelLockedOnlyForReason,
+  QUOTA_PREFLIGHT_LOCK_REASON,
   getModelLockoutInfo,
   lockModel,
   lockExactModel,
@@ -142,6 +144,7 @@ import {
 import { formatQuotaUsageReason } from "@omniroute/open-sse/services/quotaWindowLabel.ts";
 import {
   getCodexChildCooldown,
+  isCodexChildCooldownFromQuotaPreflight,
   isCodexChildUnavailable,
   persistCodexChildCooldown,
 } from "@omniroute/open-sse/services/codexAccount/index.ts";
@@ -244,6 +247,31 @@ function bypassesQuotaPreflightCooldown(
   bypassQuotaPolicy: boolean
 ): boolean {
   return bypassQuotaPolicy && connection.lastErrorSource === "quota_preflight";
+}
+
+// Fork (min-spend guarantee / bypass scope): the quota preflight parks codex per quota scope and
+// agy/antigravity per model family — never on the connection row — and tags the origin there
+// (quotaPreflightUnavailable.ts). A key allowed past the provider cutoff routes through those
+// cooldowns too; a cooldown from a real upstream 429 never qualifies.
+function bypassesCodexPreflightScopeCooldown(
+  connection: ProviderConnectionView,
+  model: string | null,
+  bypassQuotaPolicy: boolean
+): boolean {
+  return bypassQuotaPolicy && isCodexChildCooldownFromQuotaPreflight(connection, model);
+}
+
+function bypassesAntigravityPreflightFamilyLock(
+  provider: string,
+  connectionId: string,
+  model: string | null,
+  bypassQuotaPolicy: boolean
+): boolean {
+  return (
+    bypassQuotaPolicy &&
+    isAntigravityQuotaProvider(provider) &&
+    isModelLockedOnlyForReason(provider, connectionId, model, QUOTA_PREFLIGHT_LOCK_REASON)
+  );
 }
 
 const MIN_QUOTA_THRESHOLD_PERCENT = 1;
@@ -1189,7 +1217,10 @@ export async function getProviderCredentials(
     const isCodexScopeUnavailable = (
       connection: ProviderConnectionView,
       model: string | null
-    ): boolean => provider === "codex" && isCodexChildUnavailable(connection, model);
+    ): boolean =>
+      provider === "codex" &&
+      isCodexChildUnavailable(connection, model) &&
+      !bypassesCodexPreflightScopeCooldown(connection, model, bypassQuotaPolicy);
 
     // #5903: an active session-affinity pin outranks a per-request reset-aware
     // forcedConnectionId (see sessionAffinityPin leaf for the full rationale).
@@ -1461,7 +1492,13 @@ export async function getProviderCredentials(
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
         if (
           requestedModel &&
-          (isModelLocked(provider, c.id, requestedModel) ||
+          ((isModelLocked(provider, c.id, requestedModel) &&
+            !bypassesAntigravityPreflightFamilyLock(
+              provider,
+              c.id,
+              requestedModel,
+              bypassQuotaPolicy
+            )) ||
             isAlibabaModelFreeDrained(
               provider,
               c.providerSpecificData as Record<string, unknown>,
@@ -2682,9 +2719,21 @@ export async function markAccountUnavailable(
     }
 
     // T09: Codex scope-aware lockout guard (codex vs spark independent pools).
+    // Fork: a scope cooldown parked by our own quota preflight is not a duplicate of the real
+    // 429 being reported now — that one must overwrite it (and re-tag the origin) below.
+    const codexScopeFromPreflight =
+      provider === "codex" &&
+      status === 429 &&
+      typeof model === "string" &&
+      conn != null &&
+      isCodexChildCooldownFromQuotaPreflight(conn, model);
     if (provider === "codex" && typeof model === "string" && model.trim().length > 0) {
       const scopeRateLimitedUntil = conn ? getCodexChildCooldown(conn, model) : null;
-      if (scopeRateLimitedUntil && new Date(scopeRateLimitedUntil).getTime() > Date.now()) {
+      if (
+        scopeRateLimitedUntil &&
+        new Date(scopeRateLimitedUntil).getTime() > Date.now() &&
+        !codexScopeFromPreflight
+      ) {
         log.info(
           "AUTH",
           `${connectionId.slice(0, 8)} already scope-limited for ${getCodexModelScope(model)} (until ${scopeRateLimitedUntil}), skipping duplicate mark`
@@ -3326,7 +3375,8 @@ export async function markAccountUnavailable(
     ) {
       const scope = getCodexModelScope(model);
       const scopeRateLimitedUntil =
-        getCodexChildCooldown(conn, model) || getUnavailableUntil(cooldownMs);
+        (!codexScopeFromPreflight && getCodexChildCooldown(conn, model)) ||
+        getUnavailableUntil(cooldownMs);
       const scopeCooldownMs = Math.max(new Date(scopeRateLimitedUntil).getTime() - Date.now(), 0);
 
       await persistCodexChildCooldown({

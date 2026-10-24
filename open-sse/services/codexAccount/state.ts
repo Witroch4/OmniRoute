@@ -33,6 +33,14 @@ function getLegacyCooldown(account: CodexChildAccount): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+/** Origin of a child's persisted cooldown (`fallback` | `quota_reset` | `quota_preflight`), if known. */
+export function getCodexChildCooldownSource(account: CodexChildAccount): string | null {
+  const value = asRecord(account.connection.providerSpecificData.codexScopeRateLimitSource)[
+    account.scope
+  ];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 function asQuotaState(value: unknown): CodexPersistedQuotaState | null {
   const record = asRecord(value);
   return Object.keys(record).length > 0 ? (record as CodexPersistedQuotaState) : null;

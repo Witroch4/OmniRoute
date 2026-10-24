@@ -152,6 +152,13 @@ export type ProviderProfile = {
 };
 type JsonRecord = Record<string, unknown>;
 type RateLimitReasonValue = (typeof RateLimitReason)[keyof typeof RateLimitReason];
+/**
+ * Fork (min-spend guarantee / bypass scope): reason of a model lock written by OmniRoute's OWN
+ * quota preflight, as opposed to one the upstream imposed with a real 429. A key allowed past
+ * the provider cutoff may route through the former and never through the latter.
+ */
+export const QUOTA_PREFLIGHT_LOCK_REASON = "quota_preflight";
+
 export type ModelLockoutEntry = {
   reason: string;
   until: number;
@@ -764,6 +771,11 @@ export function lockModel(
   // within Node.js's single-threaded event loop.
   const existing = modelLockouts.get(key);
   if (existing && existing.until > newUntil) {
+    // Fork: upstream evidence landing on one of our quota-preflight locks takes ownership of it
+    // (the longer deadline stays), so a bypassing key stops walking through a real throttle.
+    if (existing.reason === QUOTA_PREFLIGHT_LOCK_REASON && reason !== QUOTA_PREFLIGHT_LOCK_REASON) {
+      existing.reason = reason;
+    }
     if (metadata.failureCount && metadata.failureCount > existing.failureCount) {
       existing.failureCount = metadata.failureCount;
       existing.lastFailureAt = metadata.lastFailureAt ?? existing.lastFailureAt;
@@ -1045,6 +1057,28 @@ export function isModelLocked(
     cleanupModelLockKey,
     getModelLockKeys(provider, connectionId, model)
   );
+}
+
+/**
+ * True when the model is locked on this account AND every active lock entry carries `reason`.
+ * Used to tell a lock that only our own quota preflight set from one the upstream imposed.
+ */
+export function isModelLockedOnlyForReason(
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined,
+  reason: string
+): boolean {
+  if (!model) return false;
+  let locked = false;
+  for (const key of getModelLockKeys(provider, connectionId, model)) {
+    cleanupModelLockKey(key);
+    const entry = modelLockouts.get(key);
+    if (!entry) continue;
+    if (entry.reason !== reason) return false;
+    locked = true;
+  }
+  return locked;
 }
 
 /**

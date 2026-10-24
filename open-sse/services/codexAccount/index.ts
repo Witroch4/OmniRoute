@@ -1,5 +1,6 @@
 import { getCodexModelScope } from "../../config/codexQuotaScopes.ts";
 import {
+  getCodexChildCooldownSource,
   getCodexChildQuotaHydration,
   getEarliestCodexChildCooldown,
   inspectCodexAccount,
@@ -176,6 +177,23 @@ export function getCodexChildCooldown(
   now = Date.now()
 ): string | null {
   return inspectResolvedCodexChild(connection, model, now)?.rateLimitedUntil ?? null;
+}
+
+/**
+ * Fork: whether the requested model's virtual child is cooling down ONLY because OmniRoute's
+ * own quota preflight parked it (no real upstream 429 behind it). Bypass-scope and
+ * min-spend-guarantee keys route past such a cooldown; a real 429 never qualifies.
+ */
+export function isCodexChildCooldownFromQuotaPreflight(
+  connection: CodexAccountConnection,
+  model: string | null | undefined,
+  now = Date.now()
+): boolean {
+  const pool = createCodexAccountPool(connection);
+  const account = resolveCodexAccount(pool, model);
+  if (account.kind !== "child") return false;
+  const state = inspectCodexAccount(pool, account, now);
+  return state.unavailable && getCodexChildCooldownSource(account) === "quota_preflight";
 }
 
 export {
