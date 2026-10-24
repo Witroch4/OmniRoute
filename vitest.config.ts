@@ -24,13 +24,16 @@ export default defineConfig({
       "tests/unit/**/*.test.tsx",
       "open-sse/**/__tests__/**/*.test.ts",
       "open-sse/services/**/__tests__/**/*.test.ts",
-      "tests/e2e/ecosystem.test.ts",
-      "tests/e2e/protocol-clients.test.ts",
     ],
     exclude: [
       "**/node_modules/**",
       "**/.git/**",
       "open-sse/services/autoCombo/__tests__/providerDiversity.test.ts",
+      // Live-server E2E — they drive a real running OmniRoute over HTTP, so they must
+      // never run in this jsdom job. They run through test:ecosystem /
+      // test:protocols:e2e, which boot a server and use vitest.e2e-live.config.ts.
+      "tests/e2e/ecosystem.test.ts",
+      "tests/e2e/protocol-clients.test.ts",
     ],
     coverage: {
       reportsDirectory: "coverage",
