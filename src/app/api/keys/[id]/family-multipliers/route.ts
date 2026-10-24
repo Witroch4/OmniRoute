@@ -9,7 +9,7 @@ import {
   replaceFamilyMultipliers,
   type FamilyMultiplierRuleInput,
 } from "@/lib/db/apiKeyModelFamilyMultipliers";
-import { validateBody } from "@/shared/validation/helpers";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import * as log from "@/sse/utils/logger";
 
 // Fork: Hard Rule #7 / t06 route-validation gate — the PUT body is validated with Zod
@@ -73,10 +73,16 @@ const familyMultipliersPayloadSchema = z.object(
 /** Exported for unit tests — validates the PUT body without touching the DB. */
 export function normalizeFamilyMultipliersPayload(payload: unknown): FamilyMultiplierRuleInput[] {
   const validation = validateBody(familyMultipliersPayloadSchema, payload);
-  if (!validation.success) {
+  if (isValidationFailure(validation)) {
     throw new Error(validation.error.details[0]?.message ?? "Invalid payload");
   }
-  return validation.data.rules;
+  return validation.data.rules.map((rule) => ({
+    provider: rule.provider,
+    familyGlob: rule.familyGlob,
+    multiplier: rule.multiplier,
+    enabled: rule.enabled,
+    priority: rule.priority,
+  }));
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {

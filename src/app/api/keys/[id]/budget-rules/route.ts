@@ -8,7 +8,7 @@ import {
   replaceModelBudgetRules,
   type ModelBudgetRuleInput,
 } from "@/lib/db/apiKeyModelBudgetRules";
-import { validateBody } from "@/shared/validation/helpers";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import * as log from "@/sse/utils/logger";
 
 // Fork: Hard Rule #7 / t06 route-validation gate — the PUT body is validated with Zod
@@ -58,10 +58,18 @@ const budgetRulesPayloadSchema = z.object(
 /** Exported for unit tests — validates the PUT body without touching the DB. */
 export function normalizeBudgetRulesPayload(payload: unknown): ModelBudgetRuleInput[] {
   const validation = validateBody(budgetRulesPayloadSchema, payload);
-  if (!validation.success) {
+  if (isValidationFailure(validation)) {
     throw new Error(validation.error.details[0]?.message ?? "Invalid payload");
   }
-  return validation.data.rules;
+  return validation.data.rules.map((rule) => ({
+    sourceProvider: rule.sourceProvider,
+    sourceFamily: rule.sourceFamily,
+    weeklyLimitUsd: rule.weeklyLimitUsd,
+    targetProvider: rule.targetProvider,
+    targetFamily: rule.targetFamily,
+    enabled: rule.enabled,
+    priority: rule.priority,
+  }));
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
