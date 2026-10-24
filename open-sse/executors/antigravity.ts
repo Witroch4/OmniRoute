@@ -33,6 +33,13 @@ import {
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
 import {
+  buildAntigravityRefusalReplayResponse,
+  fingerprintAntigravityRequest,
+  getActiveAntigravityRefusal,
+  getAntigravity429AttemptBudget,
+  rememberAntigravity429Refusal,
+} from "../services/antigravity429Guard.ts";
+import {
   injectCreditsField,
   shouldRetryWithCredits,
   shouldUseCreditsFirst,
@@ -1140,6 +1147,11 @@ export class AntigravityExecutor extends BaseExecutor {
     let lastStatus = 0;
     const MAX_AUTO_RETRIES = 3;
     const retryAttemptsByUrl: Record<number, number> = {}; // Track retry attempts per URL
+    // Upstream 429s for this request across ALL hosts; once the budget is spent the 429
+    // goes back to the caller instead of being retried (antigravity429Guard.ts).
+    const max429Attempts = getAntigravity429AttemptBudget();
+    let upstream429Count = 0;
+    let requestFingerprint: string | null = null;
 
     // Always stream upstream — buildUrl always returns the streaming endpoint.
     // For non-streaming clients, we collect the SSE below and return a synthetic
@@ -1227,6 +1239,25 @@ export class AntigravityExecutor extends BaseExecutor {
       if (useCreditsFirst) {
         transformedBody = injectCreditsField(transformedBody);
         log?.debug?.("AG_CREDITS", "Credits-first enabled (ANTIGRAVITY_CREDITS=always)");
+      }
+
+      // A body that already spent its 429 budget is answered locally until the block
+      // expires — the client re-sending it must not reach Google again.
+      if (requestFingerprint === null && transformedBody && typeof transformedBody === "object") {
+        requestFingerprint = fingerprintAntigravityRequest(accountId, transformedBody);
+        const activeRefusal = getActiveAntigravityRefusal(requestFingerprint);
+        if (activeRefusal) {
+          log?.warn?.(
+            "AG_429_BUDGET",
+            `Not resending a request Antigravity refused with 429 (repeat ${activeRefusal.strikes}, ${Math.ceil(activeRefusal.remainingMs / 1000)}s left) — answered locally`
+          );
+          return {
+            response: buildAntigravityRefusalReplayResponse(activeRefusal),
+            url,
+            headers,
+            transformedBody: attachToolNameMap(transformedBody, requestToolNameMap),
+          };
+        }
       }
 
       // Initialize retry counter for this URL
@@ -1319,13 +1350,20 @@ export class AntigravityExecutor extends BaseExecutor {
 
         // Parse retry time for 429/503 responses
         let retryMs: number | null = null;
+        let budget429Spent = false;
 
         if (
           response.status === HTTP_STATUS.RATE_LIMITED ||
           response.status === HTTP_STATUS.SERVICE_UNAVAILABLE
         ) {
+          if (response.status === HTTP_STATUS.RATE_LIMITED) {
+            upstream429Count += 1;
+            budget429Spent = upstream429Count >= max429Attempts;
+          }
           // Try to get retry time from headers first
           retryMs = this.parseRetryHeaders(response.headers);
+          // What Google itself stated, before decide429 fills in its defaults.
+          let upstreamRetryHintMs: number | null = retryMs;
 
           // If no retry time in headers, try to parse from error message body
           if (!retryMs) {
@@ -1343,6 +1381,7 @@ export class AntigravityExecutor extends BaseExecutor {
 
               // 1. Try to parse explicit retry time from message
               const parsedRetryMs = this.parseRetryFromErrorMessage(errorMessage);
+              upstreamRetryHintMs = parsedRetryMs ?? null;
 
               // 2. Classify 429 (pass header-parsed retry hint as fallback
               //    signal — multi-hour Retry-After upgrades rate_limited to
@@ -1453,12 +1492,21 @@ export class AntigravityExecutor extends BaseExecutor {
             }
           }
 
+          if (budget429Spent && requestFingerprint) {
+            const refusal = rememberAntigravity429Refusal(requestFingerprint, upstreamRetryHintMs);
+            log?.warn?.(
+              "AG_429_BUDGET",
+              `${upstream429Count} upstream 429s for this request (budget ${max429Attempts}) — returning it; identical re-sends are answered locally for ${Math.ceil(refusal.blockMs / 1000)}s`
+            );
+          }
+
           // Bounded short-retry: a non-null retryAfterMs ≤ 60s covers nearly every
           // 429 (decide429 returns 2s/5s/60s defaults), so this branch MUST share the
           // per-URL attempt counter. Without the bound a persistent 429 loops forever
           // on the same endpoint/account (urlIndex-- cancels the loop's urlIndex++) and
           // never returns the 429 to the account-fallback layer in chat.ts.
           if (
+            !budget429Spent &&
             retryMs &&
             retryMs <= LONG_RETRY_THRESHOLD_MS &&
             retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
@@ -1477,7 +1525,11 @@ export class AntigravityExecutor extends BaseExecutor {
           // Auto retry for 429 (no Retry-After) or transient 5xx errors.
           // For 5xx we read the body to detect known transient patterns
           // ("Agent execution terminated due to error", "high traffic", "capacity").
-          if ((!retryMs || retryMs === 0) && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
+          if (
+            !budget429Spent &&
+            (!retryMs || retryMs === 0) &&
+            retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
+          ) {
             let shouldAutoRetry = response.status === HTTP_STATUS.RATE_LIMITED;
             if (!shouldAutoRetry && ANTIGRAVITY_TRANSIENT_STATUSES.has(response.status)) {
               try {
@@ -1518,12 +1570,12 @@ export class AntigravityExecutor extends BaseExecutor {
           );
           lastStatus = response.status;
 
-          if (urlIndex + 1 < fallbackCount) {
+          if (!budget429Spent && urlIndex + 1 < fallbackCount) {
             continue;
           }
         }
 
-        if (this.shouldRetry(response.status, urlIndex)) {
+        if (!budget429Spent && this.shouldRetry(response.status, urlIndex)) {
           log?.debug?.("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
           lastStatus = response.status;
           continue;

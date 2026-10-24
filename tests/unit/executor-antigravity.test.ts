@@ -11,6 +11,7 @@ import {
 } from "../../open-sse/services/antigravityVersion.ts";
 import { clearAntigravityProjectCache } from "../../open-sse/services/antigravityProjectBootstrap.ts";
 import { runWithCapture } from "../../open-sse/utils/providerRequestLogging.ts";
+import { resetAntigravity429GuardForTests } from "../../open-sse/services/antigravity429Guard.ts";
 
 type AntigravityTransformResult = Exclude<
   Awaited<ReturnType<AntigravityExecutor["transformRequest"]>>,
@@ -63,6 +64,8 @@ async function withEnv<T>(
 
 test.afterEach(() => {
   clearAntigravityVersionCache();
+  // The guard remembers bodies that spent their 429 budget; tests reuse the same body.
+  resetAntigravity429GuardForTests();
 });
 
 test("AntigravityExecutor.buildUrl always targets the streaming endpoint", () => {
@@ -747,9 +750,9 @@ test("AntigravityExecutor.execute bounds a persistent short-retry 429 instead of
 
   // "rate limited" classifies as rate_limited → decide429 returns 60s
   // (≤ LONG_RETRY_THRESHOLD_MS), i.e. the short-retry branch. A persistent 429
-  // must NOT loop forever on one endpoint — it must exhaust MAX_AUTO_RETRIES per
-  // endpoint, advance through every base URL, then return the 429 so the
-  // account-fallback layer can switch accounts.
+  // must NOT loop forever on one endpoint — and must not walk every host either:
+  // the per-request 429 budget (antigravity429Guard.ts, default 2) returns it so
+  // the account-fallback layer can switch accounts.
   globalThis.fetch = async (url) => {
     calls.push(String(url));
     return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
@@ -774,12 +777,68 @@ test("AntigravityExecutor.execute bounds a persistent short-retry 429 instead of
     // Returns the 429 rather than hanging.
     assert.equal(result.response.status, 429);
 
-    // Bounded: 3 endpoints × (1 initial + MAX_AUTO_RETRIES=3) = 12 attempts total.
-    assert.equal(calls.length, 12);
+    // Bounded by the 429 budget: the call plus one retry. Before the budget it was
+    // 3 endpoints × (1 initial + MAX_AUTO_RETRIES=3) = 12 attempts.
+    assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
 
-    // Tried every distinct base URL before giving up.
-    const distinctHosts = new Set(calls.map((u) => new URL(u).host));
-    assert.equal(distinctHosts.size, 3);
+test("AntigravityExecutor.execute does not resend a request Antigravity refused with a hintless 429", async () => {
+  const executor = new AntigravityExecutor();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const calls: string[] = [];
+  seedAntigravityVersionCache("2026.04.17-test");
+
+  // What Cloud Code answered to every Claude Code request on 2026-10-24: no retry hint,
+  // no reason, so classify429 says "unknown" (soft retry). It used to cost 12 calls per
+  // execute, and the client re-sending the body paid them again each time.
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 429,
+          message: "Resource has been exhausted (e.g. check quota).",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      }),
+      { status: 429, headers: { "Content-Type": "application/json" } }
+    );
+  };
+  globalThis.setTimeout = ((callback) => {
+    (callback as () => void)();
+    return 0;
+  }) as typeof setTimeout;
+
+  const run = (text: string) =>
+    executor.execute({
+      model: "agy/gemini-3.8-flash-high",
+      body: { request: { contents: [{ role: "user", parts: [{ text }] }] } },
+      stream: true,
+      credentials: { accessToken: "token", projectId: "project-1", connectionId: "conn-429" },
+      log: { debug() {}, warn() {}, info() {} },
+    });
+
+  try {
+    const first = await run("refused body");
+    assert.equal(first.response.status, 429);
+    assert.equal(calls.length, 2, "the call plus one retry, then the 429 goes back");
+
+    // The client re-sends the same body: answered locally, nothing reaches Google.
+    const resend = await run("refused body");
+    assert.equal(resend.response.status, 429);
+    assert.equal(calls.length, 2, "an identical re-send must not reach the upstream");
+    assert.ok(Number(resend.response.headers.get("Retry-After")) > 60);
+    const payload = (await resend.response.json()) as ErrorPayload;
+    assert.match(payload.error.message, /not resending it to Antigravity/);
+
+    // A different request is not blocked by it.
+    await run("another body");
+    assert.equal(calls.length, 4);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

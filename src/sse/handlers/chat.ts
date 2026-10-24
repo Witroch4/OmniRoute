@@ -27,6 +27,10 @@ import {
 } from "@omniroute/open-sse/config/antigravityRetiredModels.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { isSelfInflictedUpstreamTimeout } from "@omniroute/open-sse/handlers/chatCore/cooldownClassification.ts";
+import {
+  isAntigravityRefusalReplay,
+  usesAntigravity429Budget,
+} from "@omniroute/open-sse/services/antigravity429Guard.ts";
 import { buildCodexExhaustedStreamBody } from "@omniroute/open-sse/handlers/chatCore/codexFailover.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
@@ -1318,6 +1322,10 @@ async function handleSingleModelChat(
   // re-attempt to exactly one for the whole request. Declared outside both retry
   // loops so it can never reset and loop.
   let streamEarlyEofRetries = 0;
+  // The Antigravity executor already spends a bounded 429 budget per request
+  // (antigravity429Guard.ts); restarting the whole request on top of it multiplied one
+  // refusal into dozens of upstream calls. Set once this request got such a 429.
+  let antigravity429AlreadyRetried = false;
 
   requestAttemptLoop: while (true) {
     const excludedConnectionIds = new Set<string>();
@@ -1365,7 +1373,12 @@ async function handleSingleModelChat(
             attempt: requestRetryAttempt,
           });
 
-          if (retryDecision.shouldRetry) {
+          if (retryDecision.shouldRetry && antigravity429AlreadyRetried) {
+            log.info(
+              "COOLDOWN_RETRY",
+              `${provider}/${model} not restarted: the Antigravity executor already retried this request's 429`
+            );
+          } else if (retryDecision.shouldRetry) {
             const waitSec = Math.max(Math.ceil(retryDecision.waitMs / 1000), 0);
             log.info(
               "COOLDOWN_RETRY",
@@ -1871,6 +1884,16 @@ async function handleSingleModelChat(
         }
       }
 
+      if (result.status === 429 && usesAntigravity429Budget(provider)) {
+        antigravity429AlreadyRetried = true;
+      }
+      // A local answer to a re-send of a request Antigravity already refused is a verdict
+      // on that request, not on the account: no cooldown, no exhaustion mark, no breaker.
+      const isRefusalReplay = isAntigravityRefusalReplay(
+        Number(result.status || 0),
+        String(result.error || "")
+      );
+
       // 6. Daily quota error check - must be executed before markAccountUnavailable
       // Check if it's a daily quota exhausted error (e.g., ModelScope/Kimi "today's quota for model")
       // Daily quota lockout overrides subsequent rate_limited lockout, ensuring lockout until tomorrow 0:00
@@ -1916,7 +1939,7 @@ async function handleSingleModelChat(
       // 7. Mark account as quota-exhausted only for explicit long-window quota signals.
       // A plain 429/high-traffic response should trigger fallback/cooldown, not poison
       // quotaCache as exhausted for 5 minutes while usage quota may still be available.
-      if (!dailyQuotaExhausted && !isLongContextGate) {
+      if (!dailyQuotaExhausted && !isLongContextGate && !isRefusalReplay) {
         const passthroughModels = credentials.providerSpecificData?.passthroughModels;
         if (
           result.status === 429 &&
@@ -1941,6 +1964,7 @@ async function handleSingleModelChat(
       // body three more times.
       const skipConnectionDisable =
         isLongContextGate ||
+        isRefusalReplay ||
         result.status === 499 ||
         result.errorCode === "client_disconnected" ||
         result.errorType === "client_disconnected" ||
@@ -1998,6 +2022,7 @@ async function handleSingleModelChat(
       if (
         !forceLiveComboTest &&
         !isCombo &&
+        !isRefusalReplay &&
         PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(result.status))
       ) {
         breaker._onFailure();
