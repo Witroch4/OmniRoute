@@ -73,6 +73,15 @@ const API_KEY_ID = "test-api-key-fts5";
  */
 function setupSchema(db: InstanceType<typeof Database>) {
   db.exec(`
+    -- retrieveMemories() reads the memory settings through getSettings(), which
+    -- queries key_value (same DDL as src/lib/db/core.ts / migration 001).
+    CREATE TABLE IF NOT EXISTS key_value (
+      namespace TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (namespace, key)
+    );
+
     CREATE TABLE IF NOT EXISTS memories (
       id INTEGER PRIMARY KEY,
       api_key_id TEXT NOT NULL,
