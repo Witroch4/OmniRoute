@@ -3940,7 +3940,8 @@ export async function handleChatCore({
           responseBody,
           responsePayloadFormat,
           clientResponseFormat,
-          responseToolNameMap
+          responseToolNameMap,
+          (body as Record<string, unknown> | null | undefined)?.tools ?? null
         )
       : responseBody;
     const memoryExtractionResponse = translatedResponse;
@@ -4627,7 +4628,10 @@ export async function handleChatCore({
       resolveSuppressThinkClose({
         userAgent: streamUserAgent,
         thinkingMarkerHeader,
-      })
+      }),
+      // The CLIENT's declared tools[]: tool calls come back in the casing the
+      // client declared (Claude Code `Read`, not Gemini's `read`).
+      (body as Record<string, unknown> | null | undefined)?.tools ?? null
     );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);

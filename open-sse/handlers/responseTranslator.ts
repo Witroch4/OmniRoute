@@ -1,3 +1,4 @@
+import { restoreDeclaredToolName } from "../services/declaredToolCasing.ts";
 import { FORMATS } from "../translator/formats.ts";
 import {
   buildGeminiThoughtSignatureKey,
@@ -132,7 +133,9 @@ export function translateNonStreamingResponse(
   responseBody: unknown,
   targetFormat: string,
   sourceFormat: string,
-  toolNameMap?: Map<string, string> | null
+  toolNameMap?: Map<string, string> | null,
+  /** The CLIENT request's tools[] — authority on tool-name casing (declaredToolCasing). */
+  clientTools: unknown = null
 ): unknown {
   // If already in source format, return as-is
   if (targetFormat === sourceFormat) {
@@ -373,7 +376,9 @@ export function translateNonStreamingResponse(
                   if (partObj.functionCall) {
                     const fn = toRecord(partObj.functionCall);
                     const rawName = toString(fn.name);
-                    const restoredName = toolNameMap?.get(rawName) ?? rawName;
+                    // Gemini may echo a declared tool in another casing (`read` for
+                    // Claude Code's `Read`); hand back the client's own spelling.
+                    const restoredName = restoreDeclaredToolName(rawName, toolNameMap, clientTools);
                     const nativeId = toString(fn.id);
                     const toolCallId =
                       nativeId.length > 0

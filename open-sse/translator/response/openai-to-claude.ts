@@ -4,6 +4,7 @@ import { CLAUDE_OAUTH_TOOL_PREFIX } from "../request/openai-to-claude.ts";
 import { hasToolCallShim, applyToolCallShimToBuffer } from "../helpers/toolCallShim.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
+import { findDeclaredToolName } from "../../services/declaredToolCasing.ts";
 
 // Helper: stop thinking block if started
 function stopThinkingBlock(state, results) {
@@ -159,7 +160,9 @@ export function openaiToClaudeResponse(chunk, state) {
       const incomingName = (() => {
         let n = tc.function?.name || "";
         if (n.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) n = n.slice(CLAUDE_OAUTH_TOOL_PREFIX.length);
-        return n;
+        // An upstream may echo a declared tool in another casing; hand back the
+        // client's own spelling (declaredToolCasing). Undeclared names pass as-is.
+        return n ? (findDeclaredToolName(state.clientTools, n) ?? n) : n;
       })();
 
       // A tool call is identified by its id. Some OpenAI-compatible upstreams

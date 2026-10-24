@@ -1,6 +1,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { isAbortFinishReason } from "../../utils/finishReason.ts";
+import { restoreDeclaredToolName } from "../../services/declaredToolCasing.ts";
 
 /**
  * Direct Gemini → Claude response translator.
@@ -82,7 +83,13 @@ export function geminiToClaudeResponse(chunk, state) {
         }
         const fc = part.functionCall;
         const rawToolName = fc.name;
-        const restoredToolName = state.toolNameMap?.get(rawToolName) || rawToolName;
+        // Gemini may echo a declared tool in another casing (`read` for Claude
+        // Code's `Read`, which it then rejects); hand back the client's spelling.
+        const restoredToolName = restoreDeclaredToolName(
+          typeof rawToolName === "string" ? rawToolName : "",
+          state.toolNameMap,
+          state.clientTools
+        );
         const idx = state.contentBlockIndex++;
         const toolId = fc.id || `toolu_${Date.now()}_${idx}`;
 

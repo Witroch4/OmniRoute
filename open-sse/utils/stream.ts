@@ -124,6 +124,8 @@ type StreamOptions = {
   copilotCompatibleReasoning?: boolean;
   /** Suppress the `</think>` close marker for clients that render it verbatim (#5245). */
   suppressThinkClose?: boolean;
+  /** The CLIENT request's tools[] — the authority on tool-name casing (declaredToolCasing). */
+  clientTools?: unknown;
   /**
    * Drop internal commentary-phase output items from Responses API passthrough
    * streams before forwarding (#6199). When omitted, falls back to the
@@ -150,6 +152,8 @@ type TranslateState = ReturnType<typeof initState> & {
   copilotCompatibleReasoning?: boolean;
   /** Suppress the `</think>` close marker for clients that render it verbatim (#5245). */
   suppressThinkClose?: boolean;
+  /** The CLIENT request's tools[] — the authority on tool-name casing (declaredToolCasing). */
+  clientTools?: unknown;
   /** Accumulated message content for call log response body */
   accumulatedContent?: string;
   /** Accumulated reasoning content (separate from content) */
@@ -438,9 +442,7 @@ function createClaudeEmptyResponseLifecycle(): ClaudeEmptyResponseLifecycle {
 function isClaudeRefusalDelta(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
   const delta = (payload as JsonRecord).delta;
-  return (
-    !!delta && typeof delta === "object" && (delta as JsonRecord).stop_reason === "refusal"
-  );
+  return !!delta && typeof delta === "object" && (delta as JsonRecord).stop_reason === "refusal";
 }
 
 function getClaudeEventType(payload: unknown): string | null {
@@ -647,6 +649,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     clientResponseFormat = null,
     copilotCompatibleReasoning = false,
     suppressThinkClose = false,
+    clientTools = null,
     provider = null,
     reqLogger = null,
     toolNameMap = null,
@@ -708,6 +711,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           signatureNamespace,
           copilotCompatibleReasoning,
           suppressThinkClose,
+          clientTools,
           accumulatedContent: "",
           accumulatedReasoning: "",
           toolSchemas: extractToolSchemaMap(body),
@@ -2765,7 +2769,8 @@ export function createSSETransformStreamWithLogger(
   apiKeyInfo: unknown = null,
   onFailure: ((payload: StreamFailurePayload) => void | Promise<void>) | null = null,
   copilotCompatibleReasoning = false,
-  suppressThinkClose = false
+  suppressThinkClose = false,
+  clientTools: unknown = null
 ) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
@@ -2782,6 +2787,7 @@ export function createSSETransformStreamWithLogger(
     onFailure,
     copilotCompatibleReasoning,
     suppressThinkClose,
+    clientTools,
   });
 }
 
