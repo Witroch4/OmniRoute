@@ -271,6 +271,14 @@ export const opencode_goProvider: RegistryEntry = {
       supportsReasoning: true,
       supportsVision: true,
     },
+    // Still in the live list but not in the catalog (2026-10-24); chat completions answers 400
+    // ModelProtocolUnsupported, so the protocol is pinned here.
+    {
+      id: "grok-4.6",
+      name: "Grok 4.6",
+      targetFormat: "openai-responses",
+      supportsReasoning: true,
+    },
     // ── Anthropic messages ───────────────────────────────────────────────────
     {
       id: "claude-haiku-5-5",
@@ -316,6 +324,16 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 65536,
       supportsReasoning: true,
       supportsVision: true,
+    },
+    // Deprecated in the catalog but still served (live list, 2026-10-24); Anthropic protocol only.
+    {
+      id: "minimax-m2.7",
+      name: "MiniMax M2.7",
+      targetFormat: "claude",
+      contextLength: 204800,
+      maxOutputTokens: 131072,
+      supportsReasoning: true,
+      supportsVision: false,
     },
     // ── Google ───────────────────────────────────────────────────────────────
     // "Contributor": served only to workspaces that allow paid endpoints that train on request data.

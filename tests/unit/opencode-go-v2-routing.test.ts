@@ -91,6 +91,16 @@ describe("OpencodeExecutor routes OpenCode Go v2 models by their documented form
     assert.equal(calls[0].headers.Authorization, undefined);
   });
 
+  it("ids the live list still serves outside the catalog keep their own protocol", async () => {
+    // Measured 2026-10-24: on chat completions both answer 400 ModelProtocolUnsupported.
+    const executor = new OpencodeExecutor("opencode-go");
+    assert.equal((await executor.execute(input("grok-4.6"))).url, `${OPENAI}/responses`);
+    assert.equal(
+      (await executor.execute(input("minimax-m2.7"))).url,
+      "https://opencode.ai/inference/go/anthropic/v1/messages"
+    );
+  });
+
   it("the Google-format model uses /google/v1beta generateContent with x-goog-api-key", async () => {
     const result = await new OpencodeExecutor("opencode-go").execute(
       input("gemini-4-argon-contributor", false)
@@ -202,7 +212,6 @@ describe("OpenCode Go v2 catalog", () => {
       "glm-5",
       "kimi-k2.6",
       "kimi-k2.5",
-      "minimax-m2.7",
       "minimax-m2.5",
       "qwen3.7-max",
       "qwen3.6-plus",
