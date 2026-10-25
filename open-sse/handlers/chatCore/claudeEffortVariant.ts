@@ -12,7 +12,7 @@
  * optional log line are returned for the handler to apply.
  */
 
-import { splitClaudeEffortSuffix } from "../../config/providerModels.ts";
+import { CLAUDE_EFFORT_SUFFIXES, splitClaudeEffortSuffix } from "../../config/providerModels.ts";
 import { resolveProviderModelAlias } from "../../services/modelCanonicalization.ts";
 import { isClaudeCodeCompatibleProvider } from "../../services/claudeCodeCompatible.ts";
 import { FORMATS } from "../../translator/formats.ts";
@@ -39,6 +39,12 @@ export function applyClaudeEffortVariant(opts: {
   /** Mutated in place (model + reasoning_effort) when an effort suffix is stripped. */
   body: unknown;
   sourceFormat: string;
+  /**
+   * Fork — the tier the live-catalog gate already folded off this id
+   * (`modelInfo.resolvedThinkingEffort`). A folded suffix is applied exactly like an
+   * unfolded one; otherwise it only reached the upstream on OpenAI targets.
+   */
+  resolvedThinkingEffort?: string | null;
 }): { effectiveModel: string; log: string | null } {
   const { provider, body, sourceFormat } = opts;
   // Cursor advertises native effort-suffixed ids. Its executor resolves exact
@@ -89,8 +95,24 @@ export function applyClaudeEffortVariant(opts: {
         }
       }
       log = `Claude effort variant: stripped "-${effort}" → ${resolvedBase} (reasoning_effort=${effort})`;
+    } else if (
+      !effort &&
+      isClaudeEffortLevel(opts.resolvedThinkingEffort) &&
+      (isDirectClaudeLane || isKnownClaudeEffortBaseModel(knownBase)) &&
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      sourceFormat !== FORMATS.CLAUDE &&
+      !hasExplicitClaudeEffort(body as Record<string, unknown>)
+    ) {
+      (body as Record<string, unknown>).reasoning_effort = opts.resolvedThinkingEffort;
+      log = `Claude effort variant: folded tier → ${effectiveModel} (reasoning_effort=${opts.resolvedThinkingEffort})`;
     }
   }
 
   return { effectiveModel, log };
+}
+
+function isClaudeEffortLevel(value: unknown): value is string {
+  return CLAUDE_EFFORT_SUFFIXES.some((level) => level === value);
 }

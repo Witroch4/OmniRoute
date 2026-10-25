@@ -726,6 +726,9 @@ async function handleChatCoreInner({
       effectiveModel,
       body,
       sourceFormat,
+      // Same origin-model scoping as prepareUpstreamBody: a lifecycle/alias replacement is
+      // not the model the client picked the tier for.
+      resolvedThinkingEffort: effectiveModel === originModel ? resolvedThinkingEffort : null,
     });
     effectiveModel = effortVariant.effectiveModel;
     if (effortVariant.log) {
