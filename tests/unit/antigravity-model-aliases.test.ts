@@ -416,8 +416,9 @@ test("AntigravityExecutor.transformRequest sends Claude through Gemini-compatibl
   // value passes through untouched.
   assert.equal(request.generationConfig.maxOutputTokens, 32769);
   assert.equal(request.generationConfig.temperature, 0.5);
-  assert.equal(request.generationConfig.topK, 40);
-  assert.equal(request.generationConfig.topP, 1);
+  // Default `cli` profile: the official CLI sends no topK/topP (antigravity-cli-envelope).
+  assert.equal(request.generationConfig.topK, undefined);
+  assert.equal(request.generationConfig.topP, undefined);
   assert.equal(request.messages, undefined);
   assert.equal(request.system, undefined);
   assert.equal(request.max_tokens, undefined);

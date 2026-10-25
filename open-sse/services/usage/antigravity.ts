@@ -21,6 +21,7 @@ import {
   toClientAntigravityQuotaModelId,
 } from "../../config/antigravityModelAliases.ts";
 import { isUserVisibleAgyQuotaModelId } from "../../config/agyModels.ts";
+import { recordAntigravityModelEnums } from "../../config/antigravityModelEnums.ts";
 import { getDbInstance } from "@/lib/db/core";
 import {
   applyAntigravityClientProfileHeaders,
@@ -635,6 +636,8 @@ export async function getAntigravityUsage(
       return { message: "Antigravity access forbidden. Check subscription." };
     }
     const modelEntries = toRecord(dataObj.models);
+    // Keep the CLI's `labels.model_enum` current with the live catalog.
+    recordAntigravityModelEnums(modelEntries);
     const userQuotaEntries = new Map<string, JsonRecord>();
     const userQuotaObj = toRecord(userQuotaData);
     if (Array.isArray(userQuotaObj.buckets)) {

@@ -146,9 +146,16 @@ function ompBody(): Record<string, unknown> {
   };
 }
 
-async function transform(model: string, body: Record<string, unknown>): Promise<Envelope> {
+async function transform(
+  model: string,
+  body: Record<string, unknown>,
+  providerSpecificData: Record<string, unknown> = {}
+): Promise<Envelope> {
   const executor = new AntigravityExecutor();
-  const result = await executor.transformRequest(model, body, true, { projectId: "project-1" });
+  const result = await executor.transformRequest(model, body, true, {
+    projectId: "project-1",
+    providerSpecificData,
+  });
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
   return result as unknown as Envelope;
 }
@@ -223,8 +230,8 @@ for (const model of ["antigravity/claude-opus-4-8-thinking", "gemini-3.8-flash-h
     assert.ok(serialized.includes(JSON.stringify({ r: OUTSIDE_MARKER })));
   });
 
-  test(`${model}: used_claude telemetry keys are stripped, other labels kept`, async () => {
-    const envelope = await transform(model, ompBody());
+  test(`${model}: used_claude telemetry keys are stripped, other labels kept (ide profile)`, async () => {
+    const envelope = await transform(model, ompBody(), { clientProfile: "ide" });
     assert.equal("used_claude" in envelope, false);
     assert.equal("used_claude_conservative" in envelope, false);
     assert.deepEqual(envelope.labels, { keep: "root label kept" });
@@ -233,6 +240,16 @@ for (const model of ["antigravity/claude-opus-4-8-thinking", "gemini-3.8-flash-h
     if (envelope.request.labels !== undefined) {
       assert.deepEqual(envelope.request.labels, { keep: "request label kept" });
     }
+  });
+
+  test(`${model}: cli profile sends the CLI's own labels, never the client's`, async () => {
+    const envelope = await transform(model, ompBody());
+    assert.equal("used_claude" in envelope, false);
+    assert.equal("used_claude" in envelope.request, false);
+    const labels = envelope.request.labels as Record<string, string>;
+    assert.equal(labels.keep, undefined, "client labels are not forwarded");
+    assert.equal(labels.used_claude, /claude/i.test(model) ? "true" : "false");
+    assert.equal(labels.root_cascade_id, labels.cascade_id);
   });
 
   test(`${model}: requestType stays "agent" by default (gated, #2055/#8013)`, async () => {

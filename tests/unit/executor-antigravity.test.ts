@@ -161,16 +161,16 @@ test("AntigravityExecutor.transformRequest normalizes model, project and content
     "requestType",
   ]);
   assert.equal(result.userAgent, "antigravity");
-  assert.match(result.requestId, /^agent\/\d+\/[0-9a-f]{8}$/);
+  // Default `cli` profile: the official CLI's request id shape and none of OmniRoute's
+  // own defaults (topK 40 / topP 1 / toolConfig VALIDATED) — antigravity-cli-envelope.test.ts.
+  assert.match(result.requestId, /^agent\/[0-9a-f-]{36}\/\d{13}\/[0-9a-f-]{36}\/1$/);
   assert.equal(result.enabledCreditTypes, undefined);
   assert.ok(result.request.sessionId);
   const request = result.request as { generationConfig?: { topK?: number; topP?: number } };
   const generationConfig = request.generationConfig || {};
-  assert.equal(generationConfig.topK, 40);
-  assert.equal(generationConfig.topP, 1.0);
-  assert.deepEqual(result.request.toolConfig, {
-    functionCallingConfig: { mode: "VALIDATED" },
-  });
+  assert.equal(generationConfig.topK, undefined);
+  assert.equal(generationConfig.topP, undefined);
+  assert.equal(result.request.toolConfig, undefined);
   assert.deepEqual(result.request.contents[0].parts, [{ text: "keep me" }]);
   assert.equal(result.request.contents[1].role, "user");
 });
@@ -1213,15 +1213,14 @@ test("AntigravityExecutor.transformRequest maps Claude models through Gemini con
   assert.ok(result.request.sessionId);
   assert.equal(result.enabledCreditTypes, undefined);
   assert.deepEqual(result.request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+  // The CLI sends systemInstruction with role "user" and no topK/topP.
   assert.deepEqual(result.request.systemInstruction, {
-    role: "system",
+    role: "user",
     parts: [{ text: "System prompt" }],
   });
   assert.deepEqual(result.request.generationConfig, {
     temperature: 1,
     maxOutputTokens: 16384,
-    topK: 40,
-    topP: 1.0,
   });
   assert.equal(result.request.messages, undefined);
   assert.equal(result.request.system, undefined);

@@ -97,9 +97,11 @@ import {
 } from "../services/antigravityClientProfile.ts";
 import {
   generateAntigravityRequestId,
+  getAntigravityAccountKey,
   getAntigravityEnvelopeUserAgent,
   getAntigravitySessionId,
 } from "../services/antigravityIdentity.ts";
+import { applyAntigravityCliEnvelopeIdentity } from "../services/antigravityCliEnvelope.ts";
 import {
   isGeminiTrailingModelTurnRejectingModel,
   stripTrailingGeminiModelTurns,
@@ -526,7 +528,9 @@ function sanitizeAntigravityGeminiRequest(
   const geminiTools = buildGeminiTools(request.tools);
   if (geminiTools) {
     clean.tools = geminiTools;
-    clean.toolConfig = { functionCallingConfig: { mode: "VALIDATED" } };
+    clean.toolConfig = asRecord(request.toolConfig)
+      ? request.toolConfig
+      : { functionCallingConfig: { mode: "VALIDATED" } };
   } else if (asRecord(request.toolConfig)) {
     clean.toolConfig = request.toolConfig;
   }
@@ -901,10 +905,14 @@ export class AntigravityExecutor extends BaseExecutor {
         typeof normalizedRequest?.sessionId === "string" ? normalizedRequest.sessionId : undefined
       ),
       ...(safetySettings !== undefined && { safetySettings }),
+      // Keep the translator's toolConfig: it carries the client's tool_choice ("required"
+      // -> ANY, a named function, "none"). VALIDATED is only the fallback when tools exist
+      // and nothing was chosen; overwriting it silently dropped tool_choice on this path.
       toolConfig:
-        Array.isArray(normalizedRequest?.tools) && normalizedRequest.tools.length > 0
+        normalizedRequest?.toolConfig ??
+        (Array.isArray(normalizedRequest?.tools) && normalizedRequest.tools.length > 0
           ? { functionCallingConfig: { mode: "VALIDATED" } }
-          : normalizedRequest?.toolConfig,
+          : undefined),
     };
 
     // Note: sanitizeAntigravityGeminiRequest() applies a Claude-only field whitelist
@@ -976,6 +984,15 @@ export class AntigravityExecutor extends BaseExecutor {
     // Harness telemetry is dropped from the inner request too (the Claude branch's
     // whitelist already omits it; the Gemini/other branches pass the request through).
     envelope.request = stripAntigravityHarnessTelemetry(envelope.request);
+
+    // On the default `cli` profile the body must read like the official CLI's (request id,
+    // labels, key order, per-conversation session, no OmniRoute-only defaults).
+    if (requestType === "agent" && getAntigravityClientProfile(credentials) === "cli") {
+      return applyAntigravityCliEnvelopeIdentity(envelope, {
+        accountKey: getAntigravityAccountKey(credentials),
+        accountSessionId: getAntigravitySessionId(credentials),
+      });
+    }
 
     return envelope;
   }
