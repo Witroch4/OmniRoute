@@ -172,7 +172,8 @@ function legError(
   retryAfterMs?: number | null,
   errorCode?: string,
   errorType?: string,
-  opts?: { passthrough?: boolean }
+  opts?: { passthrough?: boolean },
+  upstreamDetails?: unknown
 ): ChatCoreErrorResult {
   // createErrorResult(..., errorCode, errorType, upstreamDetails, opts)
   // - opts is the 7th arg, not the 6th.
@@ -182,7 +183,7 @@ function legError(
     retryAfterMs ?? null,
     errorCode,
     errorType,
-    undefined,
+    upstreamDetails,
     opts
   );
   (result as ChatCoreErrorResult).originalError = originalError;
@@ -448,6 +449,16 @@ export async function runNonStreamingProviderLeg(
           connectionId: outcome.connectionId || connectionId,
           model: outcome.model || currentModel,
         });
+        // Fork — the pipeline's error outcome carries the RAW upstream Response; relaying it
+        // skipped the sanitized envelope (an upstream 400 `{"model":…}` reached the client with
+        // no `error` object, and an echoed stack/credential would have too). Build the client
+        // response here like the direct path and the streaming path do: sanitized upstream
+        // details, Claude passthrough projection, and the upstream Retry-After hint the
+        // cooldown logic reads off `result.response.headers`. Upstream headers stay available
+        // as `upstreamHeaders`.
+        const upstreamRetryAfterMs =
+          outcome.result.retryAfterMs ??
+          (outcome.result.response ? parseRetryAfterMs(outcome.result.response) : null);
         return {
           kind: "error",
           result: {
@@ -455,12 +466,12 @@ export async function runNonStreamingProviderLeg(
               outcome.result.status,
               formatted,
               undefined,
-              null,
+              upstreamRetryAfterMs,
               outcome.result.errorCode,
               outcome.result.errorType,
-              { passthrough: input.sourceFormat === "claude" }
+              { passthrough: input.sourceFormat === "claude" },
+              outcome.result.upstreamErrorBody
             ),
-            response: outcome.result.response,
             rawMessage: outcome.result.rawMessage || outcome.result.error,
             upstreamErrorBody: outcome.result.upstreamErrorBody,
             upstreamHeaders: outcome.result.upstreamHeaders ?? outcome.result.response?.headers,
