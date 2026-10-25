@@ -546,6 +546,14 @@ export async function registerNodejs(): Promise<void> {
   await import("@omniroute/open-sse/utils/proxyFetch.ts");
   console.log("[STARTUP] Global fetch proxy patch initialized");
 
+  // agy CLI-identity requests leave through the Go egress when ANTIGRAVITY_EGRESS_URL is
+  // set. It must wrap fetch after the proxy patch and before any provider request
+  // (open-sse/services/antigravityEgress.ts explains why).
+  const { installAntigravityEgressFetch } =
+    await import("@omniroute/open-sse/services/antigravityEgress.ts");
+  const agyEgress = installAntigravityEgressFetch();
+  if (agyEgress !== "disabled") console.log(`[STARTUP] agy egress: ${agyEgress}`);
+
   // Subscribe the proxy set-aside webhook bridge (side-effect import only).
   await import("@/lib/proxyEvents/proxyTransitionBridge");
 

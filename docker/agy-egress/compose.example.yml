@@ -1,0 +1,22 @@
+# agy-egress sidecar — merge this service into the OmniRoute compose (or
+# `docker compose -f docker-compose.yml -f docker/agy-egress/compose.example.yml up -d`)
+# and set ANTIGRAVITY_EGRESS_URL=http://omniroute-agy-egress:8787 on the OmniRoute
+# service. See docker/agy-egress/README.md.
+#
+# It stays on the `default` network only (same as OmniRoute), so OmniRoute can reach it;
+# no port is published to the host. It needs outbound internet to the Google Cloud Code
+# and OAuth hosts — do NOT put it on an egress-blocked internal network.
+services:
+  omniroute-agy-egress:
+    build:
+      context: ./docker/agy-egress
+    image: omniroute-agy-egress:local
+    container_name: omniroute-agy-egress
+    restart: unless-stopped
+    environment:
+      - AGY_EGRESS_LISTEN=:8787
+      # Optional shared secret; set the same value in OmniRoute's ANTIGRAVITY_EGRESS_TOKEN.
+      - AGY_EGRESS_TOKEN=${ANTIGRAVITY_EGRESS_TOKEN:-}
+    networks:
+      - default
+    # No `ports:` — reachable only from sibling containers on the compose network.
