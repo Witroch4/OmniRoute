@@ -60,6 +60,19 @@ When `ANTIGRAVITY_EGRESS_URL` is unset OmniRoute keeps egressing directly throug
 when it is set the sidecar is mandatory for CLI-identity requests (they fail if it is
 down rather than silently going out with Node's fingerprint).
 
+## Limits to know
+
+- **Mandatory once enabled.** With `ANTIGRAVITY_EGRESS_URL` set, CLI-identity requests that cannot reach the sidecar
+  fail (HTTP 502/connection error) instead of falling back to Node's fingerprint. Rolling back is removing that one
+  variable and recreating OmniRoute.
+- **No per-connection proxy.** OmniRoute hands the request to the sidecar over the internal network, so an HTTP/SOCKS
+  proxy assigned to the connection would apply to the hop to the sidecar, not to Google. The sidecar itself egresses
+  directly (set `HTTPS_PROXY` on it with `AGY_EGRESS_USE_ENV_PROXY=1` if the host needs one).
+- **Only the CLI identity is routed.** gemini-cli (same Google hosts, its own Node identity) and the legacy `ide`
+  client profile keep using OmniRoute's own transport.
+- **The token is optional.** The sidecar listens on the internal network only and reaches nothing but the five Google
+  hosts above; `AGY_EGRESS_TOKEN` is defence in depth if other containers share that network.
+
 ## Re-running the fingerprint check
 
 `handoffs/2026-10-25-agy-capture-proxy2.py <workdir> <port>` is a local TLS-terminating
