@@ -19,6 +19,13 @@ import { getLearnedReasoningEffortForModel } from "@omniroute/open-sse/services/
 import { REGISTRY } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { ANTIGRAVITY_MODEL_ALIASES } from "@omniroute/open-sse/config/antigravityModelAliases.ts";
 import { getRegisteredProviderEffortBaseModelId } from "@omniroute/open-sse/utils/registeredEffortVariants.ts";
+import { splitClaudeEffortSuffix } from "@omniroute/open-sse/config/providerModels.ts";
+import {
+  claudeEffortLevelsFor,
+  isKnownClaudeEffortBaseModel,
+} from "@omniroute/open-sse/utils/claudeEffortVariants.ts";
+import { isAntigravityLiteralTierModelId } from "@omniroute/open-sse/utils/antigravityLiteralModelIds.ts";
+import { isDevinLiteralModelIdProvider } from "@omniroute/open-sse/utils/devinLiteralModelIds.ts";
 import { getReservedProviderPrefixes } from "@/shared/constants/reservedProviderPrefixes";
 import { getProviderByAlias } from "@/shared/constants/providers";
 import {
@@ -189,6 +196,36 @@ function registryFoldDespiteLiveCatalog(
     }
   }
   return null;
+}
+
+// Cursor keeps native effort-suffixed ids literal (see applyClaudeEffortVariant).
+const CURSOR_PROVIDER_IDS = new Set(["cursor", "cu", "cursor-api", "cua"]);
+
+/**
+ * Fork — base id of a Claude effort variant (`<base>-low|medium|high|xhigh`) that the
+ * catalog publishes for this provider, provided the base itself is live.
+ *
+ * `appendClaudeEffortVariants` advertises these ids from `modelSpecs` (any thinking-capable
+ * Claude model), while the live-catalog gate only folded suffixes declared in the provider
+ * registry or the synced row. Copilot's Haiku 5.5/4.5, OpenCode Go's Haiku 5.5 and Amazon Q's
+ * Sonnet 4.5 declare none there, so `/v1/models` listed their variants and every call to one
+ * answered 400 "not available in the active live catalog" (measured 2026-10-25). The same
+ * guards as the catalog/dispatch apply: providers that keep tiered ids literal never qualify,
+ * and the level must be one the catalog advertises for that model (no xhigh on Haiku).
+ */
+function liveClaudeEffortVariantBase(
+  providerId: string,
+  modelId: string,
+  isLive: (baseModelId: string) => boolean
+): string | null {
+  if (CURSOR_PROVIDER_IDS.has(providerId) || isDevinLiteralModelIdProvider(providerId)) {
+    return null;
+  }
+  if (isAntigravityLiteralTierModelId(providerId, modelId)) return null;
+  const { baseModel, effort } = splitClaudeEffortSuffix(modelId);
+  if (!effort || !isKnownClaudeEffortBaseModel(baseModel)) return null;
+  if (!claudeEffortLevelsFor(providerId, baseModel).includes(effort)) return null;
+  return isLive(baseModel) ? baseModel : null;
 }
 
 function findRegistryModel(providerId: string, modelId: string): any {
@@ -470,15 +507,33 @@ async function lookupModelMeta(
     const liveBackedEffortVariant =
       effortBaseModelId !== null && syncedModels.some((model) => model.id === effortBaseModelId);
 
-    const available =
-      !liveCatalog.authoritative || Boolean(customMatch || syncedMatch || liveBackedEffortVariant);
+    // The id keeps its suffix: chatCore's applyClaudeEffortVariant strips it and turns it
+    // into reasoning_effort before translation, as on providers without a live catalog.
+    // Its runtime metadata is the base model's, which is what will actually be called.
+    const claudeVariantBaseId =
+      liveCatalog.authoritative && !customMatch && !syncedMatch && !liveBackedEffortVariant
+        ? liveClaudeEffortVariantBase(providerId, resolvedModelId, (baseModelId) =>
+            Boolean(
+              findSyncedModelMeta(syncedModels, baseModelId) ||
+              findCustomModelMeta(customModels, baseModelId)
+            )
+          )
+        : null;
 
-    const metadata = buildRuntimeModelMeta(
-      customMatch,
-      syncedMatch,
-      registryMatch,
-      compatOverrideMatch
-    );
+    const available =
+      !liveCatalog.authoritative ||
+      Boolean(customMatch || syncedMatch || liveBackedEffortVariant || claudeVariantBaseId);
+
+    const metadata = claudeVariantBaseId
+      ? buildRuntimeModelMeta(
+          findCustomModelMeta(customModels, claudeVariantBaseId),
+          findSyncedModelMeta(syncedModels, claudeVariantBaseId),
+          findRegistryModel(providerId, claudeVariantBaseId),
+          Array.isArray(compatOverrides)
+            ? compatOverrides.find((m) => m.id === claudeVariantBaseId)
+            : undefined
+        )
+      : buildRuntimeModelMeta(customMatch, syncedMatch, registryMatch, compatOverrideMatch);
     if (effort) metadata.resolvedThinkingEffort = effort;
     if (!metadata.targetFormat && !syncedMatch && !registryMatch) {
       const inferredTargetFormat = inferGithubUnsyncedTargetFormat(providerId, resolvedModelId);
