@@ -1212,7 +1212,13 @@ test("AntigravityExecutor.transformRequest maps Claude models through Gemini con
   assert.equal(result.requestType, "agent");
   assert.ok(result.request.sessionId);
   assert.equal(result.enabledCreditTypes, undefined);
-  assert.deepEqual(result.request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+  // The CLI wraps the latest user turn: <USER_REQUEST> + local-time metadata.
+  assert.equal(result.request.contents.length, 1);
+  assert.equal(result.request.contents[0].role, "user");
+  assert.match(
+    String(result.request.contents[0].parts[0].text),
+    /^<USER_REQUEST>\nHello\n<\/USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\.\n<\/ADDITIONAL_METADATA>$/
+  );
   // The CLI sends systemInstruction with role "user" and no topK/topP.
   assert.deepEqual(result.request.systemInstruction, {
     role: "user",

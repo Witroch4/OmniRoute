@@ -22,6 +22,17 @@ function getPublicModel(id: string) {
 // the UPSTREAM quota namespace, where `gemini-3.5-flash-low` is the Medium tier's bucket.
 // The 3.5 tier bucket remap table was deliberately left unchanged by the 2026-10-23 catalog
 // drop (the 3.5 models left the public catalog, the bucket remap did not), so it is pinned as-is.
+
+// The default `cli` profile wraps the latest user turn like the official CLI; these tests are
+// about something else, so compare the text inside the wrapper.
+const unwrapCliUserTurn = (text: unknown): unknown =>
+  typeof text === "string"
+    ? text.replace(
+        /^<USER_REQUEST>\n([\s\S]*)\n<\/USER_REQUEST>\n<ADDITIONAL_METADATA>[\s\S]*<\/ADDITIONAL_METADATA>$/,
+        "$1"
+      )
+    : text;
+
 test("toClientAntigravityQuotaModelId maps upstream quota buckets to client tiers", () => {
   assert.equal(
     toClientAntigravityQuotaModelId("gemini-3.5-flash-extra-low"),
@@ -360,7 +371,13 @@ test("AntigravityExecutor.transformRequest dispatches every Gemini 3.8 Flash tie
     // those fields, so they were vacuously true and gave false confidence.
     // #3821-review LEDGER-10.)
     assert.equal(result.model, tierId);
-    assert.deepEqual(result.request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+    assert.deepEqual(
+      result.request.contents.map((c: { role: string; parts: Array<{ text: unknown }> }) => ({
+        ...c,
+        parts: c.parts.map((part) => ({ ...part, text: unwrapCliUserTurn(part.text) })),
+      })),
+      [{ role: "user", parts: [{ text: "Hello" }] }]
+    );
   }
 });
 
@@ -409,7 +426,13 @@ test("AntigravityExecutor.transformRequest sends Claude through Gemini-compatibl
 
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
   const request = result.request as any;
-  assert.deepEqual(request.contents, [{ role: "user", parts: [{ text: "Hello" }] }]);
+  assert.deepEqual(
+    request.contents.map((c: { role: string; parts: Array<{ text: unknown }> }) => ({
+      ...c,
+      parts: c.parts.map((part) => ({ ...part, text: unwrapCliUserTurn(part.text) })),
+    })),
+    [{ role: "user", parts: [{ text: "Hello" }] }]
+  );
   // thinkingBudget+1 bump, preserved. The executor clamps to the CALLED MODEL's
   // own pinned ceiling (#4636 originally used a blanket 16384, which flattened
   // this to 16384); `claude-opus-4-6-thinking` advertises 65536, so the bumped

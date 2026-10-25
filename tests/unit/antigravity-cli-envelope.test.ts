@@ -10,8 +10,8 @@ import { FORMATS } from "../../open-sse/translator/formats.ts";
 import { AntigravityExecutor } from "../../open-sse/executors/antigravity.ts";
 import {
   recordAntigravityModelEnums,
-  resetAntigravityModelEnumsForTests,
-} from "../../open-sse/config/antigravityModelEnums.ts";
+  resetAntigravityCliCatalogForTests,
+} from "../../open-sse/config/antigravityCliCatalog.ts";
 import {
   applyAntigravityCliEnvelopeIdentity,
   isDefaultAntigravityToolConfig,
@@ -180,7 +180,7 @@ test("the legacy ide profile keeps its previous envelope", async () => {
 });
 
 test("model_enum follows the live catalog and is left out for an unknown id", () => {
-  resetAntigravityModelEnumsForTests();
+  resetAntigravityCliCatalogForTests();
   const base = {
     project: "p",
     requestId: "x",
@@ -198,7 +198,7 @@ test("model_enum follows the live catalog and is left out for an unknown id", ()
   ) as Envelope;
   assert.equal(unknown.request.labels?.model_enum, undefined);
   assert.equal(unknown.request.labels?.used_non_gemini_model, "false");
-  resetAntigravityModelEnumsForTests();
+  resetAntigravityCliCatalogForTests();
 
   const claude = applyAntigravityCliEnvelopeIdentity(
     { ...base, model: "claude-sonnet-5-5-medium" },

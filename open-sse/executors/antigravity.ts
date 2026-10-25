@@ -102,6 +102,7 @@ import {
   getAntigravitySessionId,
 } from "../services/antigravityIdentity.ts";
 import { applyAntigravityCliEnvelopeIdentity } from "../services/antigravityCliEnvelope.ts";
+import { hasAntigravityCliGeneration } from "../config/antigravityCliCatalog.ts";
 import {
   isGeminiTrailingModelTurnRejectingModel,
   stripTrailingGeminiModelTurns,
@@ -303,6 +304,10 @@ function applyAntigravityGenerationDefaults(
     Number.isFinite(requestedCeiling) && requestedCeiling > 0
       ? requestedCeiling
       : DEFAULT_ANTIGRAVITY_OUTPUT_TOKENS;
+
+  // The translator already set exactly what the official CLI sends for this model (a client
+  // that set no cap and no reasoning): do not re-fit it or add sampling defaults.
+  if (hasAntigravityCliGeneration(model, request.generationConfig)) return;
 
   const generationConfig =
     request.generationConfig && typeof request.generationConfig === "object"
@@ -525,7 +530,7 @@ function sanitizeAntigravityGeminiRequest(
     ? { ...(request.generationConfig as Record<string, unknown>) }
     : {};
 
-  const geminiTools = buildGeminiTools(request.tools);
+  const geminiTools = buildGeminiTools(request.tools, { keepLengthConstraints: true });
   if (geminiTools) {
     clean.tools = geminiTools;
     clean.toolConfig = asRecord(request.toolConfig)
@@ -847,9 +852,15 @@ export class AntigravityExecutor extends BaseExecutor {
     // untouched; the strip itself never empties `contents` (see the guard above).
     const isGemini = isAntigravityGeminiChatModel(upstreamModel);
     const baseBody = bodyRecord;
-    const normalizedBody = shouldStripCloudCodeThinking(this.provider, upstreamModel)
-      ? stripCloudCodeThinkingConfig(baseBody)
-      : baseBody;
+    // Claude and GPT-OSS get their thinkingConfig stripped — except when the translator set
+    // exactly the CLI's own (the CLI sends thinkingLevel for Claude and a budget for GPT-OSS).
+    const carriesCliGeneration =
+      getAntigravityClientProfile(credentials) === "cli" &&
+      hasAntigravityCliGeneration(upstreamModel, asRecord(baseBody.request)?.generationConfig);
+    const normalizedBody =
+      !carriesCliGeneration && shouldStripCloudCodeThinking(this.provider, upstreamModel)
+        ? stripCloudCodeThinkingConfig(baseBody)
+        : baseBody;
     const normalizedRequest = asRecord(normalizedBody.request);
     const rawContents = Array.isArray(normalizedRequest?.contents)
       ? normalizedRequest.contents
@@ -1465,7 +1476,12 @@ export class AntigravityExecutor extends BaseExecutor {
         return { response: transformed, url, headers, transformedBody: body };
       }
 
-      const transformedBody = finalizeAntigravityRequestBody(transformed, useCreditsFirst, l);
+      // The official CLI sends the client's tools as declared: no `_ide` suffix, no decoy
+      // declarations of the IDE's built-in tools, no includeServerSideToolInvocations. The
+      // legacy `ide` profile keeps the cloak.
+      const transformedBody = finalizeAntigravityRequestBody(transformed, useCreditsFirst, l, {
+        cloakTools: getAntigravityClientProfile(credentials) !== "cli",
+      });
 
       // A body that already spent its 429 budget is answered locally until the block
       // expires — the client re-sending it must not reach Google again.

@@ -99,6 +99,9 @@ test("AntigravityExecutor keeps tool-name maps internal across credits request p
             accessToken: "tool-map-" + mode,
             connectionId: "tool-map-" + mode,
             projectId: "project-1",
+            // The tool cloak (`_ide` suffix + decoys) applies to the legacy ide profile only;
+            // the default cli profile sends the client's tools as declared.
+            providerSpecificData: { clientProfile: "ide" },
           },
           log: { debug() {}, warn() {}, info() {} },
         })

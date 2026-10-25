@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// These tests exercise the retrieveUserQuota reader. The default `cli` profile skips that call
+// (the official CLI never makes it), so switch it on explicitly; the default is covered by
+// "cli profile does not call retrieveUserQuota" in antigravity-quota-host-8965.test.ts.
+process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = "1";
 const usageService = await import("../../open-sse/services/usage.ts");
 const { __testing } = usageService;
 const { getAntigravityLoadCodeAssistMetadata } =

@@ -13,12 +13,14 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-ag-image-
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = "test-ag-image-quota-secret";
 
+// These tests exercise the retrieveUserQuota reader. The default `cli` profile skips that call
+// (the official CLI never makes it), so switch it on explicitly; the default is covered by
+// "cli profile does not call retrieveUserQuota" in antigravity-quota-host-8965.test.ts.
+process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = "1";
 const core = await import("../../src/lib/db/core.ts");
 const { getUsageForProvider } = await import("../../open-sse/services/usage.ts");
-const {
-  isDiscoverableAntigravityModelId,
-  isUserVisibleAntigravityQuotaModelId,
-} = await import("../../open-sse/config/antigravityModelAliases.ts");
+const { isDiscoverableAntigravityModelId, isUserVisibleAntigravityQuotaModelId } =
+  await import("../../open-sse/config/antigravityModelAliases.ts");
 const originalFetch = globalThis.fetch;
 
 const RESET_IN_2_HOURS = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();

@@ -101,7 +101,9 @@ test("an Antigravity 429 is returned once, not restarted by the cooldown-aware r
     // (fetchAvailableModels x3, loadCodeAssist, retrieveUserQuota[Summary]) = 19 calls.
     "every Cloud Code call counts: the executor already spent its 429 budget"
   );
-  assert.ok(elapsedMs < 4000, `no cooldown wait expected, took ${elapsedMs}ms`);
+  // The old flow slept through three 5 s cooldown waits (15 s+); the call count above is the
+  // real discriminator, this only guards against waiting at all (loose: CI runs 4 suites at once).
+  assert.ok(elapsedMs < 12_000, `no cooldown wait expected, took ${elapsedMs}ms`);
 });
 
 test("a re-send of the refused request is answered locally and does not cool the connection", async () => {

@@ -19,6 +19,8 @@ import {
 import { getModelSpec } from "../../../src/shared/constants/modelSpecs.ts";
 import { gemini38ThinkingConfig } from "../../services/thinkingBudget.ts";
 import { geminiUsesThinkingLevel } from "../../config/thinkingBudgetFit.ts";
+import { getAntigravityCliGeneration } from "../../config/antigravityCliCatalog.ts";
+import { getAntigravityClientProfile } from "../../services/antigravityClientProfile.ts";
 
 import {
   DEFAULT_SAFETY_SETTINGS,
@@ -210,6 +212,9 @@ type GeminiBaseOptions = {
   // functions are declared. Plain Gemini (AI Studio / Gemini CLI) keeps the
   // historical promotion, so it stays off unless the Cloud Code caller sets it.
   keepMixedGoogleSearchCallable?: boolean;
+  // Antigravity/Cloud Code only: keep `minLength` / `minItems` in tool schemas (the official
+  // CLI sends them; see geminiHelper's GEMINI_UNSUPPORTED_SCHEMA_KEYS_KEEPING_MIN_LENGTHS).
+  keepLengthConstraints?: boolean;
 };
 
 // Core: Convert OpenAI request to Gemini format (base for all variants)
@@ -729,6 +734,7 @@ function openaiToGeminiBase(
     ...toolNameOptions,
     toolNameMap,
     schemaBudget,
+    keepLengthConstraints: baseOptions.keepLengthConstraints === true,
   });
 
   // Support for Google Search grounding if requested via 'google_search' tool
@@ -878,7 +884,7 @@ export function openaiToCloudCodeGeminiRequest(
       signaturelessToolCallMode: options.signaturelessToolCallMode,
       supportsSignatureBypass: true,
     },
-    { keepMixedGoogleSearchCallable: true }
+    { keepMixedGoogleSearchCallable: true, keepLengthConstraints: true }
   );
 
   // Standard Gemini requests retain the historical all-OFF defaults, but Cloud Code
@@ -1000,6 +1006,23 @@ function wrapInCloudCodeEnvelope(model, cloudCodeRequest, credentials = null) {
   return envelope;
 }
 
+// A client that sets its own output cap or reasoning keeps what it asked for. Only a
+// silent client gets the official CLI's per-model generation settings.
+function clientSetGenerationKnobs(body: Record<string, unknown>): boolean {
+  const gc = body.generationConfig as Record<string, unknown> | undefined;
+  return (
+    (body.max_tokens ?? body.max_completion_tokens ?? gc?.maxOutputTokens) != null ||
+    !!body.reasoning_effort ||
+    !!body.reasoning ||
+    !!body.thinking ||
+    body.thinking_budget != null ||
+    body.enable_thinking != null ||
+    extractExplicitThinkingLevel(body) !== null ||
+    gc?.thinkingConfig != null ||
+    gc?.thinking_config != null
+  );
+}
+
 function getAntigravityClaudeOutputTokens(body: Record<string, unknown>): number {
   const requested = body.max_tokens ?? body.max_completion_tokens;
   if (typeof requested === "number" && Number.isFinite(requested) && requested >= 1) {
@@ -1063,6 +1086,27 @@ export function openaiToAntigravityRequest(model, body, stream, credentials = nu
   // budget is accounted for before the field is removed.
   if (isClaude && envelope.request?.generationConfig) {
     delete envelope.request.generationConfig.thinkingConfig;
+  }
+
+  // Official agy CLI (capture 2026-10-25, one run per model): it always sends the model's
+  // output cap and a thinking setting — numeric budget, or a level for Argon and Claude —
+  // so a client that set neither gets exactly that. The executor leaves it untouched
+  // (hasAntigravityCliGeneration) instead of re-fitting it. A client that set its own cap
+  // or reasoning keeps its values, fitted as before.
+  const cliGeneration = getAntigravityCliGeneration(
+    model.includes("/") ? model.split("/").pop() : model
+  );
+  if (
+    cliGeneration &&
+    getAntigravityClientProfile(credentials) === "cli" &&
+    !clientSetGenerationKnobs(body) &&
+    envelope.request
+  ) {
+    envelope.request.generationConfig = {
+      ...(envelope.request.generationConfig ?? {}),
+      maxOutputTokens: cliGeneration.maxOutputTokens,
+      thinkingConfig: cliGeneration.thinkingConfig,
+    };
   }
 
   return envelope;

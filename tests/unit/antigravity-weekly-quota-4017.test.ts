@@ -21,6 +21,10 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-ag-weekly
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = "test-ag-weekly-secret";
 
+// These tests exercise the retrieveUserQuota reader. The default `cli` profile skips that call
+// (the official CLI never makes it), so switch it on explicitly; the default is covered by
+// "cli profile does not call retrieveUserQuota" in antigravity-quota-host-8965.test.ts.
+process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = "1";
 const core = await import("../../src/lib/db/core.ts");
 const { antigravityCliUserAgent } = await import("../../open-sse/config/antigravityCliClient.ts");
 const { parseAntigravityWeeklyQuotas } =

@@ -129,6 +129,14 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
 
 export const UNSUPPORTED_SCHEMA_CONSTRAINTS = [...GEMINI_UNSUPPORTED_SCHEMA_KEYS];
 
+// Antigravity's Cloud Code accepts `minLength` and `minItems`: the official agy CLI sends them
+// in its own tool declarations (capture 2026-10-25, e.g. send_message.Recipient minLength "1").
+// Cloud Code callers keep them (keepLengthConstraints) so tool schemas stay as precise as the
+// CLI's. maxLength/maxItems are not in that capture and stay stripped.
+const GEMINI_UNSUPPORTED_SCHEMA_KEYS_KEEPING_MIN_LENGTHS: Set<string> = new Set(
+  [...GEMINI_UNSUPPORTED_SCHEMA_KEYS].filter((key) => key !== "minLength" && key !== "minItems")
+);
+
 // Default safety settings for the standard Gemini API surface.
 //
 // HARM_CATEGORY_CIVIC_INTEGRITY is intentionally NOT included here (#8231): the
@@ -966,6 +974,8 @@ export function cleanJSONSchemaForAntigravity(
     budget?: SchemaBudget;
     /** Internal field label used in schema errors (never caller-supplied text). */
     location?: string;
+    /** Cloud Code (Antigravity) only: keep `minLength` / `minItems`, as the official CLI does. */
+    keepLengthConstraints?: boolean;
   } = {}
 ): unknown {
   if (!schema || typeof schema !== "object") return schema;
@@ -1010,7 +1020,12 @@ export function cleanJSONSchemaForAntigravity(
   normalizeAdditionalProperties(cleaned);
 
   // Phase 4: Remove all unsupported keywords at ALL levels (including inside arrays).
-  removeUnsupportedKeywords(cleaned, GEMINI_UNSUPPORTED_SCHEMA_KEYS);
+  removeUnsupportedKeywords(
+    cleaned,
+    options.keepLengthConstraints
+      ? GEMINI_UNSUPPORTED_SCHEMA_KEYS_KEEPING_MIN_LENGTHS
+      : GEMINI_UNSUPPORTED_SCHEMA_KEYS
+  );
 
   // Phase 5: Cleanup required fields recursively.
   function cleanupRequired(obj: unknown): void {

@@ -1,0 +1,522 @@
+{
+ "capturedWith": "agy 1.4.7, 2026-10-25, generation intercepted locally (nothing reached Google)",
+ "model": "gemini-3.8-flash-high",
+ "topLevelKeys": [
+  "project",
+  "requestId",
+  "request",
+  "model",
+  "userAgent",
+  "requestType"
+ ],
+ "requestKeys": [
+  "contents",
+  "systemInstruction",
+  "tools",
+  "labels",
+  "generationConfig",
+  "sessionId"
+ ],
+ "labelKeys": [
+  "cascade_id",
+  "last_step_index",
+  "model_enum",
+  "request_id",
+  "root_cascade_id",
+  "trajectory_id",
+  "used_claude",
+  "used_claude_conservative",
+  "used_non_gemini_model"
+ ],
+ "generationConfig": {
+  "maxOutputTokens": 65536,
+  "thinkingConfig": {
+   "includeThoughts": true,
+   "thinkingBudget": -1
+  }
+ },
+ "systemInstructionRole": "user",
+ "systemInstructionParts": 1,
+ "toolGroups": [
+  {
+   "functionDeclarations": [
+    {
+     "name": "read_file",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "ByteOffset": {
+        "type": "INTEGER",
+        "description": "d"
+       },
+       "EndLine": {
+        "type": "INTEGER",
+        "description": "d"
+       },
+       "Path": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "StartLine": {
+        "type": "INTEGER",
+        "description": "d"
+       }
+      },
+      "required": [
+       "Path"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "run_command",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "CommandLine": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "IsDaemon": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "WaitMsBeforeAsync": {
+        "type": "INTEGER",
+        "description": "d"
+       },
+       "toolSummary": {
+        "type": "STRING",
+        "description": "d"
+       }
+      },
+      "required": [
+       "CommandLine",
+       "toolSummary",
+       "WaitMsBeforeAsync"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "manage_task",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Action": {
+        "type": "STRING",
+        "description": "d",
+        "enum": [
+         "list",
+         "kill",
+         "status",
+         "send_input"
+        ]
+       },
+       "Input": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "TaskId": {
+        "type": "STRING",
+        "description": "d"
+       }
+      },
+      "required": [
+       "Action"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "send_message",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Message": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       },
+       "Recipient": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       }
+      },
+      "required": [
+       "Recipient",
+       "Message"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "schedule",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "CronExpression": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "DurationSeconds": {
+        "type": "INTEGER",
+        "description": "d"
+       },
+       "ExactTiming": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "IsDaemon": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "MaxIterations": {
+        "type": "INTEGER",
+        "description": "d"
+       },
+       "Prompt": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "TimerCondition": {
+        "type": "STRING",
+        "description": "d"
+       }
+      },
+      "required": [
+       "Prompt"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "invoke_subagent",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Model": {
+        "type": "STRING",
+        "description": "d",
+        "enum": [
+         "inherit",
+         "flash_lite",
+         "flash",
+         "pro"
+        ]
+       },
+       "Prompt": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "Role": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "TypeName": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "Workspace": {
+        "type": "STRING",
+        "description": "d"
+       }
+      },
+      "required": [
+       "TypeName",
+       "Role",
+       "Prompt"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "define_subagent",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Description": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       },
+       "EnableMCPTools": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "EnableSubagentTools": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "EnableWriteTools": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "Name": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       },
+       "SystemPrompt": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       }
+      },
+      "required": [
+       "Name",
+       "Description",
+       "SystemPrompt"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "manage_subagents",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Action": {
+        "type": "STRING",
+        "description": "d",
+        "enum": [
+         "list",
+         "kill",
+         "kill_all"
+        ]
+       },
+       "ConversationIds": {
+        "type": "ARRAY",
+        "description": "d",
+        "items": {
+         "type": "STRING"
+        }
+       }
+      },
+      "required": [
+       "Action"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "write_file",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "Append": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "ArtifactMetadata": {
+        "type": "OBJECT",
+        "description": "d",
+        "properties": {
+         "RequestFeedback": {
+          "type": "BOOLEAN",
+          "description": "d"
+         },
+         "Summary": {
+          "type": "STRING",
+          "description": "d"
+         },
+         "UserFacing": {
+          "type": "BOOLEAN",
+          "description": "d"
+         }
+        },
+        "required": [
+         "Summary",
+         "UserFacing",
+         "RequestFeedback"
+        ]
+       },
+       "Content": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "Overwrite": {
+        "type": "BOOLEAN",
+        "description": "d"
+       },
+       "Path": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       }
+      },
+      "required": [
+       "Path",
+       "Content"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "edit_file",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "ArtifactMetadata": {
+        "type": "OBJECT",
+        "description": "d",
+        "properties": {
+         "RequestFeedback": {
+          "type": "BOOLEAN",
+          "description": "d"
+         },
+         "Summary": {
+          "type": "STRING",
+          "description": "d"
+         },
+         "UserFacing": {
+          "type": "BOOLEAN",
+          "description": "d"
+         }
+        },
+        "required": [
+         "Summary",
+         "UserFacing",
+         "RequestFeedback"
+        ]
+       },
+       "Path": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       },
+       "Replacement": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "Target": {
+        "type": "STRING",
+        "description": "d",
+        "minLength": "1"
+       }
+      },
+      "required": [
+       "Path",
+       "Target",
+       "Replacement"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "search_web",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "domain": {
+        "type": "STRING",
+        "description": "d"
+       },
+       "query": {
+        "type": "STRING"
+       }
+      },
+      "required": [
+       "query"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "functionDeclarations": [
+    {
+     "name": "ask_question",
+     "description": "d",
+     "parameters": {
+      "type": "OBJECT",
+      "properties": {
+       "questions": {
+        "type": "ARRAY",
+        "items": {
+         "type": "OBJECT",
+         "properties": {
+          "is_multi_select": {
+           "type": "BOOLEAN",
+           "description": "d"
+          },
+          "options": {
+           "type": "ARRAY",
+           "description": "d",
+           "items": {
+            "type": "STRING"
+           },
+           "minItems": "2"
+          },
+          "question": {
+           "type": "STRING",
+           "description": "d",
+           "minLength": "1"
+          }
+         },
+         "required": [
+          "question",
+          "options"
+         ]
+        },
+        "minItems": "1"
+       }
+      },
+      "required": [
+       "questions"
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "userTurnShape": {
+  "parts": 1,
+  "roles": [
+   "user"
+  ]
+ },
+ "note": "Structure only: description strings are replaced by 'd'; names, types, key order and grouping are the CLI's."
+}

@@ -268,9 +268,13 @@ function getRequestTargetModel(body: Record<string, unknown>): string {
 export function finalizeAntigravityRequestBody(
   transformed: Record<string, unknown>,
   useCreditsFirst: boolean,
-  log: SafeAntigravityLog
+  log: SafeAntigravityLog,
+  options: { cloakTools?: boolean } = {}
 ): Record<string, unknown> {
-  const cloaked = cloakAntigravityToolPayload(transformed);
+  const cloaked =
+    options.cloakTools === false
+      ? { body: transformed, toolNameMap: null }
+      : cloakAntigravityToolPayload(transformed);
   const toolNameMap = cloaked.toolNameMap ?? getToolNameMap(transformed);
   let transformedBody = attachToolNameMap(
     sanitizeAntigravityToolPayload(cloaked.body),

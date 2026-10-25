@@ -82,6 +82,16 @@ test.after(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+// The default `cli` profile wraps the latest user turn like the official CLI; these tests are
+// about something else, so compare the text inside the wrapper.
+const unwrapCliUserTurn = (text: unknown): unknown =>
+  typeof text === "string"
+    ? text.replace(
+        /^<USER_REQUEST>\n([\s\S]*)\n<\/USER_REQUEST>\n<ADDITIONAL_METADATA>[\s\S]*<\/ADDITIONAL_METADATA>$/,
+        "$1"
+      )
+    : text;
+
 test("fresh selected account sends its literal 3.7 id before global MITM aliases", async () => {
   seed("literal-account", [literal, tiered]);
   seed("tiered-account", [tiered]);
@@ -276,6 +286,6 @@ for (const credentials of [undefined, null, {}]) {
     );
     assert.equal(result.project, "synthetic-project");
     assert.equal(result.model, tiered);
-    assert.equal(result.request.contents[0].parts[0].text, "hello");
+    assert.equal(unwrapCliUserTurn(result.request.contents[0].parts[0].text), "hello");
   });
 }

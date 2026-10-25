@@ -20,6 +20,8 @@ type GeminiToolSanitizationOptions = {
   toolNameMap?: Map<string, string> | null;
   /** Request-wide `$ref` expansion budget; one is created per call when absent. */
   schemaBudget?: SchemaBudget;
+  /** Cloud Code (Antigravity) only: keep `minLength` / `minItems` in tool schemas. */
+  keepLengthConstraints?: boolean;
 };
 
 const MAX_GEMINI_TOOL_NAME_LENGTH = 64;
@@ -235,7 +237,11 @@ export function buildGeminiTools(
   // sanitized form, or the same raw name repeated across tool groups).
   const seenToolNames = new Set<string>();
   let googleSearchTool: GeminiTool | null = null;
-  const schemaOptions = { budget: options.schemaBudget ?? createSchemaBudget(), location: "tools" };
+  const schemaOptions = {
+    budget: options.schemaBudget ?? createSchemaBudget(),
+    location: "tools",
+    keepLengthConstraints: options.keepLengthConstraints === true,
+  };
 
   for (const rawTool of tools) {
     if (!isRecord(rawTool)) {

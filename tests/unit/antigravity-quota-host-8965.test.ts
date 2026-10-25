@@ -23,6 +23,10 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-ag-host-"
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = "test-ag-host-secret";
 
+// These tests exercise the retrieveUserQuota reader. The default `cli` profile skips that call
+// (the official CLI never makes it), so switch it on explicitly; the default is covered by
+// "cli profile does not call retrieveUserQuota" in antigravity-quota-host-8965.test.ts.
+process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = "1";
 const core = await import("../../src/lib/db/core.ts");
 const usageModule = await import("../../open-sse/services/usage.ts");
 const { getUsageForProvider } = usageModule;
@@ -262,4 +266,56 @@ test("#8965 behavioral impact: live quota source + weekly bucket unreachable whe
   // The weekly group quota MUST also be present because retrieveUserQuotaSummary
   // was served by the runtime host.
   assert.ok(quotas.gemini_weekly, "weekly group quota present");
+});
+
+test("cli profile does not call retrieveUserQuota (the official CLI never does) unless switched on", async () => {
+  core.resetDbInstance();
+  const called: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    called.push(url);
+    if (url.includes("fetchAvailableModels")) {
+      return {
+        ok: true,
+        json: async () => ({
+          models: {
+            "gemini-3.8-flash-high": {
+              quotaInfo: { remainingFraction: 0.5, resetTime: RESET_IN_2_HOURS },
+            },
+          },
+        }),
+      } as Response;
+    }
+    return { ok: true, json: async () => ({}) } as Response;
+  }) as typeof fetch;
+
+  const connection = {
+    id: "conn-no-ruq",
+    provider: "antigravity",
+    accessToken: "fake-token-no-ruq",
+    providerSpecificData: { clientProfile: "cli" },
+    projectId: "test-project",
+  };
+  const hitsRetrieveUserQuota = () => called.some((url) => /:retrieveUserQuota(\?|$)/.test(url));
+  const previous = process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA;
+  try {
+    delete process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA;
+    const result = await getUsageForProvider(connection, { forceRefresh: true });
+    assert.equal(hitsRetrieveUserQuota(), false, "the cli profile must not call retrieveUserQuota");
+    assert.ok(
+      called.some((url) => url.includes("retrieveUserQuotaSummary")),
+      "the family summary the CLI reads is still fetched"
+    );
+    const quotas = (result as UsageResult).quotas;
+    assert.equal(quotas["gemini-3.8-flash-high"].quotaSource, "fetchAvailableModels");
+
+    process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = "1";
+    called.length = 0;
+    await getUsageForProvider(connection, { forceRefresh: true });
+    assert.equal(hitsRetrieveUserQuota(), true, "ANTIGRAVITY_RETRIEVE_USER_QUOTA=1 brings it back");
+  } finally {
+    if (previous === undefined) delete process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA;
+    else process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA = previous;
+  }
 });

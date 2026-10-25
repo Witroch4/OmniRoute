@@ -21,7 +21,7 @@ import {
   toClientAntigravityQuotaModelId,
 } from "../../config/antigravityModelAliases.ts";
 import { isUserVisibleAgyQuotaModelId } from "../../config/agyModels.ts";
-import { recordAntigravityModelEnums } from "../../config/antigravityModelEnums.ts";
+import { recordAntigravityModelEnums } from "../../config/antigravityCliCatalog.ts";
 import { getDbInstance } from "@/lib/db/core";
 import {
   applyAntigravityClientProfileHeaders,
@@ -265,6 +265,15 @@ async function fetchAntigravityUserQuotaCached(
   options: AntigravityUsageOptions = {}
 ): Promise<unknown | null> {
   if (!accessToken || !projectId) return null;
+  // The official agy CLI never calls retrieveUserQuota (capture 2026-10-25: it reads
+  // retrieveUserQuotaSummary and fetchAvailableModels), so a connection presenting as the CLI
+  // does not either. Per-model detail then comes from fetchAvailableModels and the family
+  // aggregates from the summary, which is how Google enforces the limits anyway (Gemini,
+  // Claude+GPT-OSS and Argon each share one window). ANTIGRAVITY_RETRIEVE_USER_QUOTA=1 brings
+  // the call back for a CLI-profile connection.
+  if (clientProfile === "cli" && process.env.ANTIGRAVITY_RETRIEVE_USER_QUOTA?.trim() !== "1") {
+    return null;
+  }
 
   const cacheKey = buildAntigravityUsageCacheKey(accessToken, projectId, clientProfile);
   const cached = _antigravityUserQuotaCache.get(cacheKey);

@@ -9,6 +9,14 @@ import { AntigravityExecutor } from "../../open-sse/executors/antigravity.ts";
 // dropped that step; the fork keeps it. Everything else in the prompt stays byte-for-byte.
 const ZWJ = "‍";
 
+// The default `cli` profile wraps the latest user turn like the official CLI
+// (<USER_REQUEST>… + <ADDITIONAL_METADATA> clock); these tests are about the text inside it.
+const unwrapCliUserTurn = (text: string | undefined): string =>
+  (text ?? "").replace(
+    /^<USER_REQUEST>\n([\s\S]*)\n<\/USER_REQUEST>\n<ADDITIONAL_METADATA>[\s\S]*<\/ADDITIONAL_METADATA>$/,
+    "$1"
+  );
+
 test("AntigravityExecutor.transformRequest only obfuscates sensitive client names in prompt text", async () => {
   const executor = new AntigravityExecutor();
   const text = "OmniRoute, OpenCode, Cursor — keep this exact text 👩🏽‍💻";
@@ -23,8 +31,9 @@ test("AntigravityExecutor.transformRequest only obfuscates sensitive client name
   });
 
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
-  const transformedText = (result.request.contents as Array<{ parts: Array<{ text?: string }> }>)[0]
-    .parts[0].text;
+  const transformedText = unwrapCliUserTurn(
+    (result.request.contents as Array<{ parts: Array<{ text?: string }> }>)[0].parts[0].text
+  );
   assert.ok(transformedText, "prompt text must survive");
   assert.notEqual(transformedText, text, "sensitive client names must be obfuscated");
   for (const word of ["OmniRoute", "OpenCode", "Cursor"]) {
@@ -50,7 +59,8 @@ test("AntigravityExecutor.transformRequest leaves text without sensitive names b
     { projectId: "project-1" }
   );
   if (result instanceof Response) throw new Error("Unexpected Response from transformRequest");
-  const transformedText = (result.request.contents as Array<{ parts: Array<{ text?: string }> }>)[0]
-    .parts[0].text;
-  assert.deepEqual(Buffer.from(transformedText ?? ""), Buffer.from(text));
+  const transformedText = unwrapCliUserTurn(
+    (result.request.contents as Array<{ parts: Array<{ text?: string }> }>)[0].parts[0].text
+  );
+  assert.deepEqual(Buffer.from(transformedText), Buffer.from(text));
 });
