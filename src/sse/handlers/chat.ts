@@ -178,6 +178,7 @@ import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTel
 import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
+import { checkClaudeCodeOnlyGate } from "./chat/claudeCodeOnlyGate";
 import { rejectIfMeteredBudgetExceeded } from "@/lib/usage/meteredBudgetPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
 import { isMinSpendGuaranteeActive } from "../../lib/usage/minSpendGuarantee";
@@ -805,6 +806,28 @@ async function handleChatImplementation(
       `API key policy rejected: ${modelStr} (key=${policy.apiKeyInfo?.id || "unknown"})`
     );
     return logHandlerRejection(policy.rejection, {
+      path: new URL(request.url).pathname,
+      model: modelStr,
+      requestBody: body ?? null,
+      apiKeyId: policy.apiKeyInfo?.id ?? null,
+      apiKeyName: policy.apiKeyInfo?.name ?? null,
+      correlationId: reqId,
+    });
+  }
+  // "Claude Code only" keys (the chat:messages checkbox) must prove the Claude Code
+  // client signature, not just the wire protocol — see claudeCodeOnlyGate.ts.
+  const claudeCodeGate = checkClaudeCodeOnlyGate({
+    apiKeyInfo: policy.apiKeyInfo,
+    headers: request.headers,
+    body,
+  });
+  if (claudeCodeGate.blocked) {
+    log.warn(
+      "POLICY",
+      `Claude Code only key rejected a non-Claude-Code client (key=${policy.apiKeyInfo?.id || "unknown"}, ` +
+        `score=${claudeCodeGate.score}, signals=${JSON.stringify(claudeCodeGate.signals)})`
+    );
+    return logHandlerRejection(errorResponse(HTTP_STATUS.BAD_REQUEST, claudeCodeGate.message), {
       path: new URL(request.url).pathname,
       model: modelStr,
       requestBody: body ?? null,

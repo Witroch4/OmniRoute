@@ -280,6 +280,23 @@ export function resolveEndpointSelectors(pathname: string): EndpointSelectors {
 }
 
 /**
+ * The "Anthropic-native only (Claude Code)" selection: the key lists the
+ * `chat:messages` subcategory and NOT the whole `chat` category (which already
+ * covers every wire protocol). Keys in this state are reserved for the Claude Code
+ * client, so the chat handler additionally verifies the client's signature
+ * (`claudeCodeSignature.ts`) — the subcategory alone only proves the protocol.
+ */
+export function isClaudeCodeOnlyEndpointSelection(
+  allowedEndpoints: readonly string[] | null | undefined
+): boolean {
+  return (
+    Array.isArray(allowedEndpoints) &&
+    allowedEndpoints.includes("chat:messages") &&
+    !allowedEndpoints.includes("chat")
+  );
+}
+
+/**
  * Single source of truth for the endpoint restriction decision.
  *
  * An empty/absent `allowedEndpoints` means "all endpoints" (backward compatible), and a
