@@ -117,6 +117,7 @@ import { createRequestLogger } from "../utils/requestLogger.ts";
 import { createPreparedRequestLogger } from "../utils/providerRequestLogging.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyClaudeEffortVariant } from "./chatCore/claudeEffortVariant.ts";
+import { applyFoldedEffort } from "./chatCore/foldedEffort.ts";
 import { applyKimiCodingEffortVariant } from "./chatCore/kimiCodingEffortVariant.ts";
 import {
   getStripTypesForProviderModel,
@@ -726,9 +727,6 @@ async function handleChatCoreInner({
       effectiveModel,
       body,
       sourceFormat,
-      // Same origin-model scoping as prepareUpstreamBody: a lifecycle/alias replacement is
-      // not the model the client picked the tier for.
-      resolvedThinkingEffort: effectiveModel === originModel ? resolvedThinkingEffort : null,
     });
     effectiveModel = effortVariant.effectiveModel;
     if (effortVariant.log) {
@@ -755,6 +753,24 @@ async function handleChatCoreInner({
     nativeXaiResponsesPassthrough,
     nativeOpenAICompatibleResponsesPassthrough,
   });
+  // A tier folded off the model id is applied per attempt for chat-completions targets
+  // (prepareUpstreamBody); for Claude and Responses targets write it onto the client body here,
+  // before translation. Same origin-model scoping as prepareUpstreamBody: a lifecycle/alias
+  // replacement is not the model the client picked the tier for.
+  if (
+    applyFoldedEffort({
+      provider,
+      sourceFormat,
+      targetFormat,
+      body,
+      resolvedThinkingEffort: effectiveModel === originModel ? resolvedThinkingEffort : null,
+    })
+  ) {
+    log?.info?.(
+      "PARAMS",
+      `Folded effort tier applied to ${targetFormat} target (effort=${resolvedThinkingEffort})`
+    );
+  }
   const nativeResponsesPassthrough =
     nativeCodexPassthrough ||
     nativeXaiResponsesPassthrough ||
