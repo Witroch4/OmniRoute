@@ -690,15 +690,29 @@ function findBareStreamError(events: Array<Record<string, unknown>>): unknown {
  * decides the outcome when the stream never settled: it must not override a terminal
  * snapshot, nor a latest snapshot that itself reports `completed`. An in-progress snapshot
  * (e.g. `response.created`) or no snapshot at all, followed by an error frame, is a failure.
+ *
+ * `claimSnapshotlessError` covers the last case only: with no snapshot, a bare error frame says
+ * nothing about the wire format (an OpenAI-shaped `{"error":…}` chunk looks the same), so a
+ * caller that merely GUESSES Responses must not claim it (#3324).
  */
-function pickResponsesSnapshot(terminalResponse, latestResponse, events) {
+function pickResponsesSnapshot(terminalResponse, latestResponse, events, claimSnapshotlessError) {
   const snapshot = terminalResponse || latestResponse;
+  if (!snapshot && !claimSnapshotlessError) return snapshot;
   const streamError = terminalResponse ? null : findBareStreamError(events);
   if (!streamError || terminalResponse || latestResponse?.status === "completed") return snapshot;
   return { ...(snapshot || {}), status: "failed", error: streamError };
 }
 
-export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
+/**
+ * `options.claimSnapshotlessError` (default true): report a stream made only of bare error
+ * frames as a failed Responses object. The non-streaming path turns it off when Responses is
+ * just one of the formats it tries, so such a stream stays an invalid SSE payload there.
+ */
+export function parseSSEToResponsesOutput(
+  rawSSE,
+  fallbackModel,
+  options: { claimSnapshotlessError?: boolean } = {}
+) {
   const lines = String(rawSSE || "").split("\n");
   const events = [];
 
@@ -854,7 +868,12 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     }
   }
 
-  const picked = pickResponsesSnapshot(terminalResponse, latestResponse, events);
+  const picked = pickResponsesSnapshot(
+    terminalResponse,
+    latestResponse,
+    events,
+    options.claimSnapshotlessError !== false
+  );
   if (!picked || typeof picked !== "object") return null;
   const reconstructedOutput = [...outputItems.entries()]
     .sort((a, b) => a[0] - b[0])

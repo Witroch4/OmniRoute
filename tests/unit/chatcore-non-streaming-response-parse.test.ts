@@ -112,6 +112,34 @@ test("error-only SSE (no choices) → invalid_sse surfacing the upstream error (
   assert.equal(res.looksLikeSSE, true);
 });
 
+test("error-only SSE on a Responses target still reports a failed Responses object (#17198)", async () => {
+  const sse = 'data: {"error":{"message":"Devin CLI not found in PATH"}}\n\n';
+  const res = await parseNonStreamingResponseBody({
+    ...baseOpts,
+    targetFormat: "openai-responses",
+    providerResponse: makeResponse(sse, "text/event-stream"),
+  });
+  assert.equal(res.kind, "ok");
+  if (res.kind !== "ok") return;
+  assert.equal(res.responsePayloadFormat, "openai-responses");
+  assert.equal(res.responseBody.status, "failed");
+  assert.deepEqual(res.responseBody.error, { message: "Devin CLI not found in PATH" });
+});
+
+test("error frame after a Responses snapshot is still a failure on a non-Responses target", async () => {
+  const sse =
+    'data: {"type":"response.created","response":{"id":"resp_1","object":"response","status":"in_progress","model":"m","output":[]}}\n\n' +
+    'data: {"error":{"message":"boom"}}\n\n';
+  const res = await parseNonStreamingResponseBody({
+    ...baseOpts,
+    providerResponse: makeResponse(sse, "text/event-stream"),
+  });
+  assert.equal(res.kind, "ok");
+  if (res.kind !== "ok") return;
+  assert.equal(res.responseBody.status, "failed");
+  assert.deepEqual(res.responseBody.error, { message: "boom" });
+});
+
 test("unparseable SSE with no embedded error → generic invalid_sse message", async () => {
   const sse = "data: not-json-at-all\n\n";
   const res = await parseNonStreamingResponseBody({

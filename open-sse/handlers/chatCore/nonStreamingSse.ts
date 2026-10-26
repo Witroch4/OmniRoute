@@ -29,7 +29,11 @@ export function parseNonStreamingSSEPayload(
   for (const format of formatsToTry) {
     const parsed =
       format === FORMATS.OPENAI_RESPONSES
-        ? parseSSEToResponsesOutput(rawBody, fallbackModel)
+        ? parseSSEToResponsesOutput(rawBody, fallbackModel, {
+            // Only a Responses target may read a snapshot-less error frame as a failed Responses
+            // object; when Responses is one guess among several the stream stays invalid SSE.
+            claimSnapshotlessError: preferredFormat === FORMATS.OPENAI_RESPONSES,
+          })
         : format === FORMATS.CLAUDE
           ? parseSSEToClaudeResponse(rawBody, fallbackModel)
           : format === FORMATS.GEMINI || format === FORMATS.ANTIGRAVITY
