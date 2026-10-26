@@ -52,6 +52,12 @@ export const opencode_goProvider: RegistryEntry = {
       supportsVision: false,
       interleavedField: "reasoning_content",
     },
+    // Fork — the `<base>-<tier>` alias entries below are v1-era ids: the Go v2 backend answers
+    // `400 Model is unavailable` for them (measured 2026-10-25) while the base ids honour
+    // `reasoning_effort`. Each base lists the tiers it folds via
+    // `effortSuffixesThatFoldDespiteLiveCatalog`, so the gate resolves an alias to base + effort
+    // before dispatch (src/sse/services/model.ts). A new alias needs the same flag
+    // (tests/unit/opencode-go-effort-alias-fold.test.ts enforces it).
     // #6922/#10788: GLM-5.2 base + effort-tier aliases.
     {
       id: "glm-5.2",
@@ -60,6 +66,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 131072,
       supportsReasoning: true,
       supportedThinkingEfforts: ["high", "max"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["high", "max"],
       supportsVision: false,
       interleavedField: "reasoning_content",
     },
@@ -98,6 +105,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 131072,
       supportsReasoning: true,
       supportedThinkingEfforts: ["max"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["max"],
       supportsVision: true,
       interleavedField: "reasoning_content",
     },
@@ -188,6 +196,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 128000,
       supportsReasoning: true,
       supportedThinkingEfforts: ["high", "max"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["high", "max"],
       supportsVision: true,
       interleavedField: "reasoning_content",
     },
@@ -244,6 +253,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 128000,
       supportsReasoning: true,
       supportedThinkingEfforts: ["none", "low", "high"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["none", "low", "high"],
       supportsVision: false,
     },
     {
@@ -335,6 +345,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 131072,
       supportsReasoning: true,
       supportedThinkingEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["minimal", "low", "medium", "high", "xhigh"],
       supportsVision: true,
     },
     {
@@ -392,6 +403,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 131072,
       supportsReasoning: true,
       supportedThinkingEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["minimal", "low", "medium", "high", "xhigh"],
       supportsVision: true,
     },
     {
@@ -497,6 +509,7 @@ export const opencode_goProvider: RegistryEntry = {
       maxOutputTokens: 65536,
       supportsReasoning: true,
       supportedThinkingEfforts: ["high", "max"],
+      effortSuffixesThatFoldDespiteLiveCatalog: ["high", "max"],
       supportsVision: true,
     },
     {
