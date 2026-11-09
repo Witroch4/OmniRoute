@@ -1062,24 +1062,25 @@ function formatLeftPercentWithCap(
   return `${Math.round(clampPercent(left))}% left`;
 }
 
+// Daily and Weekly are shown as the SAME percentage on purpose: a key holder sees
+// one number for "how much of my quota is left" (40% → 40%), taken from the
+// weekly window. Each line keeps its own reset time.
 export function buildApiKeyUsageLimitPercentText(
   status: ApiKeyUsageLimitStatus,
   now = Date.now(),
   capLeftPercent: number | null = null
 ): string {
+  const left = formatLeftPercentWithCap(
+    getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd),
+    capLeftPercent
+  );
   return [
     "Daily",
-    formatLeftPercentWithCap(
-      getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd),
-      capLeftPercent
-    ),
+    left,
     `⏱ reset in ${formatResetIn(status.dailyResetAtIso, now)}`,
     "",
     "Weekly",
-    formatLeftPercentWithCap(
-      getUsagePercent(status.weeklySpentUsd, status.weeklyLimitUsd),
-      capLeftPercent
-    ),
+    left,
     `⏱ reset in ${formatResetIn(status.weeklyResetAtIso, now)}`,
   ].join("\n");
 }

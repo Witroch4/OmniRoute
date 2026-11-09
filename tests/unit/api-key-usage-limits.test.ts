@@ -493,7 +493,7 @@ test("buildApiKeyUsageLimitText returns API-key quota spend percentage and reset
   );
 });
 
-test("buildApiKeyUsageLimitPercentText returns remaining percentages only", () => {
+test("buildApiKeyUsageLimitPercentText returns remaining percentages only, Daily mirroring Weekly", () => {
   const text = usageLimits.buildApiKeyUsageLimitPercentText(
     {
       enabled: true,
@@ -513,7 +513,7 @@ test("buildApiKeyUsageLimitPercentText returns remaining percentages only", () =
 
   assert.equal(
     text,
-    ["Daily", "80% left", "⏱ reset in 7h 0m", "", "Weekly", "90% left", "⏱ reset in 6d 0h 0m"].join(
+    ["Daily", "90% left", "⏱ reset in 7h 0m", "", "Weekly", "90% left", "⏱ reset in 6d 0h 0m"].join(
       "\n"
     )
   );

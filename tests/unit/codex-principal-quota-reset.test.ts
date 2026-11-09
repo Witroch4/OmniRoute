@@ -241,9 +241,10 @@ test("unchanged command follows principal over exhausted first account and uses 
     { now: () => now },
     { preferredProvider: "codex" }
   );
-  assert.match(text, /Session\n89% left/);
-  assert.match(text, /Weekly\n89% left/);
-  assert.doesNotMatch(text, /27d|Weekly\nUnavailable/);
+  // The provider windows (89% left on the principal) are no longer printed to
+  // the key; this key has no personal limit, so the text is just the notice.
+  assert.equal(text, "Personal quota\nNo usage limit configured for this API key.");
+  assert.doesNotMatch(text, /Provider quota|Session|89% left|27d/);
 });
 
 test("explicit Go inspection preserves principal personal USD cycle", async () => {
@@ -259,7 +260,7 @@ test("explicit Go inspection preserves principal personal USD cycle", async () =
     { preferredProvider: "codex", preferredConnectionId: goId }
   );
   assert.match(text, /Personal quota[\s\S]*Weekly\n93% left/);
-  assert.match(text, /Provider quota\nSession\n0% left/);
+  assert.doesNotMatch(text, /Provider quota|Session/);
 });
 
 test("Go-only key uses provider principal reset without gaining inference access", async () => {

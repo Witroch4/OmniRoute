@@ -371,16 +371,6 @@ function getQuotaUsedPercent(quota: JsonRecord | null): number | null {
   return null;
 }
 
-function getResetAt(quota: JsonRecord | null): string | null {
-  if (!quota) return null;
-  return typeof quota.resetAt === "string" && quota.resetAt.trim() ? quota.resetAt : null;
-}
-
-function formatLeftPercent(percent: number | null): string {
-  if (percent === null || !Number.isFinite(percent)) return "Unavailable";
-  return `${Math.round(Math.max(0, Math.min(100, percent)))}% left`;
-}
-
 export function formatResetIn(resetAt: string | null, now = Date.now()): string {
   if (!resetAt) return "unknown";
   const resetMs = Date.parse(resetAt);
@@ -491,7 +481,7 @@ function resolveQuotaCutoffPercent(
  * - If remaining <= cutoff: returns 0%.
  * - Otherwise: ((remaining - cutoff) / (100 - cutoff)) * 100.
  *
- * Used by {@link appendQuotaBlock} for terminal/text output (`NN% left`).
+ * Used by {@link buildUsageCommandText} to detect a cut-off weekly window.
  * In contrast, {@link buildUsageCommandJson} returns raw upstream snapshots
  * in `provider.quotas` alongside `quotaWindowThresholds`.
  */
@@ -543,30 +533,6 @@ function windowEffectiveRemaining(
   if (!match) return null;
   const cutoff = resolveQuotaCutoffPercent(snapshot, match.key, policy);
   return effectiveRemainingPercent(quotaRealRemaining(match), cutoff);
-}
-
-// Caps a remaining percentage at the provider cap. The cap is 0 only when the
-// provider is cut off (some window below its cutoff); otherwise it's null and
-// the value passes through untouched. A line with no data stays "Unavailable".
-function capRemainingPercent(remaining: number | null, cap: number | null): number | null {
-  if (remaining === null) return null;
-  if (cap === null || !Number.isFinite(cap)) return remaining;
-  return Math.min(remaining, cap);
-}
-
-function appendQuotaBlock(
-  lines: string[],
-  label: string,
-  match: QuotaMatch | null,
-  snapshot: UsageSnapshot,
-  policy: UsageCommandQuotaPolicy,
-  now: number,
-  providerCap: number | null
-) {
-  lines.push(label);
-  const effective = windowEffectiveRemaining(match, snapshot, policy);
-  lines.push(formatLeftPercent(capRemainingPercent(effective, providerCap)));
-  lines.push(`⏱ reset in ${formatResetIn(getResetAt(match?.quota ?? null), now)}`);
 }
 
 /**
@@ -633,8 +599,6 @@ export async function buildUsageCommandText(
   selection: UsageCommandSelection = {}
 ): Promise<string> {
   const resolvedDeps = await normalizeDeps(deps);
-  const sections: string[] = [];
-
   const snapshots = await collectUsageSnapshots(metadata, resolvedDeps);
   const provider = resolveQuotaProviderScope({
     ...metadata,
@@ -656,18 +620,15 @@ export async function buildUsageCommandText(
     : selectUsageSnapshot(snapshots, { ...selection, preferredProvider: provider });
   const policy = snapshot ? await resolvedDeps.getQuotaPolicy() : null;
 
-  // Cut-off cascades by window coarseness, not globally. A COARSER (longer)
-  // window dropping to/below its cutoff (effective remaining 0) makes every
-  // FINER window — and the key's personal quota — unusable for that whole
-  // period, so those collapse to 0%. But a FINER window (the session) hitting
-  // its cutoff does NOT exhaust the weekly window: the session returns in a
-  // couple hours while the week keeps its budget. So the Weekly line keeps
-  // showing its own cutoff-adjusted remaining even while the session is cut
-  // off — otherwise a 2h session cooldown reads as a bogus "0% left, resets in
-  // 6d" weekly lockout. The cutoff scaling already masks the provider's real
-  // weekly quota (never the raw value). The admin dashboard is unaffected and
-  // still shows raw per-window real values.
-  const sessionMatch = snapshot ? findQuota(snapshot.quotas, "session") : null;
+  // The text command shows ONLY the key's personal quota. The provider's own
+  // windows (Session / Weekly) are never printed: a key holder must not see how
+  // much of the shared provider account is left (the admin dashboard and the
+  // `?format=json` panel feed are separate surfaces).
+  //
+  // The provider snapshot is still read for one thing: when the provider's
+  // WEEKLY window is cut off nothing can be routed for the rest of the week, so
+  // the personal quota collapses to 0% instead of advertising budget the key
+  // cannot spend. A finer window (the session) being cut off does not do that.
   const weeklyMatch = snapshot?.resetReferenceWindowKey
     ? {
         key: snapshot.resetReferenceWindowKey,
@@ -678,40 +639,23 @@ export async function buildUsageCommandText(
       : null;
   const weeklyEffective =
     snapshot && policy ? windowEffectiveRemaining(weeklyMatch, snapshot, policy) : null;
-  // Weekly is the coarsest window we surface: nothing longer can cap it.
-  const weeklyCap = null;
-  // The session line and the personal quota can't be spent for the rest of the
-  // week only once the WEEKLY window itself is cut off.
-  const weeklyCutOff = weeklyEffective === 0;
-  const sessionCap = weeklyCutOff ? 0 : null;
-  const personalCap = weeklyCutOff ? 0 : null;
+  const personalCap = weeklyEffective === 0 ? 0 : null;
 
-  if (metadata.usageLimitEnabled === true) {
-    const usageMetadata: UsageCommandApiKeyMetadata = {
-      ...metadata,
-      preferredProvider: selection.preferredProvider ?? metadata.preferredProvider ?? null,
-    };
-    const status = await resolvedDeps.getApiKeyUsageLimitStatus(usageMetadata, {
-      now: resolvedDeps.now,
-    });
-    const now = resolvedDeps.now();
-    sections.push(
-      ["Personal quota", buildApiKeyUsageLimitPercentText(status, now, personalCap)].join("\n")
-    );
+  if (metadata.usageLimitEnabled !== true) {
+    return ["Personal quota", "No usage limit configured for this API key."].join("\n");
   }
 
-  if (!snapshot || !policy) {
-    sections.push(["Provider quota", "No cached usage data available."].join("\n"));
-    return sections.join("\n\n");
-  }
-
-  const now = resolvedDeps.now();
-  const lines = ["Provider quota"];
-  appendQuotaBlock(lines, "Session", sessionMatch, snapshot, policy, now, sessionCap);
-  lines.push("");
-  appendQuotaBlock(lines, "Weekly", weeklyMatch, snapshot, policy, now, weeklyCap);
-  sections.push(lines.join("\n"));
-  return sections.join("\n\n");
+  const usageMetadata: UsageCommandApiKeyMetadata = {
+    ...metadata,
+    preferredProvider: selection.preferredProvider ?? metadata.preferredProvider ?? null,
+  };
+  const status = await resolvedDeps.getApiKeyUsageLimitStatus(usageMetadata, {
+    now: resolvedDeps.now,
+  });
+  return [
+    "Personal quota",
+    buildApiKeyUsageLimitPercentText(status, resolvedDeps.now(), personalCap),
+  ].join("\n");
 }
 
 function getResponseModel(body: unknown): string {

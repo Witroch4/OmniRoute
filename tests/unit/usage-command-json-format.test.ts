@@ -101,7 +101,8 @@ test("om-usage without ?format stays text/plain (the historical contract)", asyn
   assert.match(response.headers.get("content-type") ?? "", /text\/plain/);
   const text = await response.text();
   assert.match(text, /Personal quota/);
-  assert.match(text, /Provider quota/);
+  // Keys see their own quota only — never the provider's windows.
+  assert.doesNotMatch(text, /Provider quota/);
 });
 
 test("om-usage ?format=json returns every connection under providers[], not just the selected one", async () => {
@@ -211,7 +212,9 @@ test("om-usage preserves raw quota in json while text scales remaining quota by 
   assert.equal(body.provider?.quotas["weekly (7d)"]?.remaining, 40);
   assert.deepEqual(body.provider?.quotaWindowThresholds, { "weekly (7d)": 25 });
 
-  // 2. Text format computes cutoff-adjusted remaining: (40 - 25) / (100 - 25) * 100 = 20% left
+  // 2. Text format shows ONLY the key's personal quota (8 of 20 USD spent → 60%
+  //    left, same figure on Daily and Weekly). The provider's cutoff-adjusted
+  //    20% must not appear anywhere.
   const textResponse = await handleInternalUsageCommandHttpRequest(
     new Request("http://localhost/api/usage/om-usage", {
       headers: { Authorization: "Bearer sk-allowed" },
@@ -220,6 +223,7 @@ test("om-usage preserves raw quota in json while text scales remaining quota by 
   );
   assert.equal(textResponse.status, 200);
   const text = await textResponse.text();
-  assert.match(text, /Weekly/);
-  assert.match(text, /20% left/);
+  assert.match(text, /Daily\n60% left/);
+  assert.match(text, /Weekly\n60% left/);
+  assert.doesNotMatch(text, /20% left|Provider quota|Session/);
 });

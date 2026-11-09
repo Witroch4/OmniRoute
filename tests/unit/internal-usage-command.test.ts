@@ -11,6 +11,23 @@ import {
 
 const NOW = Date.parse("2026-06-16T12:00:00.000Z");
 
+// A key with a personal USD cap and no daily cap: daily resets in 6h, weekly in 3d.
+function limitStatus(weeklySpentUsd: number, weeklyLimitUsd = 100) {
+  return {
+    enabled: true,
+    dailyLimitUsd: null,
+    weeklyLimitUsd,
+    dailySpentUsd: 0,
+    weeklySpentUsd,
+    dailyWindowStartIso: new Date(NOW - 18 * 60 * 60_000).toISOString(),
+    dailyResetAtIso: new Date(NOW + 6 * 60 * 60_000).toISOString(),
+    weeklyWindowStartIso: new Date(NOW - 4 * 24 * 60 * 60_000).toISOString(),
+    weeklyResetAtIso: new Date(NOW + 3 * 24 * 60 * 60_000).toISOString(),
+    dailyExceeded: false,
+    weeklyExceeded: false,
+  };
+}
+
 test("internal usage command only matches the exact trimmed user message", () => {
   assert.equal(isInternalUsageCommand("@@om-usage"), true);
   assert.equal(isInternalUsageCommand("   @@om-usage   "), true);
@@ -46,7 +63,7 @@ test("extractLastUserText supports OpenAI and Anthropic text content", () => {
   );
 });
 
-test("buildUsageCommandText formats cached Claude usage windows exactly", async () => {
+test("buildUsageCommandText never prints the provider quota windows", async () => {
   const text = await buildUsageCommandText(
     {
       id: "key-1",
@@ -96,19 +113,11 @@ test("buildUsageCommandText formats cached Claude usage windows exactly", async 
     }
   );
 
-  assert.equal(
-    text,
-    [
-      "Provider quota",
-      "Session",
-      "47% left",
-      "⏱ reset in 9m",
-      "",
-      "Weekly",
-      "28% left",
-      "⏱ reset in 1d 0h 0m",
-    ].join("\n")
-  );
+  // Cached provider windows exist (session 47% / weekly 28% left) but a key
+  // holder must never see them; with no personal limit there is nothing to show.
+  assert.equal(text, ["Personal quota", "No usage limit configured for this API key."].join("\n"));
+  assert.equal(text.includes("Provider quota"), false);
+  assert.equal(text.includes("Session"), false);
 });
 
 test("buildUsageCommandText formats API key USD limits as personal percentages", async () => {
@@ -158,16 +167,14 @@ test("buildUsageCommandText formats API key USD limits as personal percentages",
     text,
     [
       "Personal quota",
+      // Daily mirrors Weekly (10.5% of the weekly cap spent → 90% left).
       "Daily",
-      "80% left",
+      "90% left",
       "⏱ reset in 15h 0m",
       "",
       "Weekly",
       "90% left",
       "⏱ reset in 7d 0h 0m",
-      "",
-      "Provider quota",
-      "No cached usage data available.",
     ].join("\n")
   );
 });
@@ -182,10 +189,13 @@ test("buildUsageCommandText keeps the weekly line calculated when only the sessi
     {
       id: "key-session-cut",
       name: "session-cut",
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 100,
       allowedConnections: ["conn-claude"],
     },
     {
       now: () => NOW,
+      getApiKeyUsageLimitStatus: async () => limitStatus(45),
       getProviderConnectionById: async () => ({
         id: "conn-claude",
         provider: "claude",
@@ -220,31 +230,36 @@ test("buildUsageCommandText keeps the weekly line calculated when only the sessi
     }
   );
 
-  // Weekly real remaining 60%, cutoff 12% → (60-12)/(100-12)*100 ≈ 54.5 → 55%.
+  // The provider session is cut off but the provider week is healthy, so the
+  // key's own quota (45 of 100 spent → 55% left) is untouched — and no provider
+  // line is printed at all.
   assert.equal(
     text,
     [
-      "Provider quota",
-      "Session",
-      "0% left",
-      "⏱ reset in 2h 0m",
+      "Personal quota",
+      "Daily",
+      "55% left",
+      "⏱ reset in 6h 0m",
       "",
       "Weekly",
       "55% left",
-      "⏱ reset in 6d 0h 0m",
+      "⏱ reset in 3d 0h 0m",
     ].join("\n")
   );
 });
 
-test("buildUsageCommandText collapses every window to 0% once the weekly (coarsest) window is cut off", async () => {
+test("buildUsageCommandText reads 0% on the personal quota once the provider weekly window is cut off", async () => {
   const text = await buildUsageCommandText(
     {
       id: "key-cutoff",
       name: "cutoff",
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 100,
       allowedConnections: ["conn-claude"],
     },
     {
       now: () => NOW,
+      getApiKeyUsageLimitStatus: async () => limitStatus(10),
       getProviderConnectionById: async () => ({
         id: "conn-claude",
         provider: "claude",
@@ -279,17 +294,19 @@ test("buildUsageCommandText collapses every window to 0% once the weekly (coarse
     }
   );
 
+  // Provider week below its cutoff → nothing can be served → the key's quota
+  // reads 0% even though it has only spent 10%.
   assert.equal(
     text,
     [
-      "Provider quota",
-      "Session",
+      "Personal quota",
+      "Daily",
       "0% left",
-      "⏱ reset in 4h 4m",
+      "⏱ reset in 6h 0m",
       "",
       "Weekly",
       "0% left",
-      "⏱ reset in 1d 0h 44m",
+      "⏱ reset in 3d 0h 0m",
     ].join("\n")
   );
 });
@@ -297,8 +314,8 @@ test("buildUsageCommandText collapses every window to 0% once the weekly (coarse
 test("buildUsageCommandText caps personal quota at 0% while a provider window is cut off", async () => {
   // Live scenario: session healthy (98% real, above the 10% cutoff) but weekly
   // below the 10% cutoff → provider is cut off. The API view must read 0% on
-  // every numeric line (session included, and the key's personal weekly), while
-  // a line with no configured limit stays "Unavailable".
+  // both personal lines (Daily mirrors Weekly even though the key has no daily
+  // cap) and print no provider line.
   const text = await buildUsageCommandText(
     {
       id: "key-cut",
@@ -362,17 +379,8 @@ test("buildUsageCommandText caps personal quota at 0% while a provider window is
     [
       "Personal quota",
       "Daily",
-      "Unavailable",
+      "0% left",
       "⏱ reset in 6h 0m",
-      "",
-      "Weekly",
-      "0% left",
-      "⏱ reset in 3d 0h 0m",
-      "",
-      "Provider quota",
-      "Session",
-      "0% left",
-      "⏱ reset in 3h 0m",
       "",
       "Weekly",
       "0% left",
@@ -381,7 +389,7 @@ test("buildUsageCommandText caps personal quota at 0% while a provider window is
   );
 });
 
-test("handleInternalUsageCommandHttpRequest returns terminal text for an allowed API key", async () => {
+test("handleInternalUsageCommandHttpRequest returns only the personal quota text for an allowed API key", async () => {
   const response = await handleInternalUsageCommandHttpRequest(
     new Request("http://localhost/api/usage/om-usage?provider=claude", {
       headers: { Authorization: "Bearer sk-allowed" },
@@ -450,16 +458,7 @@ test("handleInternalUsageCommandHttpRequest returns terminal text for an allowed
   assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
   assert.equal(
     await response.text(),
-    [
-      "Provider quota",
-      "Session",
-      "26% left",
-      "⏱ reset in 2h 0m",
-      "",
-      "Weekly",
-      "75% left",
-      "⏱ reset in 6d 0h 0m",
-    ].join("\n")
+    ["Personal quota", "No usage limit configured for this API key."].join("\n")
   );
 });
 
@@ -604,7 +603,9 @@ test("handleInternalUsageCommand returns enabled usage snapshot locally", async 
         name: "enabled",
         allowedConnections: ["conn-claude"],
         allowUsageCommand: true,
+        usageLimitEnabled: true,
       }),
+      getApiKeyUsageLimitStatus: async () => limitStatus(28),
       now: () => NOW,
       getProviderConnectionById: async () => ({
         id: "conn-claude",
@@ -647,7 +648,19 @@ test("handleInternalUsageCommand returns enabled usage snapshot locally", async 
   const body = (await response.json()) as {
     content: Array<{ type: string; text: string }>;
   };
-  assert.equal(body.content[0].text.includes("Weekly\n28% left\n⏱ reset in 1d 0h 0m"), true);
+  assert.equal(
+    body.content[0].text,
+    [
+      "Personal quota",
+      "Daily",
+      "72% left",
+      "⏱ reset in 6h 0m",
+      "",
+      "Weekly",
+      "72% left",
+      "⏱ reset in 3d 0h 0m",
+    ].join("\n")
+  );
 });
 
 test("handleInternalUsageCommand ignores normal prompts", async () => {
