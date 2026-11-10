@@ -248,7 +248,7 @@ test("buildUsageCommandText keeps the weekly line calculated when only the sessi
   );
 });
 
-test("buildUsageCommandText reads 0% on the personal quota once the provider weekly window is cut off", async () => {
+test("buildUsageCommandText shows the real personal quota even when the provider weekly window is cut off", async () => {
   const text = await buildUsageCommandText(
     {
       id: "key-cutoff",
@@ -294,28 +294,29 @@ test("buildUsageCommandText reads 0% on the personal quota once the provider wee
     }
   );
 
-  // Provider week below its cutoff → nothing can be served → the key's quota
-  // reads 0% even though it has only spent 10%.
+  // Provider week below its cutoff. The key has spent only 10% of its own limit,
+  // so it reads 90% left: the provider cutoff no longer caps this number (it used
+  // to force 0% on every key of the provider, e.g. Codex at 7% with a 10% cutoff).
   assert.equal(
     text,
     [
       "Personal quota",
       "Daily",
-      "0% left",
+      "90% left",
       "⏱ reset in 6h 0m",
       "",
       "Weekly",
-      "0% left",
+      "90% left",
       "⏱ reset in 3d 0h 0m",
     ].join("\n")
   );
 });
 
-test("buildUsageCommandText caps personal quota at 0% while a provider window is cut off", async () => {
+test("buildUsageCommandText does not cap the personal quota while a provider window is cut off", async () => {
   // Live scenario: session healthy (98% real, above the 10% cutoff) but weekly
-  // below the 10% cutoff → provider is cut off. The API view must read 0% on
-  // both personal lines (Daily mirrors Weekly even though the key has no daily
-  // cap) and print no provider line.
+  // below the 10% cutoff → provider is cut off. The key has spent nothing, so
+  // both personal lines read 100% left (Daily mirrors Weekly even though the key
+  // has no daily cap) and no provider line is printed.
   const text = await buildUsageCommandText(
     {
       id: "key-cut",
@@ -379,11 +380,11 @@ test("buildUsageCommandText caps personal quota at 0% while a provider window is
     [
       "Personal quota",
       "Daily",
-      "0% left",
+      "100% left",
       "⏱ reset in 6h 0m",
       "",
       "Weekly",
-      "0% left",
+      "100% left",
       "⏱ reset in 3d 0h 0m",
     ].join("\n")
   );

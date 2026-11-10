@@ -166,7 +166,7 @@ test("missing or inactive configured principal does not silently fall back to Go
   );
   await assert.rejects(
     command.buildUsageCommandText(
-      { id: "jean", allowedModels: ["codex/*"] },
+      { id: "jean", allowedModels: ["codex/*"], usageLimitEnabled: true, weeklyUsageLimitUsd: 100 },
       { now: () => now },
       { preferredProvider: "codex" }
     ),

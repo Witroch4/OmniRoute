@@ -6,8 +6,6 @@ import {
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
 import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
-import { resolveProviderQuotaResetReference } from "./quotaResetReference";
-import { resolveQuotaProviderScope } from "./quotaProviderScope";
 
 export const INTERNAL_USAGE_COMMAND = "@@om-usage";
 export const USAGE_COMMAND_DISABLED_MESSAGE = "Usage command is disabled for this API key.";
@@ -161,15 +159,6 @@ function extractUsageCommandApiKey(request: Request): string | null {
   }
 
   return readPathScopedToken(request);
-}
-
-function toNumber(value: unknown, fallback = Number.NaN): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  }
-  return fallback;
 }
 
 function textFromContent(content: unknown): string | null {
@@ -342,35 +331,6 @@ function findQuota(
   return null;
 }
 
-function getQuotaUsedPercent(quota: JsonRecord | null): number | null {
-  if (!quota) return null;
-
-  const usedPercentage = toNumber(quota.usedPercentage);
-  if (Number.isFinite(usedPercentage)) return Math.max(0, Math.min(100, usedPercentage));
-
-  const used = toNumber(quota.used);
-  const total = toNumber(quota.total);
-  if (Number.isFinite(used) && Number.isFinite(total) && total > 0) {
-    return Math.max(0, Math.min(100, (used / total) * 100));
-  }
-
-  if (Number.isFinite(used) && used >= 0 && used <= 100) {
-    return used;
-  }
-
-  const remainingPercentage = toNumber(quota.remainingPercentage);
-  if (Number.isFinite(remainingPercentage)) {
-    return Math.max(0, Math.min(100, 100 - remainingPercentage));
-  }
-
-  const remaining = toNumber(quota.remaining);
-  if (Number.isFinite(remaining) && remaining >= 0 && remaining <= 100) {
-    return Math.max(0, Math.min(100, 100 - remaining));
-  }
-
-  return null;
-}
-
 export function formatResetIn(resetAt: string | null, now = Date.now()): string {
   if (!resetAt) return "unknown";
   const resetMs = Date.parse(resetAt);
@@ -428,74 +388,6 @@ function normalizeProviderId(provider: string | null | undefined): string | null
   return normalized;
 }
 
-function quotaWindowLookupNames(provider: string, windowName: string): string[] {
-  const names = [windowName];
-  const lower = windowName.toLowerCase();
-  if (lower !== windowName) names.push(lower);
-
-  const normalized = normalizeQuotaKey(windowName);
-  if (normalized.includes("session") || normalized.includes("5h")) {
-    names.push("session", "session (5h)");
-  }
-  if (normalized.includes("weekly") || normalized.includes("7d")) {
-    if (normalized.includes("sonnet")) {
-      names.push("weekly sonnet", "weekly sonnet (7d)");
-    } else {
-      names.push("weekly", "weekly (7d)");
-    }
-  }
-  if (provider === "codex" && (normalized.includes("monthly") || normalized.includes("30d"))) {
-    names.push("monthly");
-  }
-
-  return [...new Set(names)];
-}
-
-function resolveQuotaCutoffPercent(
-  snapshot: UsageSnapshot,
-  windowName: string,
-  policy: UsageCommandQuotaPolicy
-): number {
-  const provider = normalizeProviderId(snapshot.provider) ?? snapshot.provider;
-  const providerDefaults =
-    policy.providerWindowDefaults[snapshot.provider] ||
-    policy.providerWindowDefaults[provider] ||
-    {};
-  const overrides = snapshot.quotaWindowThresholds ?? {};
-
-  for (const lookupName of quotaWindowLookupNames(provider, windowName)) {
-    const override = overrides[lookupName];
-    if (typeof override === "number") return override;
-    const providerDefault = providerDefaults[lookupName];
-    if (typeof providerDefault === "number") return providerDefault;
-  }
-
-  return policy.defaultThresholdPercent;
-}
-
-/**
- * Computes the cutoff-adjusted effective remaining quota percentage.
- *
- * Scales the remaining quota so that the configured cutoff threshold
- * (the protected reserve floor) reads as 0% left:
- * - If remaining <= cutoff: returns 0%.
- * - Otherwise: ((remaining - cutoff) / (100 - cutoff)) * 100.
- *
- * Used by {@link buildUsageCommandText} to detect a cut-off weekly window.
- * In contrast, {@link buildUsageCommandJson} returns raw upstream snapshots
- * in `provider.quotas` alongside `quotaWindowThresholds`.
- */
-function effectiveRemainingPercent(
-  realRemaining: number | null,
-  cutoffPercent: number
-): number | null {
-  if (realRemaining === null || !Number.isFinite(realRemaining)) return null;
-  const remaining = Math.max(0, Math.min(100, realRemaining));
-  const cutoff = Math.max(0, Math.min(99, cutoffPercent));
-  if (remaining <= cutoff) return 0;
-  return ((remaining - cutoff) / (100 - cutoff)) * 100;
-}
-
 function selectUsageSnapshot(
   snapshots: UsageSnapshot[],
   selection: UsageCommandSelection = {}
@@ -516,25 +408,6 @@ function selectUsageSnapshot(
   return selectBestUsageSnapshot(snapshots);
 }
 
-function quotaRealRemaining(match: QuotaMatch | null): number | null {
-  const usedPercent = getQuotaUsedPercent(match?.quota ?? null);
-  return usedPercent === null || !Number.isFinite(usedPercent)
-    ? null
-    : 100 - Math.max(0, Math.min(100, usedPercent));
-}
-
-// A single window's remaining after its cutoff — 0 once it drops below the
-// cutoff, otherwise the proportional remaining above it.
-function windowEffectiveRemaining(
-  match: QuotaMatch | null,
-  snapshot: UsageSnapshot,
-  policy: UsageCommandQuotaPolicy
-): number | null {
-  if (!match) return null;
-  const cutoff = resolveQuotaCutoffPercent(snapshot, match.key, policy);
-  return effectiveRemainingPercent(quotaRealRemaining(match), cutoff);
-}
-
 /**
  * Structured form of the usage command — what {@link buildUsageCommandText}
  * renders as text, exposed as data for API consumers (the OmniCopilot panel
@@ -545,10 +418,9 @@ function windowEffectiveRemaining(
  * - JSON `provider.quotas` and `providers[].quotas` expose raw upstream
  *   snapshots (unadjusted usage and remaining numbers/percentages), alongside
  *   connection-level `quotaWindowThresholds`.
- * - In contrast, text output (`buildUsageCommandText` / terminal `@@om-usage`)
- *   renders cutoff-adjusted remaining percentages (`NN% left`) via
- *   {@link effectiveRemainingPercent}, where the configured cutoff reserve
- *   reads as 0% left.
+ * - Text output (`buildUsageCommandText` / terminal `@@om-usage`) renders only
+ *   the key's own personal quota (`NN% left`), never the provider's windows and
+ *   never scaled by the provider cutoff.
  *
  * The key design constraint is the 403 case: a key without `allowUsageCommand`
  * must reach the client as a *structured* reason, not a bare text error — a
@@ -599,48 +471,15 @@ export async function buildUsageCommandText(
   selection: UsageCommandSelection = {}
 ): Promise<string> {
   const resolvedDeps = await normalizeDeps(deps);
-  const snapshots = await collectUsageSnapshots(metadata, resolvedDeps);
-  const provider = resolveQuotaProviderScope({
-    ...metadata,
-    preferredProvider: selection.preferredProvider ?? metadata.preferredProvider,
-  });
-  const principal =
-    provider && !selection.preferredConnectionId
-      ? await resolveProviderQuotaResetReference(provider, resolvedDeps)
-      : null;
-  const snapshot: UsageSnapshot | null = principal
-    ? {
-        connectionId: principal.reference.connectionId,
-        provider: provider!,
-        plan: principal.cache?.plan,
-        quotas: { ...principal.cache?.quotas, [principal.reference.windowKey]: principal.quota },
-        quotaWindowThresholds: readThresholdMap(principal.connection.quotaWindowThresholds),
-        resetReferenceWindowKey: principal.reference.windowKey,
-      }
-    : selectUsageSnapshot(snapshots, { ...selection, preferredProvider: provider });
-  const policy = snapshot ? await resolvedDeps.getQuotaPolicy() : null;
 
-  // The text command shows ONLY the key's personal quota. The provider's own
-  // windows (Session / Weekly) are never printed: a key holder must not see how
-  // much of the shared provider account is left (the admin dashboard and the
-  // `?format=json` panel feed are separate surfaces).
-  //
-  // The provider snapshot is still read for one thing: when the provider's
-  // WEEKLY window is cut off nothing can be routed for the rest of the week, so
-  // the personal quota collapses to 0% instead of advertising budget the key
-  // cannot spend. A finer window (the session) being cut off does not do that.
-  const weeklyMatch = snapshot?.resetReferenceWindowKey
-    ? {
-        key: snapshot.resetReferenceWindowKey,
-        quota: snapshot.quotas[snapshot.resetReferenceWindowKey] as JsonRecord,
-      }
-    : snapshot
-      ? findQuota(snapshot.quotas, "weekly")
-      : null;
-  const weeklyEffective =
-    snapshot && policy ? windowEffectiveRemaining(weeklyMatch, snapshot, policy) : null;
-  const personalCap = weeklyEffective === 0 ? 0 : null;
-
+  // The text command shows ONLY the key's personal quota, and shows it as it is:
+  // what the key has spent against the limit it was given. The provider's own
+  // windows (Session / Weekly) are never printed (a key holder must not see how
+  // much of the shared provider account is left), and they no longer cap the
+  // personal number either. A provider cutoff used to force this to 0% for every
+  // key on the provider, so a key that had spent 17% of its limit read "0% left".
+  // The cutoff still governs routing; it just is not this number. The admin
+  // dashboard and the `?format=json` panel feed are separate surfaces.
   if (metadata.usageLimitEnabled !== true) {
     return ["Personal quota", "No usage limit configured for this API key."].join("\n");
   }
@@ -652,10 +491,9 @@ export async function buildUsageCommandText(
   const status = await resolvedDeps.getApiKeyUsageLimitStatus(usageMetadata, {
     now: resolvedDeps.now,
   });
-  return [
-    "Personal quota",
-    buildApiKeyUsageLimitPercentText(status, resolvedDeps.now(), personalCap),
-  ].join("\n");
+  return ["Personal quota", buildApiKeyUsageLimitPercentText(status, resolvedDeps.now())].join(
+    "\n"
+  );
 }
 
 function getResponseModel(body: unknown): string {
