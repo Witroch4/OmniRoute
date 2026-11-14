@@ -29,6 +29,10 @@ import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
 import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
 import { resolveProviderQuotaResetReference } from "./quotaResetReference";
 import { normalizeQuotaProvider, resolveQuotaProviderScope } from "./quotaProviderScope";
+import {
+  getClaudeStandardWeeklyWindow,
+  isClaudeKeyQuotaFollowingEarlyReset,
+} from "./claudeKeyWeeklyWindow";
 
 const FORTALEZA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -470,6 +474,21 @@ async function getProviderWeeklyWindow(
     }
     if (providers.size === 1) preferredProvider = [...providers][0];
   }
+  // Claude keys measure against the standard Thursday 20:00 (Fortaleza) grid, not the
+  // account's observed reset, so an early reset of the account does not zero them.
+  let claudeStandardMemo: ReturnType<typeof getClaudeStandardWeeklyWindow> | null | undefined;
+  const claudeStandardWindow = () => {
+    if (claudeStandardMemo === undefined) {
+      claudeStandardMemo = isClaudeKeyQuotaFollowingEarlyReset()
+        ? null
+        : getClaudeStandardWeeklyWindow(nowMs);
+    }
+    return claudeStandardMemo;
+  };
+  if (preferredProvider === "claude") {
+    const standard = claudeStandardWindow();
+    if (standard) return standard;
+  }
   if (preferredProvider) {
     const principal = await resolveProviderQuotaResetReference(preferredProvider, {
       ...deps,
@@ -495,11 +514,14 @@ async function getProviderWeeklyWindow(
         nowMs
       );
       if (resetAt) {
+        const standard =
+          normalizeProvider(connection.provider) === "claude" ? claudeStandardWindow() : null;
         resetCandidates.push({
           connectionId: connection.id,
           provider: connection.provider,
-          resetAtIso: resetAt,
-          observedWindowStartIso: getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
+          resetAtIso: standard?.resetAtIso ?? resetAt,
+          observedWindowStartIso:
+            standard?.windowStartIso ?? getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
         });
       }
     }
@@ -513,11 +535,14 @@ async function getProviderWeeklyWindow(
         continue;
       const resetAt = resolveWeeklyResetAt(caches[connection.id]?.quotas, connection.id, nowMs);
       if (resetAt) {
+        const standard =
+          normalizeProvider(connection.provider) === "claude" ? claudeStandardWindow() : null;
         resetCandidates.push({
           connectionId: connection.id,
           provider: connection.provider,
-          resetAtIso: resetAt,
-          observedWindowStartIso: getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
+          resetAtIso: standard?.resetAtIso ?? resetAt,
+          observedWindowStartIso:
+            standard?.windowStartIso ?? getWeeklyWindowStartIso(connection.id, resetAt, nowMs),
         });
       }
     }
@@ -561,7 +586,10 @@ function getProcessTimeZone(): string {
 /**
  * Weekly window used by per-key USD limits.
  * - `provider` (default): end at the earliest weekly reset among the upstream
- *   connections the key can reach; rolling 7 days when none is known.
+ *   connections the key can reach; rolling 7 days when none is known. For the Claude
+ *   provider that reset is the standard Thursday 20:00 (America/Fortaleza) grid, not the
+ *   account's observed reset, unless CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET is on
+ *   (see `claudeKeyWeeklyWindow.ts`).
  * - `calendar`: the local week starting Monday 00:00 in
  *   OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE, or in the process timezone when unset.
  */

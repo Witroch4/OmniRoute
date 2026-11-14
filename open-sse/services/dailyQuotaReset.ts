@@ -186,11 +186,7 @@ function zonedLocalToUtcFirstOccurrence(
     }
     // Once the local date has moved before the requested date, no earlier
     // occurrence of this wall time can remain in the same fold.
-    if (
-      parts.year !== year ||
-      parts.month !== month ||
-      parts.day !== day
-    ) {
+    if (parts.year !== year || parts.month !== month || parts.day !== day) {
       break;
     }
   }
@@ -237,6 +233,44 @@ export function calendarWeekWindowMs(
     );
   };
   return { startMs: toUtc(-daysSinceMonday), resetMs: toUtc(7 - daysSinceMonday) };
+}
+
+/**
+ * Weekly window anchored on a fixed local weekday + hour (`weekday` 0 = Sunday …
+ * 6 = Saturday) in `timezone`: `[startMs, resetMs)` runs from the most recent
+ * boundary at or before `nowMs` to the next one. It depends on no provider-observed
+ * timestamp, so an early/credit reset cannot move it. Both edges use the same
+ * DST-aware wall-clock conversion as {@link calendarWeekWindowMs}.
+ */
+export function weeklyBoundaryWindowMs(
+  timezone: string,
+  weekday: number,
+  hour: number,
+  nowMs: number
+): { startMs: number; resetMs: number } {
+  const now = zonedParts(nowMs, timezone);
+  const localWeekday = new Date(Date.UTC(now.year, now.month - 1, now.day)).getUTCDay();
+  const toUtc = (dayOffset: number) => {
+    const date = new Date(Date.UTC(now.year, now.month - 1, now.day + dayOffset));
+    return zonedLocalToUtcFirstOccurrence(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      hour,
+      0,
+      0,
+      timezone
+    );
+  };
+  let daysSince = (localWeekday - weekday + 7) % 7;
+  let startMs = toUtc(-daysSince);
+  // It is the boundary weekday but the boundary hour has not struck yet: the
+  // window in force began a full week ago.
+  if (startMs > nowMs) {
+    daysSince += 7;
+    startMs = toUtc(-daysSince);
+  }
+  return { startMs, resetMs: toUtc(7 - daysSince) };
 }
 
 export function parseTpdLimitFromText(text: string): number | null {

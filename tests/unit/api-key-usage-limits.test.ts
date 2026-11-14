@@ -29,6 +29,23 @@ test.beforeEach(async () => {
   await resetStorage();
 });
 
+// These cases exercise the "key window follows the account's observed reset" machinery
+// through the Claude provider. Claude keys now default to the standard Thursday reset
+// (claude-key-weekly-window-standard-reset.test.ts), so that behaviour is only reachable
+// with CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET on; Codex and other providers need no flag.
+function legacyClaudeWindowTest(name: string, run: () => Promise<void>) {
+  test(name, async () => {
+    const saved = process.env.CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET;
+    process.env.CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET = "true";
+    try {
+      await run();
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET;
+      else process.env.CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET = saved;
+    }
+  });
+}
+
 test.after(() => {
   core.resetDbInstance();
   apiKeysDb.resetApiKeyState();
@@ -56,137 +73,142 @@ test("API key USD usage limits persist and default off", async () => {
   assert.equal(metadata?.weeklyUsageLimitUsd, 50);
 });
 
-test("getApiKeyUsageLimitStatus aligns weekly USD spend with provider resetAt when available", async () => {
-  await localDb.updatePricing({
-    claude: {
-      "claude-opus-4-8": {
-        input: 1,
-        cached: 1,
-        output: 1,
-        reasoning: 1,
-        cache_creation: 1,
-      },
-    },
-  });
-
-  const created = await apiKeysDb.createApiKey("Metered Key", "machine-limit-02");
-  await apiKeysDb.updateApiKeyPermissions(created.id, {
-    usageLimitEnabled: true,
-    dailyUsageLimitUsd: 10,
-    weeklyUsageLimitUsd: 20,
-  });
-
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Metered Key",
-    tokens: { input: 2_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-19T12:00:00.000Z",
-  });
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Metered Key",
-    tokens: { input: 3_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-18T21:00:00.000Z",
-  });
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Metered Key",
-    tokens: { input: 7_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-18T12:00:00.000Z",
-  });
-
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
-
-  const weeklyResetAt = "2026-06-25T20:00:00.000Z";
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-claude"] },
-    {
-      now: () => NOW,
-      getProviderConnectionById: async () => ({
-        id: "conn-claude",
-        provider: "claude",
-        isActive: true,
-      }),
-      getProviderConnections: async () => [],
-      getProviderLimitsCache: () => ({
-        plan: "Claude Max",
-        quotas: {
-          "weekly (7d)": {
-            used: 27,
-            total: 100,
-            resetAt: weeklyResetAt,
-          },
+legacyClaudeWindowTest(
+  "getApiKeyUsageLimitStatus aligns weekly USD spend with provider resetAt when available",
+  async () => {
+    await localDb.updatePricing({
+      claude: {
+        "claude-opus-4-8": {
+          input: 1,
+          cached: 1,
+          output: 1,
+          reasoning: 1,
+          cache_creation: 1,
         },
-        message: null,
-        fetchedAt: new Date(NOW).toISOString(),
-      }),
-      getAllProviderLimitsCache: () => ({}),
-    }
-  );
-
-  assert.equal(status.enabled, true);
-  assert.equal(status.dailySpentUsd, 2);
-  assert.equal(status.weeklySpentUsd, 5);
-  assert.equal(status.dailyLimitUsd, 10);
-  assert.equal(status.weeklyLimitUsd, 20);
-  assert.equal(status.dailyResetAtIso, "2026-06-20T03:00:00.000Z");
-  assert.equal(status.weeklyWindowStartIso, "2026-06-18T20:00:00.000Z");
-  assert.equal(status.weeklyResetAtIso, weeklyResetAt);
-  assert.equal(status.dailyExceeded, false);
-  assert.equal(status.weeklyExceeded, false);
-});
-
-test("getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota reset", async () => {
-  await localDb.updatePricing({
-    claude: {
-      "claude-opus-4-8": {
-        input: 1,
-        cached: 1,
-        output: 1,
-        reasoning: 1,
-        cache_creation: 1,
       },
-    },
-  });
+    });
 
-  const created = await apiKeysDb.createApiKey("Reset Cut Key", "machine-limit-reset");
-  await apiKeysDb.updateApiKeyPermissions(created.id, {
-    usageLimitEnabled: true,
-    dailyUsageLimitUsd: 10,
-    weeklyUsageLimitUsd: 20,
-  });
+    const created = await apiKeysDb.createApiKey("Metered Key", "machine-limit-02");
+    await apiKeysDb.updateApiKeyPermissions(created.id, {
+      usageLimitEnabled: true,
+      dailyUsageLimitUsd: 10,
+      weeklyUsageLimitUsd: 20,
+    });
 
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Reset Cut Key",
-    tokens: { input: 7_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-19T23:30:00.000Z",
-  });
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Reset Cut Key",
-    tokens: { input: 2_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-20T02:00:00.000Z",
-  });
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Metered Key",
+      tokens: { input: 2_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-19T12:00:00.000Z",
+    });
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Metered Key",
+      tokens: { input: 3_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-18T21:00:00.000Z",
+    });
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Metered Key",
+      tokens: { input: 7_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-18T12:00:00.000Z",
+    });
 
-  const db = core.getDbInstance();
-  const insertSnapshot = db.prepare(`
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
+
+    const weeklyResetAt = "2026-06-25T20:00:00.000Z";
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-claude"] },
+      {
+        now: () => NOW,
+        getProviderConnectionById: async () => ({
+          id: "conn-claude",
+          provider: "claude",
+          isActive: true,
+        }),
+        getProviderConnections: async () => [],
+        getProviderLimitsCache: () => ({
+          plan: "Claude Max",
+          quotas: {
+            "weekly (7d)": {
+              used: 27,
+              total: 100,
+              resetAt: weeklyResetAt,
+            },
+          },
+          message: null,
+          fetchedAt: new Date(NOW).toISOString(),
+        }),
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
+
+    assert.equal(status.enabled, true);
+    assert.equal(status.dailySpentUsd, 2);
+    assert.equal(status.weeklySpentUsd, 5);
+    assert.equal(status.dailyLimitUsd, 10);
+    assert.equal(status.weeklyLimitUsd, 20);
+    assert.equal(status.dailyResetAtIso, "2026-06-20T03:00:00.000Z");
+    assert.equal(status.weeklyWindowStartIso, "2026-06-18T20:00:00.000Z");
+    assert.equal(status.weeklyResetAtIso, weeklyResetAt);
+    assert.equal(status.dailyExceeded, false);
+    assert.equal(status.weeklyExceeded, false);
+  }
+);
+
+legacyClaudeWindowTest(
+  "getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota reset",
+  async () => {
+    await localDb.updatePricing({
+      claude: {
+        "claude-opus-4-8": {
+          input: 1,
+          cached: 1,
+          output: 1,
+          reasoning: 1,
+          cache_creation: 1,
+        },
+      },
+    });
+
+    const created = await apiKeysDb.createApiKey("Reset Cut Key", "machine-limit-reset");
+    await apiKeysDb.updateApiKeyPermissions(created.id, {
+      usageLimitEnabled: true,
+      dailyUsageLimitUsd: 10,
+      weeklyUsageLimitUsd: 20,
+    });
+
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Reset Cut Key",
+      tokens: { input: 7_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-19T23:30:00.000Z",
+    });
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Reset Cut Key",
+      tokens: { input: 2_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-20T02:00:00.000Z",
+    });
+
+    const db = core.getDbInstance();
+    const insertSnapshot = db.prepare(`
     INSERT INTO quota_snapshots (
       provider,
       connection_id,
@@ -199,94 +221,95 @@ test("getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota
       created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertSnapshot.run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    72,
-    0,
-    "2026-06-25T23:00:00.000Z",
-    null,
-    null,
-    "2026-06-19T23:55:00.000Z"
-  );
-  insertSnapshot.run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    100,
-    0,
-    "2026-06-25T23:00:00.000Z",
-    null,
-    null,
-    "2026-06-20T01:42:52.590Z"
-  );
-  insertSnapshot.run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    99,
-    0,
-    "2026-06-25T23:00:00.000Z",
-    null,
-    null,
-    "2026-06-20T02:10:00.000Z"
-  );
-  db.prepare(
-    `
+    insertSnapshot.run(
+      "claude",
+      "conn-claude",
+      "weekly (7d)",
+      72,
+      0,
+      "2026-06-25T23:00:00.000Z",
+      null,
+      null,
+      "2026-06-19T23:55:00.000Z"
+    );
+    insertSnapshot.run(
+      "claude",
+      "conn-claude",
+      "weekly (7d)",
+      100,
+      0,
+      "2026-06-25T23:00:00.000Z",
+      null,
+      null,
+      "2026-06-20T01:42:52.590Z"
+    );
+    insertSnapshot.run(
+      "claude",
+      "conn-claude",
+      "weekly (7d)",
+      99,
+      0,
+      "2026-06-25T23:00:00.000Z",
+      null,
+      null,
+      "2026-06-20T02:10:00.000Z"
+    );
+    db.prepare(
+      `
     INSERT INTO provider_quota_reset_events
       (provider, connection_id, window_key, window_started_at, window_resets_at,
        observed_at, previous_remaining_percentage, new_remaining_percentage,
        previous_used_percentage, new_used_percentage, raw_data)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
-  ).run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    "2026-06-18T23:00:00.000Z",
-    "2026-06-25T23:00:00.000Z",
-    "2026-06-18T23:04:00.000Z",
-    0,
-    100,
-    100,
-    0,
-    null
-  );
+    ).run(
+      "claude",
+      "conn-claude",
+      "weekly (7d)",
+      "2026-06-18T23:00:00.000Z",
+      "2026-06-25T23:00:00.000Z",
+      "2026-06-18T23:04:00.000Z",
+      0,
+      100,
+      100,
+      0,
+      null
+    );
 
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
 
-  const weeklyResetAt = "2026-06-25T23:00:00.000Z";
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-claude"] },
-    {
-      now: () => Date.parse("2026-06-20T14:30:00.000Z"),
-      getProviderConnectionById: async () => ({
-        id: "conn-claude",
-        provider: "claude",
-        isActive: true,
-      }),
-      getProviderConnections: async () => [],
-      getProviderLimitsCache: () => ({
-        plan: "Claude Max",
-        quotas: {
-          "weekly (7d)": {
-            used: 5,
-            total: 100,
-            resetAt: weeklyResetAt,
+    const weeklyResetAt = "2026-06-25T23:00:00.000Z";
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-claude"] },
+      {
+        now: () => Date.parse("2026-06-20T14:30:00.000Z"),
+        getProviderConnectionById: async () => ({
+          id: "conn-claude",
+          provider: "claude",
+          isActive: true,
+        }),
+        getProviderConnections: async () => [],
+        getProviderLimitsCache: () => ({
+          plan: "Claude Max",
+          quotas: {
+            "weekly (7d)": {
+              used: 5,
+              total: 100,
+              resetAt: weeklyResetAt,
+            },
           },
-        },
-        message: null,
-        fetchedAt: "2026-06-20T14:30:00.000Z",
-      }),
-      getAllProviderLimitsCache: () => ({}),
-    }
-  );
+          message: null,
+          fetchedAt: "2026-06-20T14:30:00.000Z",
+        }),
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
 
-  assert.equal(status.weeklyWindowStartIso, "2026-06-20T01:42:52.590Z");
-  assert.equal(status.weeklySpentUsd, 2);
-});
+    assert.equal(status.weeklyWindowStartIso, "2026-06-20T01:42:52.590Z");
+    assert.equal(status.weeklySpentUsd, 2);
+  }
+);
 
 const WEEKLY_WINDOW_ENV_KEYS = [
   "OMNIROUTE_API_KEY_WEEKLY_WINDOW",
@@ -730,138 +753,64 @@ test("buildApiKeyUsageLimitRejection uses 400 so Claude Code does not trigger lo
  * already reset. A key limited to $390/week stayed blocked at 113% with zero
  * requests since the reset. `quota_snapshots` had already observed the reset.
  */
-test("weekly window follows the observed quota reset when the provider-limits cache is stale", async () => {
-  await localDb.updatePricing({
-    claude: {
-      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
-    },
-  });
+legacyClaudeWindowTest(
+  "weekly window follows the observed quota reset when the provider-limits cache is stale",
+  async () => {
+    await localDb.updatePricing({
+      claude: {
+        "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+      },
+    });
 
-  const created = await apiKeysDb.createApiKey("Stale Cache Key", "machine-limit-stale");
-  await apiKeysDb.updateApiKeyPermissions(created.id, {
-    usageLimitEnabled: true,
-    weeklyUsageLimitUsd: 20,
-  });
+    const created = await apiKeysDb.createApiKey("Stale Cache Key", "machine-limit-stale");
+    await apiKeysDb.updateApiKeyPermissions(created.id, {
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 20,
+    });
 
-  // Spent in the week the provider has since reset — must NOT count anymore.
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Stale Cache Key",
-    tokens: { input: 30_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-19T12:00:00.000Z",
-  });
-  // Spent after the reset — the only spend the new window may see.
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Stale Cache Key",
-    tokens: { input: 3_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-20T13:30:00.000Z",
-  });
+    // Spent in the week the provider has since reset — must NOT count anymore.
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Stale Cache Key",
+      tokens: { input: 30_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-19T12:00:00.000Z",
+    });
+    // Spent after the reset — the only spend the new window may see.
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Stale Cache Key",
+      tokens: { input: 3_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-20T13:30:00.000Z",
+    });
 
-  const db = core.getDbInstance();
-  const insertSnapshot = db.prepare(`
+    const db = core.getDbInstance();
+    const insertSnapshot = db.prepare(`
     INSERT INTO quota_snapshots (
       provider, connection_id, window_key, remaining_percentage, is_exhausted,
       next_reset_at, window_duration_ms, raw_data, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  // Last observation of the old window (nearly drained), then the reset.
-  insertSnapshot.run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    2,
-    0,
-    "2026-06-20T13:00:00.000Z",
-    null,
-    null,
-    "2026-06-19T22:54:00.000Z"
-  );
-  insertSnapshot.run(
-    "claude",
-    "conn-claude",
-    "weekly (7d)",
-    100,
-    0,
-    "2026-06-27T13:00:00.000Z",
-    null,
-    null,
-    "2026-06-20T13:05:00.000Z"
-  );
-
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
-
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-claude"] },
-    {
-      now: () => Date.parse("2026-06-20T14:30:00.000Z"),
-      getProviderConnectionById: async () => ({
-        id: "conn-claude",
-        provider: "claude",
-        isActive: true,
-      }),
-      getProviderConnections: async () => [],
-      // Frozen cache: its weekly reset already elapsed and never advanced.
-      getProviderLimitsCache: () => ({
-        plan: "Claude Max",
-        quotas: {
-          "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" },
-          "weekly (7d)": { used: 98, total: 100, resetAt: "2026-06-20T13:00:00.000Z" },
-        },
-        message: null,
-        fetchedAt: "2026-06-20T02:24:00.000Z",
-      }),
-      getAllProviderLimitsCache: () => ({}),
-    }
-  );
-
-  assert.equal(
-    status.weeklyResetAtIso,
-    "2026-06-27T13:00:00.000Z",
-    "weekly reset must come from the observed snapshot, not stay unknown"
-  );
-  assert.equal(
-    status.weeklyWindowStartIso,
-    "2026-06-20T13:05:00.000Z",
-    "weekly window must start at the observed reset, not now-7d"
-  );
-  assert.equal(status.weeklySpentUsd, 3, "only post-reset spend counts");
-  assert.equal(status.weeklyExceeded, false);
-});
-
-test("a connection whose cache never advertised a weekly window does not gain one from snapshots", async () => {
-  await localDb.updatePricing({
-    claude: {
-      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
-    },
-  });
-
-  const created = await apiKeysDb.createApiKey("Session Only Key", "machine-limit-session");
-  await apiKeysDb.updateApiKeyPermissions(created.id, {
-    usageLimitEnabled: true,
-    weeklyUsageLimitUsd: 20,
-  });
-
-  core
-    .getDbInstance()
-    .prepare(
-      `
-      INSERT INTO quota_snapshots (
-        provider, connection_id, window_key, remaining_percentage, is_exhausted,
-        next_reset_at, window_duration_ms, raw_data, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    )
-    .run(
+    // Last observation of the old window (nearly drained), then the reset.
+    insertSnapshot.run(
       "claude",
-      "conn-session",
+      "conn-claude",
+      "weekly (7d)",
+      2,
+      0,
+      "2026-06-20T13:00:00.000Z",
+      null,
+      null,
+      "2026-06-19T22:54:00.000Z"
+    );
+    insertSnapshot.run(
+      "claude",
+      "conn-claude",
       "weekly (7d)",
       100,
       0,
@@ -871,32 +820,112 @@ test("a connection whose cache never advertised a weekly window does not gain on
       "2026-06-20T13:05:00.000Z"
     );
 
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
 
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-session"] },
-    {
-      now: () => Date.parse("2026-06-20T14:30:00.000Z"),
-      getProviderConnectionById: async () => ({
-        id: "conn-session",
-        provider: "claude",
-        isActive: true,
-      }),
-      getProviderConnections: async () => [],
-      getProviderLimitsCache: () => ({
-        plan: "Claude Pro",
-        quotas: { "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" } },
-        message: null,
-        fetchedAt: "2026-06-20T14:00:00.000Z",
-      }),
-      getAllProviderLimitsCache: () => ({}),
-    }
-  );
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-claude"] },
+      {
+        now: () => Date.parse("2026-06-20T14:30:00.000Z"),
+        getProviderConnectionById: async () => ({
+          id: "conn-claude",
+          provider: "claude",
+          isActive: true,
+        }),
+        getProviderConnections: async () => [],
+        // Frozen cache: its weekly reset already elapsed and never advanced.
+        getProviderLimitsCache: () => ({
+          plan: "Claude Max",
+          quotas: {
+            "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" },
+            "weekly (7d)": { used: 98, total: 100, resetAt: "2026-06-20T13:00:00.000Z" },
+          },
+          message: null,
+          fetchedAt: "2026-06-20T02:24:00.000Z",
+        }),
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
 
-  assert.equal(status.weeklyResetAtIso, null);
-  assert.equal(status.weeklyWindowStartIso, "2026-06-13T14:30:00.000Z");
-});
+    assert.equal(
+      status.weeklyResetAtIso,
+      "2026-06-27T13:00:00.000Z",
+      "weekly reset must come from the observed snapshot, not stay unknown"
+    );
+    assert.equal(
+      status.weeklyWindowStartIso,
+      "2026-06-20T13:05:00.000Z",
+      "weekly window must start at the observed reset, not now-7d"
+    );
+    assert.equal(status.weeklySpentUsd, 3, "only post-reset spend counts");
+    assert.equal(status.weeklyExceeded, false);
+  }
+);
+
+legacyClaudeWindowTest(
+  "a connection whose cache never advertised a weekly window does not gain one from snapshots",
+  async () => {
+    await localDb.updatePricing({
+      claude: {
+        "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+      },
+    });
+
+    const created = await apiKeysDb.createApiKey("Session Only Key", "machine-limit-session");
+    await apiKeysDb.updateApiKeyPermissions(created.id, {
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 20,
+    });
+
+    core
+      .getDbInstance()
+      .prepare(
+        `
+      INSERT INTO quota_snapshots (
+        provider, connection_id, window_key, remaining_percentage, is_exhausted,
+        next_reset_at, window_duration_ms, raw_data, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+      )
+      .run(
+        "claude",
+        "conn-session",
+        "weekly (7d)",
+        100,
+        0,
+        "2026-06-27T13:00:00.000Z",
+        null,
+        null,
+        "2026-06-20T13:05:00.000Z"
+      );
+
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
+
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-session"] },
+      {
+        now: () => Date.parse("2026-06-20T14:30:00.000Z"),
+        getProviderConnectionById: async () => ({
+          id: "conn-session",
+          provider: "claude",
+          isActive: true,
+        }),
+        getProviderConnections: async () => [],
+        getProviderLimitsCache: () => ({
+          plan: "Claude Pro",
+          quotas: { "session (5h)": { used: 2, total: 100, resetAt: "2026-06-20T18:00:00.000Z" } },
+          message: null,
+          fetchedAt: "2026-06-20T14:00:00.000Z",
+        }),
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
+
+    assert.equal(status.weeklyResetAtIso, null);
+    assert.equal(status.weeklyWindowStartIso, "2026-06-13T14:30:00.000Z");
+  }
+);
 
 /**
  * `resolveApiKeyWeeklyWindow` powers the Cost Explorer "since reset" range
@@ -905,54 +934,57 @@ test("a connection whose cache never advertised a weekly window does not gain on
  * rolling-7d fallback, so the UI can tell the difference instead of labeling
  * a rolling window "since reset".
  */
-test("resolveApiKeyWeeklyWindow reports isObserved=true and matches the USD quota's own weekly window", async () => {
-  const created = await apiKeysDb.createApiKey("SinceReset Key", "machine-limit-since-reset");
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
+legacyClaudeWindowTest(
+  "resolveApiKeyWeeklyWindow reports isObserved=true and matches the USD quota's own weekly window",
+  async () => {
+    const created = await apiKeysDb.createApiKey("SinceReset Key", "machine-limit-since-reset");
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
 
-  const weeklyResetAt = "2026-06-25T20:00:00.000Z";
-  const deps = {
-    now: () => NOW,
-    getProviderConnectionById: async () => ({
-      id: "conn-claude",
-      provider: "claude",
-      isActive: true,
-    }),
-    getProviderConnections: async () => [],
-    getProviderLimitsCache: () => ({
-      plan: "Claude Max",
-      quotas: {
-        "weekly (7d)": {
-          used: 27,
-          total: 100,
-          resetAt: weeklyResetAt,
+    const weeklyResetAt = "2026-06-25T20:00:00.000Z";
+    const deps = {
+      now: () => NOW,
+      getProviderConnectionById: async () => ({
+        id: "conn-claude",
+        provider: "claude",
+        isActive: true,
+      }),
+      getProviderConnections: async () => [],
+      getProviderLimitsCache: () => ({
+        plan: "Claude Max",
+        quotas: {
+          "weekly (7d)": {
+            used: 27,
+            total: 100,
+            resetAt: weeklyResetAt,
+          },
         },
-      },
-      message: null,
-      fetchedAt: new Date(NOW).toISOString(),
-    }),
-    getAllProviderLimitsCache: () => ({}),
-  };
+        message: null,
+        fetchedAt: new Date(NOW).toISOString(),
+      }),
+      getAllProviderLimitsCache: () => ({}),
+    };
 
-  const resolution = await usageLimits.resolveApiKeyWeeklyWindow(
-    { ...metadata, allowedConnections: ["conn-claude"] },
-    deps,
-    NOW
-  );
+    const resolution = await usageLimits.resolveApiKeyWeeklyWindow(
+      { ...metadata, allowedConnections: ["conn-claude"] },
+      deps,
+      NOW
+    );
 
-  assert.equal(resolution.isObserved, true);
-  assert.equal(resolution.resetAtIso, weeklyResetAt);
-  assert.equal(resolution.windowStartIso, "2026-06-18T20:00:00.000Z");
+    assert.equal(resolution.isObserved, true);
+    assert.equal(resolution.resetAtIso, weeklyResetAt);
+    assert.equal(resolution.windowStartIso, "2026-06-18T20:00:00.000Z");
 
-  // Must be the SAME window the key's own USD quota status uses — the whole
-  // point of routing "since reset" through this helper instead of
-  // reimplementing day arithmetic.
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-claude"] },
-    deps
-  );
-  assert.equal(resolution.windowStartIso, status.weeklyWindowStartIso);
-});
+    // Must be the SAME window the key's own USD quota status uses — the whole
+    // point of routing "since reset" through this helper instead of
+    // reimplementing day arithmetic.
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-claude"] },
+      deps
+    );
+    assert.equal(resolution.windowStartIso, status.weeklyWindowStartIso);
+  }
+);
 
 test("resolveApiKeyWeeklyWindow reports isObserved=false and a rolling-7d start when no provider reset has been observed", async () => {
   const created = await apiKeysDb.createApiKey(
@@ -986,93 +1018,100 @@ test("resolveApiKeyWeeklyWindow reports isObserved=false and a rolling-7d start 
 // connection was born — not when the provider's window opened. Treating it as
 // the window start hid every day of spend before it, which both under-reported
 // cost and left the weekly cap unenforced over those days.
-test("a connection born mid-window still measures the cap from the provider reset", async () => {
-  await localDb.updatePricing({
-    claude: {
-      "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
-    },
-  });
+legacyClaudeWindowTest(
+  "a connection born mid-window still measures the cap from the provider reset",
+  async () => {
+    await localDb.updatePricing({
+      claude: {
+        "claude-opus-4-8": { input: 1, cached: 1, output: 1, reasoning: 1, cache_creation: 1 },
+      },
+    });
 
-  const created = await apiKeysDb.createApiKey("Fresh Conn Key", "machine-limit-fresh-conn");
-  await apiKeysDb.updateApiKeyPermissions(created.id, {
-    usageLimitEnabled: true,
-    weeklyUsageLimitUsd: 20,
-  });
+    const created = await apiKeysDb.createApiKey("Fresh Conn Key", "machine-limit-fresh-conn");
+    await apiKeysDb.updateApiKeyPermissions(created.id, {
+      usageLimitEnabled: true,
+      weeklyUsageLimitUsd: 20,
+    });
 
-  // Spent INSIDE the real window (opened 2026-06-20T13:00 = reset - 7d) but
-  // BEFORE this connection existed. Must still count.
-  await usageHistory.saveRequestUsage({
-    provider: "claude",
-    model: "claude-opus-4-8",
-    apiKeyId: created.id,
-    apiKeyName: "Fresh Conn Key",
-    tokens: { input: 30_000_000, output: 0 },
-    success: true,
-    timestamp: "2026-06-22T12:00:00.000Z",
-  });
+    // Spent INSIDE the real window (opened 2026-06-20T13:00 = reset - 7d) but
+    // BEFORE this connection existed. Must still count.
+    await usageHistory.saveRequestUsage({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      apiKeyId: created.id,
+      apiKeyName: "Fresh Conn Key",
+      tokens: { input: 30_000_000, output: 0 },
+      success: true,
+      timestamp: "2026-06-22T12:00:00.000Z",
+    });
 
-  const db = core.getDbInstance();
-  const insertSnapshot = db.prepare(`
+    const db = core.getDbInstance();
+    const insertSnapshot = db.prepare(`
     INSERT INTO quota_snapshots (
       provider, connection_id, window_key, remaining_percentage, is_exhausted,
       next_reset_at, window_duration_ms, raw_data, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  // The ONLY snapshots this connection has: it was created on 06-24, days after
-  // the window opened. No snapshot of the previous window exists for it.
-  insertSnapshot.run(
-    "claude",
-    "conn-fresh",
-    "weekly (7d)",
-    40,
-    0,
-    "2026-06-27T13:00:00.000Z",
-    null,
-    null,
-    "2026-06-24T10:00:00.000Z"
-  );
-  insertSnapshot.run(
-    "claude",
-    "conn-fresh",
-    "weekly (7d)",
-    39,
-    0,
-    "2026-06-27T13:00:00.000Z",
-    null,
-    null,
-    "2026-06-24T11:00:00.000Z"
-  );
+    // The ONLY snapshots this connection has: it was created on 06-24, days after
+    // the window opened. No snapshot of the previous window exists for it.
+    insertSnapshot.run(
+      "claude",
+      "conn-fresh",
+      "weekly (7d)",
+      40,
+      0,
+      "2026-06-27T13:00:00.000Z",
+      null,
+      null,
+      "2026-06-24T10:00:00.000Z"
+    );
+    insertSnapshot.run(
+      "claude",
+      "conn-fresh",
+      "weekly (7d)",
+      39,
+      0,
+      "2026-06-27T13:00:00.000Z",
+      null,
+      null,
+      "2026-06-24T11:00:00.000Z"
+    );
 
-  const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
-  assert.ok(metadata);
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
 
-  const status = await usageLimits.getApiKeyUsageLimitStatus(
-    { ...metadata, allowedConnections: ["conn-fresh"] },
-    {
-      now: () => Date.parse("2026-06-24T14:00:00.000Z"),
-      getProviderConnectionById: async () => ({
-        id: "conn-fresh",
-        provider: "claude",
-        isActive: true,
-      }),
-      getProviderConnections: async () => [],
-      getProviderLimitsCache: () => ({
-        plan: "Claude Max",
-        quotas: {
-          "weekly (7d)": { used: 60, total: 100, resetAt: "2026-06-27T13:00:00.000Z" },
-        },
-        message: null,
-        fetchedAt: "2026-06-24T11:00:00.000Z",
-      }),
-      getAllProviderLimitsCache: () => ({}),
-    }
-  );
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: ["conn-fresh"] },
+      {
+        now: () => Date.parse("2026-06-24T14:00:00.000Z"),
+        getProviderConnectionById: async () => ({
+          id: "conn-fresh",
+          provider: "claude",
+          isActive: true,
+        }),
+        getProviderConnections: async () => [],
+        getProviderLimitsCache: () => ({
+          plan: "Claude Max",
+          quotas: {
+            "weekly (7d)": { used: 60, total: 100, resetAt: "2026-06-27T13:00:00.000Z" },
+          },
+          message: null,
+          fetchedAt: "2026-06-24T11:00:00.000Z",
+        }),
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
 
-  assert.equal(
-    status.weeklyWindowStartIso,
-    "2026-06-20T13:00:00.000Z",
-    "window must anchor on reset - 7d, not on when this connection first appeared"
-  );
-  assert.equal(status.weeklySpentUsd, 30, "spend from before the connection existed still counts");
-  assert.equal(status.weeklyExceeded, true, "the cap must be enforced over the full window");
-});
+    assert.equal(
+      status.weeklyWindowStartIso,
+      "2026-06-20T13:00:00.000Z",
+      "window must anchor on reset - 7d, not on when this connection first appeared"
+    );
+    assert.equal(
+      status.weeklySpentUsd,
+      30,
+      "spend from before the connection existed still counts"
+    );
+    assert.equal(status.weeklyExceeded, true, "the cap must be enforced over the full window");
+  }
+);

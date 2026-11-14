@@ -540,6 +540,18 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "caution",
   },
   {
+    key: "CLAUDE_KEY_QUOTA_FOLLOWS_EARLY_RESET",
+    label: "Claude Key Quotas Follow Early Account Reset",
+    description:
+      "By default an API key's weekly USD window for the Claude provider turns over only at the standard weekly reset (every Thursday 20:00, America/Fortaleza), so resetting the Claude account early (the Claude reset button, a credit refill) does not zero the keys' weekly spend. Turn on to make the keys' weekly window follow the account's observed reset instead, so an early reset zeroes them at the same instant. Claude provider only; Codex and other providers are unchanged. Covers the per-key USD quota, model budget rules, @@om-usage and the Cost Explorer since-reset range.",
+    descriptionI18nKey: "featureFlagClaudeKeyQuotaFollowsEarlyResetDescription",
+    category: "policies",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
+  {
     key: "RADAR_ENABLED",
     label: "Radar",
     description:
