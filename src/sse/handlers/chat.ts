@@ -179,6 +179,7 @@ import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
 import { checkClaudeCodeOnlyGate } from "./chat/claudeCodeOnlyGate";
+import { checkCodexOnlyGate, describeCodexGateObservation } from "./chat/codexOnlyGate";
 import { rejectIfMeteredBudgetExceeded } from "@/lib/usage/meteredBudgetPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
 import { isMinSpendGuaranteeActive } from "../../lib/usage/minSpendGuarantee";
@@ -835,6 +836,31 @@ async function handleChatImplementation(
       apiKeyName: policy.apiKeyInfo?.name ?? null,
       correlationId: reqId,
     });
+  }
+  // "Codex only" keys (the chat:responses checkbox) must prove the Codex client
+  // signature — see codexOnlyGate.ts. Observe mode (default) only logs the verdict.
+  const requestPath = new URL(request.url).pathname;
+  if (/\/responses(\/|$)/.test(requestPath)) {
+    const codexGate = checkCodexOnlyGate({
+      apiKeyInfo: policy.apiKeyInfo,
+      headers: request.headers,
+      body,
+    });
+    if (codexGate.observation) {
+      const line = describeCodexGateObservation(codexGate.observation, policy.apiKeyInfo, "http");
+      if (codexGate.observation.wouldBlock) log.warn("POLICY", line);
+      else log.info("POLICY", line);
+    }
+    if (codexGate.blocked) {
+      return logHandlerRejection(errorResponse(HTTP_STATUS.BAD_REQUEST, codexGate.message), {
+        path: requestPath,
+        model: modelStr,
+        requestBody: body ?? null,
+        apiKeyId: policy.apiKeyInfo?.id ?? null,
+        apiKeyName: policy.apiKeyInfo?.name ?? null,
+        correlationId: reqId,
+      });
+    }
   }
   const apiKeyInfo = policy.apiKeyInfo;
   let managedLease: ManagedLeaseDispatchContext | null = null;

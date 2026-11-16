@@ -297,6 +297,22 @@ export function isClaudeCodeOnlyEndpointSelection(
 }
 
 /**
+ * The "OpenAI Responses (Codex)" selection: the key lists the `chat:responses`
+ * subcategory and NOT the whole `chat` category. Keys in this state are reserved
+ * for official Codex clients; the Responses handlers (HTTP and WebSocket) also
+ * check the client signature (`codexClientSignature.ts`, `codexOnlyGate.ts`).
+ */
+export function isCodexOnlyEndpointSelection(
+  allowedEndpoints: readonly string[] | null | undefined
+): boolean {
+  return (
+    Array.isArray(allowedEndpoints) &&
+    allowedEndpoints.includes("chat:responses") &&
+    !allowedEndpoints.includes("chat")
+  );
+}
+
+/**
  * Single source of truth for the endpoint restriction decision.
  *
  * An empty/absent `allowedEndpoints` means "all endpoints" (backward compatible), and a

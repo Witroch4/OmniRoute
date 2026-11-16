@@ -27,6 +27,10 @@ import {
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import { logger } from "@omniroute/open-sse/utils/logger.ts";
 import { resolveProxyForConnection } from "@/lib/db/settings";
+import {
+  checkCodexOnlyGate,
+  describeCodexGateObservation,
+} from "@/sse/handlers/chat/codexOnlyGate";
 import { withCodexFingerprintCredentials } from "@omniroute/open-sse/config/codexIdentity.ts";
 import { withReasoningRuleContext } from "@omniroute/open-sse/utils/reasoningRuleContext.ts";
 import { proxyConfigToUrl } from "@omniroute/open-sse/utils/proxyDispatcher.ts";
@@ -511,6 +515,21 @@ async function resolveCodexRequestContext(
   if (policyResult.rejection) return { error: policyResult.rejection };
   const metadata =
     policyResult.apiKeyInfo ?? (apiKey ? await getApiKeyMetadata(apiKey).catch(() => null) : null);
+  // "Codex only" keys must prove the Codex client signature on this transport too
+  // (codexOnlyGate.ts). Observe mode (default) only logs the verdict.
+  const codexGate = checkCodexOnlyGate({
+    apiKeyInfo: metadata,
+    headers: authRequest.headers,
+    body: responseBody,
+  });
+  if (codexGate.observation) {
+    const line = describeCodexGateObservation(codexGate.observation, metadata, "ws");
+    if (codexGate.observation.wouldBlock) log.warn(line);
+    else log.info(line);
+  }
+  if (codexGate.blocked) {
+    return { error: jsonError(400, "codex_client_required", codexGate.message) };
+  }
   if (isExclusiveLeaseManagedKey(metadata)) {
     return {
       error: buildManagedLeaseErrorResponse(
