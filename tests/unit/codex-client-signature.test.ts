@@ -64,11 +64,42 @@ test("the real codex exec request scores 7/7 and passes", () => {
   assert.equal(r.userAgentProduct, "codex_exec/0.162.0-alpha.17.2");
 });
 
-for (const originator of ["codex_cli_rs", "codex_vscode", "codex_desktop"]) {
+for (const originator of ["codex_cli_rs", "codex_vscode"]) {
   test(`other official originators pass too (${originator})`, () => {
     assert.equal(evaluateCodexClientSignature(codexHeaders(originator), CODEX_BODY).ok, true);
   });
 }
+
+test("a client built on the Codex engine that names itself (openbot) fails despite the Codex body", () => {
+  // Seen in production 2026-11-16: originator "openbot", UA "openbot/0.169.0", body
+  // carrying the Codex client_metadata. Not the official app.
+  const r = evaluateCodexClientSignature(codexHeaders("openbot", "0.169.0"), CODEX_BODY);
+  assert.equal(r.score, 5);
+  assert.equal(r.officialClient, false);
+  assert.equal(r.ok, false);
+});
+
+test("claiming an official originator with another product's user-agent fails", () => {
+  const h = codexHeaders();
+  h.set("user-agent", "openbot/0.169.0 (Linux; x86_64)");
+  const r = evaluateCodexClientSignature(h, CODEX_BODY);
+  assert.equal(r.signals.originator, true);
+  assert.equal(r.signals.userAgent, false);
+  assert.equal(r.ok, false);
+});
+
+test("an unknown codex-looking originator is not official until allowlisted", () => {
+  assert.equal(evaluateCodexClientSignature(codexHeaders("codex_desktop"), CODEX_BODY).ok, false);
+  const saved = process.env.CODEX_OFFICIAL_ORIGINATORS;
+  try {
+    process.env.CODEX_OFFICIAL_ORIGINATORS =
+      "codex_cli_rs, codex_exec, codex_vscode, Codex_Desktop";
+    assert.equal(evaluateCodexClientSignature(codexHeaders("codex_desktop"), CODEX_BODY).ok, true);
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_OFFICIAL_ORIGINATORS;
+    else process.env.CODEX_OFFICIAL_ORIGINATORS = saved;
+  }
+});
 
 test("an OpenAI SDK script scores 0 and fails", () => {
   const r = evaluateCodexClientSignature(SCRIPT_HEADERS, SCRIPT_BODY);
@@ -88,10 +119,13 @@ test("header-only forgery (originator + UA + session headers, plain body) fails 
   assert.equal(r.ok, false);
 });
 
-test("a genuine Codex body behind a proxy that dropped every header still passes (4)", () => {
+test("a Codex body without the official client headers fails (score 4, not official)", () => {
+  // The official app always names itself; a body alone is what Codex-derived
+  // clients reproduce, so it is not enough.
   const r = evaluateCodexClientSignature(new Headers(), CODEX_BODY);
   assert.equal(r.score, 4);
-  assert.equal(r.ok, true);
+  assert.equal(r.officialClient, false);
+  assert.equal(r.ok, false);
 });
 
 test("garbage turn metadata does not count", () => {
@@ -207,7 +241,7 @@ test("the log line carries the verdict and no secret", () => {
   });
   const line = describeCodexGateObservation(v.observation!, CODEX_ONLY_KEY, "ws");
   assert.match(line, /transport=ws/);
-  assert.match(line, /score=7\/7 ok=true wouldBlock=false/);
+  assert.match(line, /score=7\/7 official=true ok=true wouldBlock=false/);
   assert.match(line, /originator="codex_exec"/);
   assert.match(line, /signals=ITOUS/);
   assert.doesNotMatch(line, /00000000-0000-4000-8000-000000000001/);

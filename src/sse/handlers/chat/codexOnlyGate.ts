@@ -87,7 +87,8 @@ export function describeCodexGateObservation(
   return (
     `codex-client-gate mode=${observation.mode} transport=${transport} ` +
     `key=${keyInfo?.id ?? "none"} name=${JSON.stringify(keyInfo?.name ?? null)} ` +
-    `codexOnlyKey=${observation.codexOnlyKey} score=${observation.score}/7 ok=${observation.ok} ` +
+    `codexOnlyKey=${observation.codexOnlyKey} score=${observation.score}/7 ` +
+    `official=${observation.officialClient} ok=${observation.ok} ` +
     `wouldBlock=${observation.wouldBlock} originator=${JSON.stringify(observation.originator)} ` +
     `ua=${JSON.stringify(observation.userAgentProduct)} signals=` +
     `${s.installationId ? "I" : "-"}${s.turnMetadata ? "T" : "-"}` +
