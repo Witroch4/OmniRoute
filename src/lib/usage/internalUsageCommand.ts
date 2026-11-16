@@ -6,6 +6,8 @@ import {
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { getProviderQuotaResetReferences } from "@/lib/db/quotaResetReferences";
 import type { ProviderQuotaResetReferences } from "@/shared/validation/quotaResetReferenceSchemas";
+import { hasManageScope } from "@/shared/constants/managementScopes";
+import { hasSelfAccountQuotaScope } from "@/shared/constants/selfServiceScopes";
 
 export const INTERNAL_USAGE_COMMAND = "@@om-usage";
 export const USAGE_COMMAND_DISABLED_MESSAGE = "Usage command is disabled for this API key.";
@@ -25,6 +27,21 @@ export interface UsageCommandApiKeyMetadata {
   usageLimitEnabled?: boolean;
   dailyUsageLimitUsd?: number | null;
   weeklyUsageLimitUsd?: number | null;
+  scopes?: string[] | null;
+}
+
+/**
+ * The shared provider accounts behind a key (plan, raw quota windows, reset
+ * times, connection ids) are operator data, not the key holder's. Only a key
+ * explicitly granted `self:account-quota` (the same scope that gates
+ * `accountQuotas` on /v1/me/status) or a management key may read them; any other
+ * key gets its own personal quota and nothing else. Missing scopes fail closed.
+ */
+export function canReadSharedAccountQuota(scopes: readonly string[] | null | undefined): boolean {
+  const list = Array.isArray(scopes)
+    ? scopes.filter((s): s is string => typeof s === "string")
+    : [];
+  return hasSelfAccountQuotaScope(list) || hasManageScope(list);
 }
 
 interface ProviderConnectionLike {
@@ -417,7 +434,10 @@ function selectUsageSnapshot(
  * NOTE on percentage semantics (#15530):
  * - JSON `provider.quotas` and `providers[].quotas` expose raw upstream
  *   snapshots (unadjusted usage and remaining numbers/percentages), alongside
- *   connection-level `quotaWindowThresholds`.
+ *   connection-level `quotaWindowThresholds` — ONLY to keys allowed to read the
+ *   shared accounts ({@link canReadSharedAccountQuota}). Every other key gets
+ *   `provider: null` and `providers: []`: a client key with the usage command
+ *   once read every account's plan, quota and reset through this route.
  * - Text output (`buildUsageCommandText` / terminal `@@om-usage`) renders only
  *   the key's own personal quota (`NN% left`), never the provider's windows and
  *   never scaled by the provider cutoff.
@@ -460,6 +480,9 @@ export async function buildUsageCommandJson(
           { now: resolvedDeps.now }
         )
       : null;
+  if (!canReadSharedAccountQuota(metadata.scopes)) {
+    return { allowed: true, personal, provider: null, providers: [] };
+  }
   const snapshots = await collectUsageSnapshots(metadata, resolvedDeps);
   const provider = selectUsageSnapshot(snapshots, selection);
   return { allowed: true, personal, provider, providers: snapshots };
