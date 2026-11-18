@@ -87,10 +87,16 @@ export type ModelAvailabilityResult =
   | "model_not_in_catalog"
   | { available: false; reason: "connection_cooldown"; retryAfterMs: number };
 
-export type IsModelAvailable = (
+export type IsModelAvailable = ((
   modelStr: string,
   target?: ResolvedComboTarget & { allowRateLimitedConnection?: boolean }
-) => Promise<ModelAvailabilityResult> | ModelAvailabilityResult;
+) => Promise<ModelAvailabilityResult> | ModelAvailabilityResult) & {
+  /** Server-owned substitution: source health is checked on the replacement at dispatch. */
+  deferSourceAvailability?: (
+    modelStr: string,
+    target: ResolvedComboTarget
+  ) => boolean | Promise<boolean>;
+};
 
 /** `null` when the target may be dispatched. */
 export function modelAvailabilitySkipReason(

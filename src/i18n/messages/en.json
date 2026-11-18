@@ -5335,6 +5335,16 @@
     "stepProgress": "Setup progress"
   },
   "providers": {
+    "siwcContingency": {
+      "title": "SIWC contingency · Terra latest",
+      "description": "Send Opus, Sonnet and Haiku requests to the latest available Terra using Witdev Platform's ChatGPT plan. Your applications keep executing their tools.",
+      "notConfigured": "Configure the SIWC connection before enabling contingency.",
+      "loadError": "Could not load the current contingency setting.",
+      "saveError": "Could not update the contingency. Reload and try again.",
+      "retry": "Reload",
+      "enabled": "SIWC contingency enabled: Opus, Sonnet and Haiku now use Terra latest.",
+      "disabled": "SIWC contingency disabled: Claude Code routing restored."
+    },
     "tosAvoidNoticeTitle": "This provider is excluded from auto by default",
     "tosAvoidNoticeDescription": "Its ToS status is marked avoid. Connecting an account does not change this policy. Review the provider terms before using the global opt-in for all auto combos.",
     "tosAvoidNoticeAction": "Review the auto policy",

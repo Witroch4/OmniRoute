@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { Card, Button, CardSkeleton } from "@/shared/components";
+import { Card, CardSkeleton } from "@/shared/components";
 import ProviderTosNotice from "@/shared/components/ProviderTosNotice";
 import {
   NOAUTH_PROVIDERS,
@@ -60,6 +60,7 @@ import CustomModelsSection from "./components/CustomModelsSection";
 import ConnectionsListPanel from "./components/ConnectionsListPanel";
 import CoolingConnectionsPanel from "./components/CoolingConnectionsPanel";
 import ConnectionsHeaderToolbar from "./components/ConnectionsHeaderToolbar";
+import ClaudeSiwcContingencyCard from "./components/ClaudeSiwcContingencyCard";
 import { ConnectionPinTip } from "./components/ConnectionIdChip";
 import VolcengineConnectModal from "./components/VolcengineConnectModal";
 import ProviderAccountRoutingCard from "../../settings/components/ProviderAccountRoutingCard";
@@ -96,7 +97,7 @@ export default function ProviderDetailPageClient() {
   const [importCodexModalOpen, setImportCodexModalOpen] = useState(false);
   const [codexCliGuideOpen, setCodexCliGuideOpen] = useState(false);
   const [importClaudeModalOpen, setImportClaudeModalOpen] = useState(false);
-  const [importGeminiModalOpen, setImportGeminiModalOpen] = useState(false);
+  const [, setImportGeminiModalOpen] = useState(false);
   const [importGrokCliModalOpen, setImportGrokCliModalOpen] = useState(false);
   const [connectingVolcengineAccount, setConnectingVolcengineAccount] = useState(false);
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -624,6 +625,7 @@ export default function ProviderDetailPageClient() {
           providerName={providerInfo?.name || providerId}
         />
       )}
+      {providerId === "claude" && <ClaudeSiwcContingencyCard />}
       {!isUpstreamProxyProvider && (!isFreeNoAuth || providerSupportsPat) && (
         <Card>
           <ProviderAccountRoutingCard

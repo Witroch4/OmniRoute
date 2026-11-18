@@ -104,6 +104,7 @@ import type { ExecuteTargetResult, ExecuteTargetAttemptOptions } from "./attempt
 import type { ComboErrorBody, ComboRetryAfter } from "./types.ts";
 import type { ResponseValidationConfig } from "./responseValidation.ts";
 import { resolveComboDailyReset } from "./comboDailyResetClock.ts";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 import type { ProtectedPriorityStopCause } from "./protectedPriorityStopStatus.ts";
 import { isProviderProbeResponse } from "../../../src/shared/utils/providerProbeResult.ts";
 import { recordLocalCircuitRefusal } from "./localCircuitRefusal.ts";
@@ -143,6 +144,7 @@ export async function executeTargetAttempt(
     });
 
   const familyTried = new Set<string>();
+  const deferSource = await shouldDeferSourceAvailability(deps.isModelAvailable, target);
   // #16438 opt-in (EMPTY_STREAM_SIBLING_RECOVERY_ENABLED): an empty_content turn spends
   // this loop's existing retry on a sibling connection with no lockout. Off = release path.
   const emptyStreamSiblingRecovery = isEmptyStreamSiblingRecoveryEnabled();
@@ -221,11 +223,13 @@ export async function executeTargetAttempt(
       // a quota cooldown while this attempt was sleeping out its retry delay
       // ("Trying model 1/7: zai/glm-5.3 (retry 1)" after "already marked
       // unavailable until …"). Reads fresh, not cached: see readConnectionForCooldownGate.
-      const persistedRetrySkip = await resolvePersistedConnectionCooldownSkipReason(
-        target,
-        (id) => readConnectionForCooldownGate(id, true),
-        allowRateLimitedConnection
-      );
+      const persistedRetrySkip = deferSource
+        ? null
+        : await resolvePersistedConnectionCooldownSkipReason(
+            target,
+            (id) => readConnectionForCooldownGate(id, true),
+            allowRateLimitedConnection
+          );
       if (persistedRetrySkip) {
         deps.log.info("COMBO", persistedRetrySkip);
         state.fallbackCount++;
@@ -423,6 +427,7 @@ export async function executeTargetAttempt(
         if (
           provider &&
           rawModel &&
+          !deferSource &&
           !qualityFailure.requestScoped &&
           !(emptyStreamSiblingRecovery && quality.upstreamFailure?.emptyContent)
         ) {
@@ -509,7 +514,7 @@ export async function executeTargetAttempt(
 
       // Success decay: a healthy response walks the model's lockout failure
       // count back down (and eventually clears an expired lockout entirely).
-      if (provider && rawModel) {
+      if (!deferSource && provider && rawModel) {
         const dcResult = decayModelFailureCount(provider, effectiveConnectionId, rawModel);
         if (dcResult.cleared) {
           deps.log.info("COMBO", `Model ${modelStr} fully recovered — lockout cleared`);
@@ -543,7 +548,7 @@ export async function executeTargetAttempt(
       state.recordedAttempts++;
 
       // Reset cooldown on success
-      if (provider && provider !== "unknown") {
+      if (!deferSource && provider && provider !== "unknown") {
         recordProviderSuccess(
           provider,
           effectiveConnectionId || undefined,
@@ -775,7 +780,7 @@ export async function executeTargetAttempt(
       }
     }
 
-    if (isProviderCircuitOpenResult(result, errorText)) {
+    if (!deferSource && isProviderCircuitOpenResult(result, errorText)) {
       const refusal = recordLocalCircuitRefusal({
         comboName: deps.combo.name,
         modelStr,
@@ -875,7 +880,7 @@ export async function executeTargetAttempt(
                 : undefined,
           }
         : undefined;
-    const scopedFailure = isScopedFailure(result, errorText, structuredError);
+    const scopedFailure = deferSource || isScopedFailure(result, errorText, structuredError);
 
     // #8375: input-bound request-scoped failures (context_length_exceeded) are
     // deterministic for the same input — retrying on other accounts of the same
@@ -1040,7 +1045,13 @@ export async function executeTargetAttempt(
     // upstream 400s on the same GitHub models, all day). isModelLocked()
     // is checked before dispatch (see the pre-check above this loop), so
     // this lockout is honored on the next request.
-    if (result.status === 400 && isModelScoped400(errorText) && provider && rawModel) {
+    if (
+      !deferSource &&
+      result.status === 400 &&
+      isModelScoped400(errorText) &&
+      provider &&
+      rawModel
+    ) {
       lockModelIfPerModelQuota(
         provider,
         targetWithConnection.connectionId || "",
@@ -1081,7 +1092,8 @@ export async function executeTargetAttempt(
       });
     }
 
-    const quotaExhausted = await isQuotaExhaustionResponse(result, provider, rawModel, profile);
+    const quotaExhausted =
+      !deferSource && (await isQuotaExhaustionResponse(result, provider, rawModel, profile));
     recordQuotaExhaustionClassification(result, quotaExhausted);
     // Balance exhaustion is upstream truth about credits, and it outranks the
     // stored snapshot — which can be hours stale and still claim headroom. Mark

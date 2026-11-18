@@ -764,6 +764,7 @@ async function handleComboChatInner({
       config,
       clientRequestedStream,
       handleSingleModelWithTimeout,
+      isModelAvailable,
       log,
       hiddenModelsByProvider,
     });
@@ -835,6 +836,7 @@ async function handleComboChatInner({
     apiKeyAllowedConnections,
     allCombos,
     handleSingleModelWithTimeout,
+    isModelAvailable,
     log,
     hiddenModelsByProvider,
   });

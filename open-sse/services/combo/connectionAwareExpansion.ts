@@ -17,7 +17,7 @@
  *
  */
 
-import type { ResolvedComboTarget, ComboLogger } from "./types.ts";
+import type { ResolvedComboTarget, ComboLogger, IsModelAvailable } from "./types.ts";
 import { expandTargetsByQuotaAwareConnections } from "./quotaStrategies.ts";
 
 /**
@@ -65,6 +65,7 @@ export interface ExpandTargetsForAllStrategiesArgs {
   log: ComboLogger;
   /** API-key allowedConnections scope, intersected with the expansion. */
   apiKeyAllowedConnectionIds?: string[] | null;
+  isModelAvailable?: IsModelAvailable;
   /**
    * Test-only injection point replacing the underlying expander, used to
    * exercise the fail-open path deterministically (T10). Production callers
@@ -124,7 +125,9 @@ export async function expandTargetsForAllStrategies(
     const expander =
       args.__testExpander ??
       ((t: ResolvedComboTarget[], name: string, l: ComboLogger, allowed: string[] | null) =>
-        expandTargetsByQuotaAwareConnections(t, name, l, allowed));
+        expandTargetsByQuotaAwareConnections(t, name, l, allowed, {
+          isModelAvailable: args.isModelAvailable,
+        }));
     const { expandedTargets } = await expander(
       targets,
       comboName,

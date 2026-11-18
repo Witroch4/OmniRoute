@@ -14,6 +14,7 @@ import { HIDEABLE_SIDEBAR_ITEM_IDS, SIDEBAR_SECTIONS } from "@/shared/constants/
 import { ACCOUNT_FALLBACK_STRATEGY_VALUES } from "@/shared/constants/routingStrategies";
 import { RESPONSES_PREVIOUS_RESPONSE_ID_MODES } from "@/shared/constants/responsesPreviousResponseId";
 import { providerQuotaResetReferencesSchema } from "./quotaResetReferenceSchemas";
+import { claudeSiwcContingencySchema } from "./claudeSiwcContingencySchema";
 import {
   VIDEO_BRIDGE_TIMEOUT_MAX_MS,
   VIDEO_BRIDGE_TIMEOUT_MIN_MS,
@@ -266,6 +267,7 @@ export const updateSettingsSchema = z.object({
       supportedModels: z.array(z.string().max(200)).max(200).optional(),
     })
     .optional(),
+  claudeSiwcContingency: claudeSiwcContingencySchema.optional(),
   // #7274: renamed from codexSessionAffinityTtlMs — applies to any provider now.
   // The old key is still accepted (read-only legacy alias) so pre-migration
   // clients / cached UI bundles that still PATCH the old field name don't 400;

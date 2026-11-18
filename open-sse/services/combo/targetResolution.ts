@@ -88,6 +88,7 @@ import {
 } from "./sessionStickiness.ts";
 import { applyRequestTagRouting } from "./autoStrategy.ts";
 import { getStrategyTraits, type StrategyTraits } from "./strategyRegistry.ts";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 import type {
   ComboCollectionLike,
   ComboLike,
@@ -175,6 +176,7 @@ async function describeWeightedExclusion(
     reason: PreDispatchExclusion["reason"],
     retryAfterMs: number | null = null
   ): PreDispatchExclusion => ({ provider: target.provider, model: rawModel, reason, retryAfterMs });
+  if (await shouldDeferSourceAvailability(isModelAvailable, target)) return null;
   if (target.provider) {
     const breaker = getCircuitBreaker(target.provider).getStatus();
     if (breaker.state === "OPEN") return exclude("circuit_open", breaker.retryAfterMs);
@@ -494,6 +496,7 @@ async function orderByStrategy(
       body,
       log,
       apiKeyAllowedConnections: deps.apiKeyAllowedConnections,
+      isModelAvailable: deps.isModelAvailable,
       sessionKey: deps.relayOptions?.sessionId,
     }
   );
@@ -873,6 +876,7 @@ export async function resolveComboTargetPipeline(
     comboName: combo.name,
     config: combo.config,
     settings: settings as Record<string, unknown> | null | undefined,
+    isModelAvailable: deps.isModelAvailable,
     log,
     apiKeyAllowedConnectionIds: deps.apiKeyAllowedConnections,
   });
@@ -906,12 +910,19 @@ export async function resolveComboTargetPipeline(
     autoUsedExplicitRouter
   );
 
-  quotaShareRelease = transferInflightReservation(
-    traits.inflightReservation,
-    quotaShareRelease,
-    drawnId,
-    orderedTargets[0]?.connectionId ?? ""
-  );
+  if (
+    orderedTargets[0] &&
+    (await shouldDeferSourceAvailability(deps.isModelAvailable, orderedTargets[0]))
+  ) {
+    quotaShareRelease?.();
+    quotaShareRelease = null;
+  } else
+    quotaShareRelease = transferInflightReservation(
+      traits.inflightReservation,
+      quotaShareRelease,
+      drawnId,
+      orderedTargets[0]?.connectionId ?? ""
+    );
 
   // Parallel pre-screen: check provider profiles and model availability for all targets
   // Only runs for priority strategy where sequential checking causes latency

@@ -1,4 +1,5 @@
 /** Round-robin combo dispatcher. Lift-as-is from combo.ts. @internal */
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 import {
   checkFallbackError,
   decayModelFailureCount,
@@ -224,6 +225,7 @@ export async function handleRoundRobinCombo({
   // expanded list, so each account occupies its own rotation slot.
   orderedTargets = await expandTargetsForAllStrategies({
     strategy: "round-robin",
+    isModelAvailable,
     targets: orderedTargets,
     comboName: combo.name,
     config: combo.config,
@@ -319,27 +321,32 @@ export async function handleRoundRobinCombo({
         (target) => target.executionKey === sticky.executionKey
       );
       if (stickyTarget) {
+        const deferStickySource = await shouldDeferSourceAvailability(
+          isModelAvailable,
+          stickyTarget
+        );
         const rawModel = parseModel(stickyTarget.modelStr).model || stickyTarget.modelStr;
         const stickyAvailable =
-          (!stickyTarget.provider ||
+          deferStickySource ||
+          ((!stickyTarget.provider ||
             getCircuitBreaker(stickyTarget.provider).getStatus().state !== "OPEN") &&
-          !(
-            resilienceSettings.providerCooldown.enabled &&
-            Boolean(stickyTarget.provider && stickyTarget.provider !== "unknown") &&
-            isProviderInCooldown(
-              stickyTarget.provider,
-              stickyTarget.connectionId ?? undefined,
-              resilienceSettings
-            )
-          ) &&
-          !(
-            stickyTarget.provider &&
-            rawModel &&
-            isModelLocked(stickyTarget.provider, stickyTarget.connectionId || "", rawModel)
-          ) &&
-          (isModelAvailable
-            ? (await isModelAvailable(stickyTarget.modelStr, stickyTarget)) === true
-            : true);
+            !(
+              resilienceSettings.providerCooldown.enabled &&
+              Boolean(stickyTarget.provider && stickyTarget.provider !== "unknown") &&
+              isProviderInCooldown(
+                stickyTarget.provider,
+                stickyTarget.connectionId ?? undefined,
+                resilienceSettings
+              )
+            ) &&
+            !(
+              stickyTarget.provider &&
+              rawModel &&
+              isModelLocked(stickyTarget.provider, stickyTarget.connectionId || "", rawModel)
+            ) &&
+            (isModelAvailable
+              ? (await isModelAvailable(stickyTarget.modelStr, stickyTarget)) === true
+              : true));
         if (!stickyAvailable) {
           log.info(
             "COMBO-RR",
@@ -551,6 +558,7 @@ export async function handleRoundRobinCombo({
       const target = filteredTargets[modelIndex];
       const modelStr = target.modelStr;
       const provider = target.provider;
+      const deferSource = await shouldDeferSourceAvailability(isModelAvailable, target);
       if (rejectedModelKeys.has(requestScopedReplayKey(modelStr))) {
         log.info("COMBO-RR", `Skipping ${modelStr} — same request already refused request-scoped`);
         fallbackCount++;
@@ -561,7 +569,7 @@ export async function handleRoundRobinCombo({
       const semaphoreKey = `combo:${combo.name}:${target.executionKey}`;
       let allowRateLimitedConnection =
         Boolean(provider && provider !== "unknown") && transientRateLimitedProviders.has(provider);
-      if (allowRateLimitedConnection && target.connectionId) {
+      if (!deferSource && allowRateLimitedConnection && target.connectionId) {
         const persistedSkip = await resolvePersistedConnectionCooldownSkipReason(
           target,
           (id) => getCachedProviderConnectionById(id),
@@ -610,6 +618,7 @@ export async function handleRoundRobinCombo({
       }
 
       if (
+        !deferSource &&
         resilienceSettings.providerCooldown.enabled &&
         Boolean(provider && provider !== "unknown") &&
         isProviderInCooldown(
@@ -633,11 +642,9 @@ export async function handleRoundRobinCombo({
       }
 
       // #1731 / #1731v2: skip targets already known-exhausted this request (shared predicate).
-      const exhaustedSkip = getExhaustedTargetSkipReason(
-        target,
-        exhaustedProviders,
-        exhaustedConnections
-      );
+      const exhaustedSkip = deferSource
+        ? null
+        : getExhaustedTargetSkipReason(target, exhaustedProviders, exhaustedConnections);
       if (exhaustedSkip) {
         log.info("COMBO-RR", exhaustedSkip);
         clearStaleLKGP(
@@ -666,7 +673,9 @@ export async function handleRoundRobinCombo({
 
       // Acquire semaphore slot (may wait in queue). Honor the connection's own
       // maxConcurrent cap when set; else fall back to the combo-level concurrency.
-      const targetConcurrency = await resolveTargetConcurrency(target.connectionId);
+      const targetConcurrency = await resolveTargetConcurrency(
+        deferSource ? null : target.connectionId
+      );
       let release: () => void;
       try {
         release = await semaphore.acquire(semaphoreKey, {
@@ -796,6 +805,7 @@ export async function handleRoundRobinCombo({
           // dispatch (opt-in, same env gate as the pre-request check). Best-effort
           // and non-blocking — recording must never break the request path.
           if (
+            !deferSource &&
             process.env.OMNIROUTE_QUOTA_AWARE_ROUTING === "1" &&
             target.connectionId &&
             attemptBody &&
@@ -916,7 +926,7 @@ export async function handleRoundRobinCombo({
             const effectiveConnectionId = selectedConnectionId || target.connectionId || "";
 
             const rawModel = parseModel(modelStr).model || modelStr;
-            if (provider && rawModel) {
+            if (!deferSource && provider && rawModel) {
               const dcResult = decayModelFailureCount(provider, effectiveConnectionId, rawModel);
               if (dcResult.cleared) {
                 log.info("COMBO-RR", `Model ${modelStr} fully recovered — lockout cleared`);
@@ -928,7 +938,7 @@ export async function handleRoundRobinCombo({
               }
             }
 
-            if (provider && provider !== "unknown") {
+            if (!deferSource && provider && provider !== "unknown") {
               recordProviderSuccess(
                 provider,
                 effectiveConnectionId || undefined,
@@ -1032,7 +1042,7 @@ export async function handleRoundRobinCombo({
               errorText = String(errorText);
             }
           }
-          if (isProviderCircuitOpenResult(result, errorText)) {
+          if (!deferSource && isProviderCircuitOpenResult(result, errorText)) {
             rrEvents.failed(errorText || `HTTP ${result.status}`, Date.now() - startTime);
             const refusal = recordLocalCircuitRefusal({
               comboName: combo.name,
@@ -1107,7 +1117,7 @@ export async function handleRoundRobinCombo({
                       : undefined,
                 }
               : undefined;
-          const scopedFailure = isScopedFailure(result, errorText, structuredError);
+          const scopedFailure = deferSource || isScopedFailure(result, errorText, structuredError);
           const fallbackResult = checkFallbackError(
             result.status,
             errorText,

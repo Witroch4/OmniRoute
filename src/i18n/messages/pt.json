@@ -5306,6 +5306,16 @@
     }
   },
   "providers": {
+    "siwcContingency": {
+      "title": "Contingência SIWC · Terra latest",
+      "description": "Encaminha Opus, Sonnet e Haiku para o Terra mais recente disponível usando o plano ChatGPT do Witdev Platform. As suas aplicações continuam a executar as ferramentas.",
+      "notConfigured": "Configure a ligação SIWC antes de ativar a contingência.",
+      "loadError": "Não foi possível carregar a configuração atual da contingência.",
+      "saveError": "Não foi possível alterar a contingência. Recarregue e tente novamente.",
+      "retry": "Recarregar",
+      "enabled": "Contingência SIWC ativada: Opus, Sonnet e Haiku agora usam Terra latest.",
+      "disabled": "Contingência SIWC desligada: encaminhamento Claude Code restaurado."
+    },
     "tosAvoidNoticeTitle": "Este fornecedor é excluído do auto por predefinição",
     "tosAvoidNoticeDescription": "O seu estado de ToS está marcado como avoid. Ligar uma conta não altera esta política. Consulte os termos do fornecedor antes de ativar a opção global para todos os combos auto.",
     "tosAvoidNoticeAction": "Consultar a política do auto",

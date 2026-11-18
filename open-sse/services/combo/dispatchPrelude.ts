@@ -14,6 +14,7 @@
  */
 import { getCachedProviderPoolConnections } from "../providerConnectionPool.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 import { fisherYatesShuffle, getNextFromDeck } from "../../../src/shared/utils/shuffleDeck";
 import { handleFusionChat, type FusionTuning } from "../fusion.ts";
 import { handleAgenticPipelineChat, type AgenticOrchestrationConfig } from "../agenticPipeline.ts";
@@ -275,6 +276,7 @@ export async function tryPinnedModelDispatch(args: {
   config: ComboSetupConfig;
   clientRequestedStream: boolean;
   handleSingleModelWithTimeout: HandleSingleModel;
+  isModelAvailable?: IsModelAvailable;
   log: ComboLogger;
   hiddenModelsByProvider?: HiddenModelsByProvider;
 }): Promise<Response | null> {
@@ -320,7 +322,11 @@ export async function tryPinnedModelDispatch(args: {
   // failover) — incident 2026-06-22: laila stuck on a throttled claude account
   // and credits_exhausted accounts never failing over. A transient cooldown is
   // tolerated (pin kept) so an unstable provider does not churn the pin.
-  const pinDurablyDown = pinInCombo ? await isPinnedModelDurablyUnhealthy(pinnedModel) : false;
+  const pinnedTarget = comboTargets.find((target) => target.modelStr === pinnedModel);
+  const deferSource =
+    pinnedTarget && (await shouldDeferSourceAvailability(args.isModelAvailable, pinnedTarget));
+  const pinDurablyDown =
+    pinInCombo && !deferSource ? await isPinnedModelDurablyUnhealthy(pinnedModel) : false;
   if (pinInCombo && !pinDurablyDown) {
     log.info(
       "COMBO",
@@ -457,6 +463,7 @@ export async function tryFusionDispatch(args: {
   // only each member's connectionId becomes a vetted, non-exhausted account.
   allResolvedFusionTargets = await expandTargetsForAllStrategies({
     strategy,
+    isModelAvailable: args.isModelAvailable,
     targets: allResolvedFusionTargets,
     comboName: combo.name,
     config: combo.config,
@@ -574,6 +581,7 @@ export async function tryPipelineDispatch(args: {
   apiKeyAllowedConnections?: string[] | null;
   allCombos?: ComboCollectionLike;
   handleSingleModelWithTimeout: HandleSingleModel;
+  isModelAvailable?: IsModelAvailable;
   log: ComboLogger;
   hiddenModelsByProvider?: HiddenModelsByProvider;
 }): Promise<Response | null> {
@@ -598,6 +606,7 @@ export async function tryPipelineDispatch(args: {
   );
   const expanded = await expandTargetsForAllStrategies({
     strategy,
+    isModelAvailable: args.isModelAvailable,
     targets: resolvedTargets,
     comboName: combo.name,
     config: combo.config,

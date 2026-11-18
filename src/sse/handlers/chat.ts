@@ -50,7 +50,11 @@ import {
   resolveComboTargets,
   shouldSkipConnDisable,
 } from "@omniroute/open-sse/services/combo.ts";
-import type { ComboLike, SingleModelTarget } from "@omniroute/open-sse/services/combo/types.ts";
+import type {
+  ComboLike,
+  SingleModelTarget,
+  ResolvedComboTarget,
+} from "@omniroute/open-sse/services/combo/types.ts";
 import { mergeAbortSignals } from "@omniroute/open-sse/executors/base.ts";
 import { resolveRequestAutoControls } from "@omniroute/open-sse/services/autoCombo/requestControls.ts";
 import { isVerifiedNativeCodexRequest } from "@omniroute/open-sse/config/codexIdentity.ts";
@@ -98,6 +102,12 @@ import { markEmergencyFallback } from "./emergencyFallbackHeader.ts";
 import { resolveEmergencyFallbackDecision } from "./emergencyFallbackHeader.ts";
 import { evaluateComboTargetPreflight } from "./chat/comboTargetKeyPolicy.ts";
 import * as resolvedPolicy from "./chat/resolvedModelPolicy.ts";
+import { shouldDeferClaudeSiwcAvailability } from "./chat/claudeSiwcAvailability";
+import {
+  resolveClaudeSiwcContingency,
+  resolveClaudeSiwcSourceModel,
+  withClaudeSiwcContingencyHeader,
+} from "./chat/claudeSiwcContingency";
 import { recordGateRejection, recordQuotaParkedSkip } from "./quotaParkedSkipUsage";
 import { getCombos } from "@/lib/db/combos";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
@@ -1252,7 +1262,7 @@ async function handleChatImplementation(
       // target specifies providerId: "opengate" for credential lookup).
       let modelInfo;
       try {
-        modelInfo = await getModelInfo(modelString);
+        modelInfo = await getModelInfo(await resolveClaudeSiwcSourceModel(modelString));
       } catch (error) {
         // Persisted explicit combos may still reference the retired provider. Treat
         // that target as unavailable so priority/fallback strategies can continue.
@@ -1264,6 +1274,8 @@ async function handleChatImplementation(
       if (modelInfo?.errorType === "model_not_found") return "model_not_in_catalog";
       const provider = comboCheckProvider(modelString, modelInfo, target?.providerId);
       const resolvedModel = modelInfo.model || modelString;
+      if (await shouldDeferClaudeSiwcAvailability(provider || "", resolvedModel, settings))
+        return true;
       const githubGate = await ghComboGate(comboPreselectedCredentials, provider, resolvedModel);
       if (githubGate !== null) return githubGate;
       const restrictions = resolveConnectionRestrictions(apiKeyInfo, target, true);
@@ -1308,6 +1320,27 @@ async function handleChatImplementation(
       }
       return true;
     };
+    Object.assign(checkModelAvailable, {
+      deferSourceAvailability: async (modelString: string, target: ResolvedComboTarget) => {
+        const config =
+          "claudeSiwcContingency" in settings ? settings.claudeSiwcContingency : undefined;
+        if (
+          !config ||
+          typeof config !== "object" ||
+          !("enabled" in config) ||
+          config.enabled !== true
+        )
+          return false;
+        const info = await getModelInfo(await resolveClaudeSiwcSourceModel(modelString));
+        return (
+          (await shouldDeferClaudeSiwcAvailability(
+            comboCheckProvider(modelString, info, target?.providerId) || "",
+            info.model || modelString,
+            settings
+          )) && (await checkModelAvailable(modelString, target)) === true
+        );
+      },
+    });
 
     const relayConfig =
       combo.strategy === "context-relay" ? resolveComboConfig(combo, settings) : null;
@@ -1652,7 +1685,7 @@ async function handleSingleModelChat(
 ): Promise<Response> {
   // 1. Resolve model → provider/model
   const resolved = await resolveModelOrError(
-    modelStr,
+    await resolveClaudeSiwcSourceModel(modelStr),
     body,
     clientRawRequest?.endpoint,
     clientRawRequest?.headers
@@ -1783,7 +1816,55 @@ async function handleSingleModelChat(
   // has picked a connection it is too late to change providers.
   let billedProvider: string | null = null;
   let billedModel: string | null = null;
-  if (apiKeyInfo?.id) {
+  const clientApiKey = (await resolveClientApiKey(request)).apiKey;
+  const substitution = await resolveClaudeSiwcContingency({
+    provider: runtimeOptions.providerId || resolvedProvider,
+    model,
+    modelStr,
+    body,
+    endpoint: clientRawRequest?.endpoint,
+    apiKey: clientApiKey,
+    apiKeyInfo,
+    contextModel: runtimeOptions.authorizationContextModel,
+    comboGrantsTargets: runtimeOptions.comboGrantsTargets,
+    forcedConnectionId: runtimeOptions.forcedConnectionId,
+    allowedConnectionIds: runtimeOptions.allowedConnectionIds,
+    isCombo,
+  });
+  if (substitution.rejection) return substitution.rejection;
+  const contingency = substitution.contingency;
+  if (contingency) {
+    ({ billedProvider, billedModel } = contingency);
+    resolvedProvider = contingency.provider;
+    model = contingency.model;
+    body = { ...body, model };
+    targetFormat = FORMATS.OPENAI;
+    customModelTargetFormat = undefined;
+    apiFormat = undefined;
+    runtimeOptions = {
+      ...runtimeOptions,
+      providerId: resolvedProvider,
+      forcedConnectionId: contingency.connectionId,
+      preselectedCredentials: undefined,
+      emergencyFallbackTried: true,
+      longContextSubstituteTried: true,
+    };
+    log.info(
+      "CLAUDE_SIWC_CONTINGENCY",
+      `${billedProvider}/${billedModel} → ${resolvedProvider}/${model}`
+    );
+    logAuditEvent({
+      action: "routing.claude_siwc_contingency",
+      actor: apiKeyInfo?.name || "system",
+      target: resolvedProvider,
+      details: {
+        original_model: `${billedProvider}/${billedModel}`,
+        served_model: `${resolvedProvider}/${model}`,
+        connection_id: contingency.connectionId,
+      },
+    });
+  }
+  if (!contingency && apiKeyInfo?.id) {
     const budgetRedirect = await resolveModelBudgetRedirect({
       apiKeyId: apiKeyInfo.id,
       provider: resolvedProvider,
@@ -1838,15 +1919,17 @@ async function handleSingleModelChat(
     if (modelStr.startsWith(runtimeOptions.providerId + "/")) return resolvedProvider;
     return runtimeOptions.providerId;
   })();
-  const resolvedModelGate = resolvedPolicy.createVisibleResolvedModelGate({
-    apiKeyInfo,
-    apiKey: (await resolveClientApiKey(request)).apiKey,
-    contextModel: runtimeOptions.authorizationContextModel,
-    comboGrantsTargets: runtimeOptions.comboGrantsTargets,
-    provider,
-    model,
-    modelStr,
-  });
+  const resolvedModelGate =
+    contingency?.gate ??
+    resolvedPolicy.createVisibleResolvedModelGate({
+      apiKeyInfo,
+      apiKey: clientApiKey,
+      contextModel: runtimeOptions.authorizationContextModel,
+      comboGrantsTargets: runtimeOptions.comboGrantsTargets,
+      provider,
+      model,
+      modelStr,
+    });
   const modelPolicyRejection = await resolvedModelGate([`${provider}/${model}`]);
   if (modelPolicyRejection) return modelPolicyRejection;
   const forceLiveComboTest = runtimeOptions.forceLiveComboTest === true;
@@ -1864,10 +1947,12 @@ async function handleSingleModelChat(
   const hasForcedConnection = forcedConnectionId.length > 0;
   const pinTarget = { ...runtimeOptions, connectionId: forcedConnectionId };
   const restrictions = resolveConnectionRestrictions(apiKeyInfo, pinTarget, isCombo);
-  let effectiveAllowedConnections = restrictions.allowedConnections;
+  let effectiveAllowedConnections = contingency
+    ? [contingency.connectionId]
+    : restrictions.allowedConnections;
 
   // A4: quota-exclusive keys must only use the pool's connection(s).
-  if (apiKeyInfo?.allowedQuotas && apiKeyInfo.allowedQuotas.length > 0) {
+  if (!contingency && apiKeyInfo?.allowedQuotas && apiKeyInfo.allowedQuotas.length > 0) {
     const quotaScope = await resolveQuotaKeyScope(apiKeyInfo.allowedQuotas);
     effectiveAllowedConnections = constrainConnectionsToQuota(
       effectiveAllowedConnections ?? [],
@@ -1886,8 +1971,8 @@ async function handleSingleModelChat(
   if (pressureGuard) return pressureGuard.response;
   const providerProfile = await getRuntimeProviderProfile(provider);
   const gate = await checkPipelineGates(provider, model, {
-    ignoreCircuitBreaker: forceLiveComboTest || hasForcedConnection,
-    ignoreModelCooldown: forceLiveComboTest || hasForcedConnection,
+    ignoreCircuitBreaker: forceLiveComboTest || (hasForcedConnection && !contingency),
+    ignoreModelCooldown: forceLiveComboTest || (hasForcedConnection && !contingency),
     providerProfile,
     ...(bypassReason ? { bypassReason } : {}),
   });
@@ -2373,7 +2458,7 @@ async function handleSingleModelChat(
       try {
         execution = await dispatchChatWithAffinityEviction(
           {
-            bypassCircuitBreaker: forceLiveComboTest || hasForcedConnection,
+            bypassCircuitBreaker: forceLiveComboTest || (hasForcedConnection && !contingency),
             breaker,
             body: requestBody,
             provider,
@@ -2485,9 +2570,9 @@ async function handleSingleModelChat(
         }
         if (telemetry) telemetry.startPhase("finalize");
         if (telemetry) telemetry.endPhase();
-        const successResponse = withSelectedConnectionHeader(
-          result.response,
-          credentials?.connectionId
+        const successResponse = withClaudeSiwcContingencyHeader(
+          withSelectedConnectionHeader(result.response, credentials?.connectionId),
+          Boolean(contingency)
         );
         if (requestBody.stream === true) {
           return inheritResponsePolicies(

@@ -36,6 +36,7 @@ import { modelAvailabilitySkipReason, type ResolvedComboTarget } from "./types.t
 import { recordSkippedConnectionCooldown } from "./skippedConnectionCooldown.ts";
 import type { PreDispatchExclusion } from "./pinRecovery.ts";
 import { getStrategyTraits } from "./strategyRegistry.ts";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 
 /**
  * The breaker that keeps a target from being dispatched: the provider-wide one
@@ -109,6 +110,7 @@ export async function evaluateExecuteTargetGates(opts: {
   const modelStr = target.modelStr;
   const rawModel = parseModel(modelStr).model || modelStr;
   const provider = target.provider;
+  const deferSource = await shouldDeferSourceAvailability(deps.isModelAvailable, target);
   const strategyTraits = getStrategyTraits(deps.strategy);
   const protectedPriorityTarget =
     strategyTraits.honorsFallbackOnlyTargets && target.fallbackOnlyOnQuotaExhaustion === true;
@@ -131,7 +133,7 @@ export async function evaluateExecuteTargetGates(opts: {
     state.fallbackCount++;
   };
 
-  const openBreaker = findOpenCircuitBreaker(provider, target.connectionId);
+  const openBreaker = deferSource ? null : findOpenCircuitBreaker(provider, target.connectionId);
   if (openBreaker) {
     const providerOpen = openBreaker.scope === "provider";
     const scopedConnectionId = target.connectionId ?? undefined;
@@ -167,6 +169,7 @@ export async function evaluateExecuteTargetGates(opts: {
   }
 
   if (
+    !deferSource &&
     deps.resilienceSettings.providerCooldown.enabled &&
     Boolean(provider && provider !== "unknown") &&
     (isProviderInCooldown(provider, target.connectionId ?? undefined, deps.resilienceSettings) ||
@@ -202,7 +205,7 @@ export async function evaluateExecuteTargetGates(opts: {
       }
     : { ...target, modelAbortSignal: abortSignal, fallbackAttempts: i };
 
-  if (target.connectionId) {
+  if (!deferSource && target.connectionId) {
     const persistedSkip = await resolveAndRecordPersistedCooldown(
       state,
       target,
@@ -239,11 +242,9 @@ export async function evaluateExecuteTargetGates(opts: {
     }
   }
 
-  const exhaustedSkip = getExhaustedTargetSkipReason(
-    target,
-    state.exhaustedProviders,
-    state.exhaustedConnections
-  );
+  const exhaustedSkip = deferSource
+    ? null
+    : getExhaustedTargetSkipReason(target, state.exhaustedProviders, state.exhaustedConnections);
   if (exhaustedSkip) {
     deps.log.info("COMBO", exhaustedSkip);
     recordComboDecision(deps.traceInvocationId, {
@@ -259,7 +260,12 @@ export async function evaluateExecuteTargetGates(opts: {
     };
   }
 
-  if (provider && rawModel && isModelLocked(provider, target.connectionId || "", rawModel)) {
+  if (
+    !deferSource &&
+    provider &&
+    rawModel &&
+    isModelLocked(provider, target.connectionId || "", rawModel)
+  ) {
     deps.log.info("COMBO", `Skipping ${modelStr} — model locked by resilience (cooldown active)`);
     recordComboDecision(deps.traceInvocationId, {
       step: target.executionKey,
@@ -274,7 +280,7 @@ export async function evaluateExecuteTargetGates(opts: {
     };
   }
 
-  if (strategyTraits.appliesQuotaCutoffGate && provider && target.connectionId) {
+  if (!deferSource && strategyTraits.appliesQuotaCutoffGate && provider && target.connectionId) {
     const quotaCutoff = await resolveQuotaExhaustionCutoffForTarget(
       provider,
       target.connectionId,
@@ -323,7 +329,12 @@ export async function evaluateExecuteTargetGates(opts: {
   }
 
   // Lift-as-is: combo.ts reads the env flag inline, not via AttemptLoopDeps.
-  if (process.env.OMNIROUTE_QUOTA_AWARE_ROUTING === "1" && provider && target.connectionId) {
+  if (
+    !deferSource &&
+    process.env.OMNIROUTE_QUOTA_AWARE_ROUTING === "1" &&
+    provider &&
+    target.connectionId
+  ) {
     const quotaDecision = canAffordRequest(
       target.connectionId,
       modelStr,
@@ -384,7 +395,7 @@ export async function evaluateExecuteTargetGates(opts: {
 
   // Lift-as-is: combo.ts uses the same `as string | undefined` cast.
   const connectionId = target.connectionId as string | undefined;
-  if (connectionId) {
+  if (!deferSource && connectionId) {
     // CLIProxyAPI management-health preflight intentionally runs immediately
     // before the credential gate. It only recognizes explicitly CLIProxy-backed
     // connections and fails open for all management API failures or unknown

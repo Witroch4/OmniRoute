@@ -21,7 +21,8 @@ import {
 } from "./targetSorters.ts";
 import { decrementInflight } from "./quotaShareInflight.ts";
 import { getStrategyTraits, type StrategyOrderingKind } from "./strategyRegistry.ts";
-import type { ComboLike, ComboLogger, ResolvedComboTarget } from "./types.ts";
+import type { ComboLike, ComboLogger, ResolvedComboTarget, IsModelAvailable } from "./types.ts";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 
 /**
  * Result of {@link applyStrategyOrdering}.
@@ -45,6 +46,7 @@ export interface ApplyStrategyOrderingDeps {
   body: Record<string, unknown>;
   log: ComboLogger;
   apiKeyAllowedConnections: string[] | null;
+  isModelAvailable?: IsModelAvailable;
   sessionKey?: string | null;
 }
 
@@ -354,5 +356,24 @@ export async function applyStrategyOrdering(
   const orderer =
     ordering === "declared" || ordering === "auto" ? undefined : STRATEGY_ORDERERS[ordering];
   if (!orderer) return orderedOnly(initialOrderedTargets);
+  if (
+    ["reset-aware", "reset-window", "headroom", "quota-weighted", "quota-share"].includes(strategy)
+  ) {
+    const deferred = await Promise.all(
+      initialOrderedTargets.map((target) =>
+        shouldDeferSourceAvailability(deps.isModelAvailable, target)
+      )
+    );
+    if (deferred.some(Boolean)) {
+      const regular = initialOrderedTargets.filter((_, index) => !deferred[index]);
+      const result = regular.length ? await orderer(regular, deps) : orderedOnly([]);
+      const orderedTargets = [...result.orderedTargets];
+      initialOrderedTargets.forEach((target, index) => {
+        if (deferred[index])
+          orderedTargets.splice(Math.min(index, orderedTargets.length), 0, target);
+      });
+      return { ...result, orderedTargets };
+    }
+  }
   return orderer(initialOrderedTargets, deps);
 }

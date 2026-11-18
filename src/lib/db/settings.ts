@@ -206,6 +206,7 @@ export async function getSettings() {
     comboConfigMode: "guided",
     comboAutoPromoteEnabled: false,
     codexServiceTier: { enabled: false },
+    claudeSiwcContingency: { enabled: false, targetModel: "", connectionId: "" },
     claudeFastMode: {
       enabled: false,
       supportedModels: [

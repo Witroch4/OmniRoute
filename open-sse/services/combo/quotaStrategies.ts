@@ -32,6 +32,7 @@ import {
 import { PRE_SCREEN_CONCURRENCY } from "../comboConfig.ts";
 import { getQuotaFetcher } from "../quotaPreflight.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
+import { shouldDeferSourceAvailability } from "./sourceAvailabilityDeferral.ts";
 import { getCachedProviderPoolConnections } from "../providerConnectionPool.ts";
 import { MAX_RR_COUNTERS, rrCounters } from "./rrState.ts";
 import type { ResolvedComboTarget, IsModelAvailable } from "./types.ts";
@@ -179,7 +180,7 @@ export async function expandTargetsByQuotaAwareConnections(
   comboName: string,
   log: { warn?: (...args: unknown[]) => void },
   apiKeyAllowedConnectionIds?: string[] | null,
-  opts?: { skipExhaustionFilter?: boolean }
+  opts?: { skipExhaustionFilter?: boolean; isModelAvailable?: IsModelAvailable }
 ): Promise<{
   connectionById: Map<string, Record<string, unknown>>;
   expandedTargets: ResolvedComboTarget[];
@@ -190,19 +191,29 @@ export async function expandTargetsByQuotaAwareConnections(
   const expandedTargets: ResolvedComboTarget[] = [];
 
   const targetsWithConnections = await Promise.all(
-    targets.map(async (target) => ({
-      connections: await getQuotaAwareConnectionsForTarget(
+    targets.map(async (target) => {
+      const deferred = await shouldDeferSourceAvailability(opts?.isModelAvailable, target);
+      return {
+        deferred,
+        connections: deferred
+          ? []
+          : await getQuotaAwareConnectionsForTarget(
+              target,
+              connectionCache,
+              connectionLoadPromises,
+              comboName,
+              log
+            ),
         target,
-        connectionCache,
-        connectionLoadPromises,
-        comboName,
-        log
-      ),
-      target,
-    }))
+      };
+    })
   );
 
-  for (const { target, connections } of targetsWithConnections) {
+  for (const { target, connections, deferred } of targetsWithConnections) {
+    if (deferred) {
+      expandedTargets.push(target);
+      continue;
+    }
     for (const connection of connections) {
       if (typeof connection.id === "string") connectionById.set(connection.id, connection);
     }
@@ -487,7 +498,10 @@ export async function preScreenTargets(
       const profile = await getRuntimeProviderProfile(target.provider).catch(() => null);
 
       const breaker = getCircuitBreaker(target.provider);
-      if (breaker.getStatus().state === "OPEN") {
+      if (
+        !(await shouldDeferSourceAvailability(isModelAvailable, target)) &&
+        breaker.getStatus().state === "OPEN"
+      ) {
         return { key: target.executionKey, result: { profile, available: false } };
       }
 
