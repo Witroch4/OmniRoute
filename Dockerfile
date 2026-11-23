@@ -89,8 +89,73 @@ RUN set -eux; \
   npm --version; \
   npm cache clean --force
 
+# ── Build-platform base ────────────────────────────────────────────────────
+# The builder compiles on the build machine's OWN architecture ($BUILDPLATFORM),
+# even when the image targets another CPU. `next build` is plain JavaScript, so
+# its output runs anywhere; compiling it under QEMU (an x86 host building the
+# arm64 image) cost ~17 min per build against ~2 min native. Only the native
+# modules depend on the CPU: they come from the `target-natives` stage below and
+# replace the build machine's copies in the standalone bundle (the retarget
+# step at the end of `builder`). When build and target CPUs match (CI builds
+# each arch on its own runner) both steps are no-ops and the image is built
+# exactly as before.
+#
+# `FROM --platform=$BUILDPLATFORM base` would NOT work: a platform flag on a
+# reference to another stage is ignored, so this stage repeats only what the
+# builder needs from `base` (mirrors and a current npm). The CVE overlay and the
+# runtime packages stay in `base`, which is what ships.
+FROM --platform=$BUILDPLATFORM node:24.18.1-trixie-slim AS build-base
+WORKDIR /app
+ARG APT_MIRROR=http://deb.debian.org
+ARG NPM_REGISTRY=
+RUN sed -i -E "s|https?://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+  && if [ -n "${NPM_REGISTRY}" ]; then npm config set registry "${NPM_REGISTRY}"; fi \
+  && npm install -g npm@latest \
+  && npm --version \
+  && npm cache clean --force
+
+# ── Target-architecture native modules ─────────────────────────────────────
+# Runs on the BUILD machine (no QEMU). npm installs the target's prebuilt
+# platform packages (--cpu/--os/--libc pick the arm64 sharp, wreq-js,
+# sqlite-vec, esbuild and ngrok binaries from the lockfile) and better-sqlite3
+# is compiled from source with the Debian cross toolchain: same node-gyp
+# invocation as the builder, same gcc and glibc as the target image. Under QEMU
+# this install + compile took ~17 min. Production dependencies only: the
+# standalone bundle never carries dev packages, and the retarget script fails
+# the build if one with a native binary ever shows up.
+# No-op (empty node_modules) when build and target CPUs match.
+FROM build-base AS target-natives
+ARG TARGETARCH
+ARG BUILDARCH
+ARG NODE_DIST_URL=
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
+COPY package*.json ./
+COPY open-sse/package.json ./open-sse/package.json
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  mkdir -p node_modules \
+  && if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then exit 0; fi \
+  && case "${TARGETARCH}" in \
+       amd64) NPM_CPU=x64; GNU=x86_64-linux-gnu; CROSS_GXX=g++-x86-64-linux-gnu; ELF_MACHINE=3e ;; \
+       arm64) NPM_CPU=arm64; GNU=aarch64-linux-gnu; CROSS_GXX=g++-aarch64-linux-gnu; ELF_MACHINE=b7 ;; \
+       *) echo "cross-arch build to ${TARGETARCH} is not supported; build on a ${TARGETARCH} host" >&2; exit 1 ;; \
+     esac \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends python3 make "${CROSS_GXX}" \
+  && npm ci --omit=dev --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
+       --os=linux --cpu="${NPM_CPU}" --libc=glibc \
+  && (cd node_modules/better-sqlite3 \
+      && if [ -n "${NODE_DIST_URL}" ]; then export NODEJS_ORG_MIRROR="${NODE_DIST_URL}"; fi \
+      && CC="${GNU}-gcc" CXX="${GNU}-g++" LINK="${GNU}-g++" AR="${GNU}-ar" \
+         node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild \
+           --arch="${NPM_CPU}" --force_build=1) \
+  && test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+  && test "$(od -An -tx1 -j18 -N1 node_modules/better-sqlite3/build/Release/better_sqlite3.node | tr -d ' ')" = "${ELF_MACHINE}" \
+  && test -d "node_modules/@wreq-js/binding-linux-${NPM_CPU}-gnu"
+
 # ── Builder ────────────────────────────────────────────────────────────────
-FROM base AS builder
+FROM build-base AS builder
 ARG NODE_DIST_URL=
 
 # No telemetry, anywhere. Disable Next.js's anonymous build-time telemetry
@@ -257,6 +322,22 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,targ
   && npm run build \
   && node --input-type=module -e "import { createRequire } from 'node:module'; import { pathToFileURL } from 'node:url'; const standaloneRoot = '/app/.build/next/standalone/node_modules/'; const require = createRequire('/app/.build/next/standalone/package.json'); for (const pkg of ['@atjsh/llmlingua-2', '@huggingface/transformers', 'js-tiktoken']) { const resolved = require.resolve(pkg); if (!resolved.startsWith(standaloneRoot)) throw new Error(pkg + ' resolved outside standalone: ' + resolved); await import(pathToFileURL(resolved).href); } const onnxRuntime = require.resolve('onnxruntime-node'); if (!onnxRuntime.startsWith(standaloneRoot)) throw new Error('onnxruntime-node resolved outside standalone: ' + onnxRuntime); await import(pathToFileURL(onnxRuntime).href);"
 
+# Retarget: when the image is for another CPU, swap the build machine's native
+# modules in the standalone bundle (and the better-sqlite3 copy runner-base
+# takes) for the target's, built by `target-natives`. The script fails the build
+# if any native binary for another CPU would be left behind. Declared after the
+# build step so TARGETARCH/BUILDARCH do not enter its cache key.
+ARG TARGETARCH
+ARG BUILDARCH
+RUN --mount=type=bind,from=target-natives,source=/app/node_modules,target=/opt/target-node-modules \
+  if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then exit 0; fi \
+  && node scripts/build/retarget-standalone-natives.mjs \
+    --standalone /app/.build/next/standalone \
+    --target-modules /opt/target-node-modules \
+    --target-arch "${TARGETARCH}" \
+  && rm -rf node_modules/better-sqlite3 \
+  && cp -a /opt/target-node-modules/better-sqlite3 node_modules/better-sqlite3
+
 # ── Runner base ────────────────────────────────────────────────────────────
 FROM base AS runner-base
 
@@ -308,7 +389,12 @@ COPY --chown=node:node --from=builder /app/.build/next/standalone ./
 # Next.js tracing. bootstrap-env requires SQLite BEFORE the standalone server
 # starts, so guarantee the complete package independent of trace behaviour.
 COPY --chown=node:node --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
-RUN test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node
+# Load every native module on the image's own CPU (under QEMU for a cross-arch
+# build): a binary for the wrong architecture fails the build here, not the
+# first request in production. The script is bind-mounted, not copied.
+RUN --mount=type=bind,source=scripts/build/smoke-native-modules.mjs,target=/tmp/smoke-native-modules.mjs \
+  test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+  && node /tmp/smoke-native-modules.mjs /app
 # migrations land at <standalone>/migrations via assembleStandalone; point the runtime at them.
 ENV OMNIROUTE_MIGRATIONS_DIR=/app/migrations
 
