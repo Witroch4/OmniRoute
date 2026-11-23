@@ -24,7 +24,12 @@ function detectPlatform(): Platform {
 }
 
 function detectArch(): Arch {
-  const a = os.arch();
+  // Turbopack evaluates a bare `os.arch()` at compile time, like `process.arch`
+  // (#10244), with the BUILD machine's CPU whenever the result feeds a
+  // comparison: the shipped bundle carried `(os.arch(), "amd64")` and picked the
+  // x86 binary on an arm64 host. Reflect.apply is opaque to that analysis, so
+  // the CPU is read at run time (and os.arch stays mockable in tests).
+  const a = Reflect.apply(os.arch, os, []) as string;
   if (a === "x64") return "amd64";
   if (a === "arm64") return "arm64";
   return "amd64";

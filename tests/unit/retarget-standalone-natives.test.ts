@@ -204,6 +204,29 @@ test("fails when the app's own addon has no build for the target", () => {
   }
 });
 
+test("fails on a CPU check Turbopack folded with the build machine's value", () => {
+  const { root, standalone, targetRoot } = fixture();
+  try {
+    write(
+      path.join(standalone, ".build/next/server/chunks/_abc._.js"),
+      'function A(){return{platform:(h.default.platform(),"linux"),arch:(h.default.arch(),"amd64")}}'
+    );
+    write(path.join(standalone, ".build/next/server/chunks/_def._.js"), 'detectArch(){return(process.arch,"x86_64")}');
+    // Run-time reads and unrelated strings are fine.
+    write(
+      path.join(standalone, ".build/next/server/chunks/_ok._.js"),
+      'const a=Reflect.apply(h.default.arch,h.default,[]);const b=process.arch;f(x.archive(),"amd64")'
+    );
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
+    const folded = result.problems.filter((p: string) => p.startsWith("compile-time CPU check"));
+    assert.equal(folded.length, 2, JSON.stringify(result.problems));
+    assert.ok(folded.some((p: string) => p.includes("_abc._.js") && p.includes('arch(),\\"amd64\\"')));
+    assert.ok(folded.some((p: string) => p.includes("_def._.js")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("dry run reports without changing the bundle", () => {
   const { root, standalone, targetRoot, nm } = fixture();
   try {

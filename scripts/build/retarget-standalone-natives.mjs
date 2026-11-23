@@ -31,6 +31,11 @@
  *      to the target install's copy; no platform package may exclude the target CPU, and no
  *      symlink may dangle. Any violation exits 1: an image that would crash on its own
  *      machine must not be produced.
+ *   5. No compile-time CPU check may be left in the app's JavaScript. Turbopack evaluates
+ *      `os.arch()` and `process.arch` comparisons at compile time with the BUILD machine's
+ *      CPU and leaves `(os.arch(), "amd64")` in the bundle; in a cross build that literal is
+ *      the wrong CPU. `process.arch` is defined as the target's for cross builds
+ *      (scripts/build/bundleTargetArch.mjs); any other folded read fails the build here.
  *
  * Usage:
  *   node scripts/build/retarget-standalone-natives.mjs \
@@ -237,6 +242,40 @@ export function looseNativeFiles(root) {
   return out;
 }
 
+const FOLDED_CPU_CHECK = /(?:\.arch\(\)|\bprocess\.arch)\s*,\s*"([^"\\]{1,16})"/g;
+
+/**
+ * CPU checks Turbopack folded at compile time: `(os.arch(), "amd64")` or
+ * `(process.arch, "aarch64")`, i.e. the call kept for its side effects and the build
+ * machine's answer as a literal. Scans the app's JavaScript outside node_modules.
+ * @returns {{file: string, snippet: string}[]}
+ */
+export function foldedCpuChecks(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (entry.isFile() && /\.(?:c|m)?js$/.test(entry.name)) {
+        const text = fs.readFileSync(full, "utf8");
+        for (const match of text.matchAll(FOLDED_CPU_CHECK)) {
+          const start = Math.max(0, match.index - 60);
+          out.push({ file: full, snippet: text.slice(start, match.index + match[0].length + 1) });
+        }
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
 function isElfFor(info, arch) {
   return info?.platform === "linux" && info.architectures.includes(arch);
 }
@@ -386,6 +425,11 @@ export function retargetStandaloneNatives({
       if (!isElfFor(info, arch)) {
         problems.push(`native binary not built for ${arch}: ${path.relative(standalone, file)} (${describe(info)})`);
       }
+    }
+    for (const { file, snippet } of foldedCpuChecks(standalone)) {
+      problems.push(
+        `compile-time CPU check folded with the build machine's value in ${path.relative(standalone, file)}: ${JSON.stringify(snippet)} — read the CPU at run time (process.arch is defined for cross builds; see scripts/build/bundleTargetArch.mjs)`
+      );
     }
     for (const link of danglingSymlinks(standalone)) {
       if (!danglingBefore.has(link)) problems.push(`symlink left dangling: ${path.relative(standalone, link)}`);
