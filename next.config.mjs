@@ -11,6 +11,7 @@ import {
   resolveDashboardEmbedMode,
 } from "./scripts/build/dashboardEmbed.mjs";
 import { shouldBuildStandalone } from "./scripts/build/backendOnlyPages.mjs";
+import { bundleTargetArchDefines } from "./scripts/build/bundleTargetArch.mjs";
 import {
   filterKnownInfrastructureWarnings,
   isNextIntlExtractorDynamicImportWarning,
@@ -81,6 +82,9 @@ const isMinimalBuild = process.env.OMNIROUTE_BUILD_PROFILE === "minimal";
 // so changing it requires a rebuild. See scripts/build/dashboardEmbed.mjs.
 const dashboardEmbedMode = resolveDashboardEmbedMode(process.env);
 
+// Target CPU of a cross-arch Docker build (scripts/build/bundleTargetArch.mjs).
+const bundleTargetArchServerDefines = bundleTargetArchDefines(process.env);
+
 const minimalBuildAliases = isMinimalBuild
   ? {
       "@/mitm/cert/install": "./src/mitm/cert/install.stub.ts",
@@ -130,6 +134,13 @@ const nextConfig = {
       process.env.OMNIROUTE_SW_BUILD_ID || process.env.SOURCE_VERSION || `${Date.now()}`,
   },
   distDir,
+  // Cross-arch Docker builds compile on the build machine's CPU: define the
+  // target's `process.arch` for the server bundles so compile-time folding
+  // matches the image's CPU. Empty unless OMNIROUTE_BUNDLE_TARGET_ARCH is set.
+  // See scripts/build/bundleTargetArch.mjs.
+  ...(Object.keys(bundleTargetArchServerDefines).length > 0
+    ? { compiler: { defineServer: bundleTargetArchServerDefines } }
+    : {}),
   // Turbopack config: redirect native modules to stubs at build time
   turbopack: {
     root: projectRoot,

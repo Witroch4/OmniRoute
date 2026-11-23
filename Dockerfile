@@ -333,18 +333,22 @@ ARG OMNIROUTE_BUILD_CPUS=
 ENV OMNIROUTE_BUILD_CPUS=${OMNIROUTE_BUILD_CPUS}
 
 COPY . ./
+# Cross-arch build (target CPU differs from the build machine's): Turbopack
+# folds `process.arch` comparisons at compile time with the BUILD machine's
+# value, so tell next.config.mjs the target's (scripts/build/bundleTargetArch.mjs
+# defines `process.arch` for the server bundles). Unset for same-arch builds.
+ARG TARGETARCH
+ARG BUILDARCH
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,target=/app/.build/next/cache \
   mkdir -p /app/data \
+  && if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then export OMNIROUTE_BUNDLE_TARGET_ARCH="${TARGETARCH}"; fi \
   && npm run build \
   && node --input-type=module -e "import { createRequire } from 'node:module'; import { pathToFileURL } from 'node:url'; const standaloneRoot = '/app/.build/next/standalone/node_modules/'; const require = createRequire('/app/.build/next/standalone/package.json'); for (const pkg of ['@atjsh/llmlingua-2', '@huggingface/transformers', 'js-tiktoken']) { const resolved = require.resolve(pkg); if (!resolved.startsWith(standaloneRoot)) throw new Error(pkg + ' resolved outside standalone: ' + resolved); await import(pathToFileURL(resolved).href); } const onnxRuntime = require.resolve('onnxruntime-node'); if (!onnxRuntime.startsWith(standaloneRoot)) throw new Error('onnxruntime-node resolved outside standalone: ' + onnxRuntime); await import(pathToFileURL(onnxRuntime).href);"
 
 # Retarget: when the image is for another CPU, swap the build machine's native
 # modules in the standalone bundle (and the better-sqlite3 copy runner-base
 # takes) for the target's, built by `target-natives`. The script fails the build
-# if any native binary for another CPU would be left behind. Declared after the
-# build step so TARGETARCH/BUILDARCH do not enter its cache key.
-ARG TARGETARCH
-ARG BUILDARCH
+# if any native binary for another CPU would be left behind.
 RUN --mount=type=bind,from=target-natives,source=/app,target=/opt/target \
   if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then exit 0; fi \
   && node scripts/build/retarget-standalone-natives.mjs \
