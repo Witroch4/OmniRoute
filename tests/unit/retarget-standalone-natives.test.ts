@@ -49,9 +49,10 @@ function archOf(file: string): string[] | undefined {
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retarget-natives-"));
   const standalone = path.join(root, "standalone");
-  // Not named node_modules on purpose: the Dockerfile bind-mounts the target install
-  // at /opt/target-node-modules, and the index must still see its packages.
-  const target = path.join(root, "target-node-modules");
+  // App root of the target build (the Dockerfile bind-mounts target-natives:/app at
+  // /opt/target): node_modules installed for the target + the app's own addons.
+  const targetRoot = path.join(root, "target");
+  const target = path.join(targetRoot, "node_modules");
   const nm = path.join(standalone, "node_modules");
 
   // Platform package pair (sharp's prebuilt binary).
@@ -77,19 +78,24 @@ function fixture() {
     write(path.join(base, "onnxruntime-node/bin/linux/arm64/onnx.node"), elf("arm64", "onnx"));
   }
 
+  // The app's own addon, built by `npm run build` and copied outside node_modules.
+  const addon = "src/mitm/tproxy/native/build/Release/transparent.node";
+  write(path.join(standalone, addon), elf("x64", "tproxy"));
+  write(path.join(targetRoot, addon), elf("arm64", "tproxy"));
+
   // Plain JS package: must not be touched.
   pkg(path.join(nm, "plain-js"), { name: "plain-js", version: "1.0.0" });
   write(path.join(nm, "plain-js/index.js"), "standalone copy");
 
-  return { root, standalone, target, nm };
+  return { root, standalone, target, targetRoot, nm, addon };
 }
 
 const quiet = () => {};
 
 test("retargets platform packages and compiled addons, keeps multi-platform packages", () => {
-  const { root, standalone, target, nm } = fixture();
+  const { root, standalone, targetRoot, nm, addon } = fixture();
   try {
-    const result = retargetStandaloneNatives({ standalone, targetModules: target, targetArch: "arm64", log: quiet });
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
     assert.deepEqual(result.problems, []);
     assert.deepEqual(result.replacedPlatform, ["@img/sharp-linux-x64 -> @img/sharp-linux-arm64"]);
 
@@ -104,6 +110,8 @@ test("retargets platform packages and compiled addons, keeps multi-platform pack
     );
 
     assert.deepEqual(archOf(path.join(nm, "onnxruntime-node/bin/linux/x64/onnx.node")), ["x64"], "multi-platform kept");
+    assert.deepEqual(archOf(path.join(standalone, addon)), ["arm64"], "the app's own addon is retargeted");
+    assert.deepEqual(result.replacedLoose, [addon]);
     assert.equal(fs.readFileSync(path.join(nm, "plain-js/index.js"), "utf8"), "standalone copy");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -111,10 +119,10 @@ test("retargets platform packages and compiled addons, keeps multi-platform pack
 });
 
 test("fails when a platform package has no counterpart in the target install", () => {
-  const { root, standalone, target } = fixture();
+  const { root, standalone, target, targetRoot } = fixture();
   try {
     fs.rmSync(path.join(target, "@img/sharp-linux-arm64"), { recursive: true });
-    const result = retargetStandaloneNatives({ standalone, targetModules: target, targetArch: "arm64", log: quiet });
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
     assert.ok(result.problems.some((p: string) => p.includes("@img/sharp-linux-x64") && p.includes("no arm64 counterpart")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -122,11 +130,11 @@ test("fails when a platform package has no counterpart in the target install", (
 });
 
 test("fails when the target install itself carries an addon built for the wrong CPU", () => {
-  const { root, standalone, target } = fixture();
+  const { root, standalone, target, targetRoot } = fixture();
   try {
     // e.g. a cross-compile that silently produced a host binary
     write(path.join(target, "better-sqlite3/build/Release/better_sqlite3.node"), elf("x64", "sqlite-host"));
-    const result = retargetStandaloneNatives({ standalone, targetModules: target, targetArch: "arm64", log: quiet });
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
     assert.ok(
       result.problems.some((p: string) => p.includes("better_sqlite3.node") && p.includes("not built for arm64")),
       JSON.stringify(result.problems)
@@ -137,20 +145,34 @@ test("fails when the target install itself carries an addon built for the wrong 
 });
 
 test("fails when a native package is missing from the target install", () => {
-  const { root, standalone, target } = fixture();
+  const { root, standalone, target, targetRoot } = fixture();
   try {
     fs.rmSync(path.join(target, "better-sqlite3"), { recursive: true });
-    const result = retargetStandaloneNatives({ standalone, targetModules: target, targetArch: "arm64", log: quiet });
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
     assert.ok(result.problems.some((p: string) => p.includes("better-sqlite3@13.0.3") && p.includes("not in the target install")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("dry run reports without changing the bundle", () => {
-  const { root, standalone, target, nm } = fixture();
+test("fails when the app's own addon has no build for the target", () => {
+  const { root, standalone, targetRoot, addon } = fixture();
   try {
-    const result = retargetStandaloneNatives({ standalone, targetModules: target, targetArch: "arm64", dryRun: true, log: quiet });
+    fs.rmSync(path.join(targetRoot, addon));
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
+    assert.ok(
+      result.problems.some((p: string) => p.includes("transparent.node") && p.includes("no arm64 build")),
+      JSON.stringify(result.problems)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("dry run reports without changing the bundle", () => {
+  const { root, standalone, targetRoot, nm } = fixture();
+  try {
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", dryRun: true, log: quiet });
     assert.equal(result.replacedPlatform.length, 1);
     assert.ok(fs.existsSync(path.join(nm, "@img/sharp-linux-x64")));
     assert.deepEqual(archOf(path.join(nm, "better-sqlite3/build/Release/better_sqlite3.node")), ["x64"]);

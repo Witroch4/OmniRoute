@@ -10,6 +10,7 @@
  *
  * Usage: node smoke-native-modules.mjs [appRoot]   (default: cwd)
  */
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -91,6 +92,20 @@ await check("@ngrok/ngrok", false, () => {
   if (typeof ngrok.forward !== "function") throw new Error("forward missing");
   return "forward";
 });
+
+// The app's own TPROXY addon (built by `npm run build`, copied outside node_modules).
+const tproxyAddon = path.join(appRoot, "src/mitm/tproxy/native/build/Release/transparent.node");
+if (existsSync(tproxyAddon)) {
+  try {
+    const addon = require(tproxyAddon);
+    results.push(`ok   tproxy transparent.node (${Object.keys(addon).join(",") || "loaded"})`);
+  } catch (err) {
+    failed = true;
+    results.push(`FAIL tproxy transparent.node: ${err?.message ?? err}`);
+  }
+} else {
+  results.push("skip tproxy transparent.node: not in the bundle");
+}
 
 console.log(`[smoke-native] ${process.platform}/${process.arch} node ${process.version} in ${appRoot}`);
 for (const line of results) console.log(`[smoke-native] ${line}`);

@@ -11,7 +11,12 @@
  * (`better-sqlite3/build/Release/*.node`). This script swaps exactly those for the copies in a
  * `node_modules` installed for the TARGET architecture from the same lockfile.
  *
- * Rules, applied to every package directory found under any `node_modules` in the bundle:
+ * The target side is an app root (`--target-root`) holding `node_modules` installed for the
+ * target from the same lockfile, plus any addon the app builds from its own sources, compiled
+ * for the target at the same relative path (src/mitm/tproxy/native/build/Release/
+ * transparent.node, built by `npm run build` and copied into the bundle outside node_modules).
+ *
+ * Rules:
  *   1. A platform package whose `cpu` field excludes the target is removed and its target
  *      counterpart (same name with the CPU token swapped, same version) is copied in its
  *      place, taken from the target install. A missing counterpart fails the build.
@@ -19,14 +24,17 @@
  *      byte-identical to the same file of the same name@version in the target install is
  *      replaced as a whole by the target install's copy. Multi-platform packages that ship
  *      every binary themselves (onnxruntime-node) are byte-identical and stay untouched.
- *   3. Verification: afterwards every native binary must be byte-identical to the target
- *      install's file or be an ELF for the target CPU, no platform package may exclude the
- *      target CPU, and no symlink may dangle. Any violation exits 1: an image that would
- *      crash on its own machine must not be produced.
+ *   3. A native binary outside any package (the app's own addons) that is not built for the
+ *      target is replaced by the file at the same relative path under the target root.
+ *   4. Verification: afterwards every native binary in the WHOLE bundle must be an ELF for
+ *      the target CPU, or (inside a package that also ships the target's ELF) byte-identical
+ *      to the target install's copy; no platform package may exclude the target CPU, and no
+ *      symlink may dangle. Any violation exits 1: an image that would crash on its own
+ *      machine must not be produced.
  *
  * Usage:
  *   node scripts/build/retarget-standalone-natives.mjs \
- *     --standalone /app/.build/next/standalone --target-modules /opt/target/node_modules \
+ *     --standalone /app/.build/next/standalone --target-root /opt/target \
  *     --target-arch arm64 [--dry-run]
  *
  * `--target-arch` accepts Docker (`amd64`, `arm64`) or Node (`x64`, `arm64`) names.
@@ -206,13 +214,52 @@ function danglingSymlinks(root) {
   return out;
 }
 
+/** Native binaries of the bundle that belong to no package (outside every node_modules). */
+export function looseNativeFiles(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (entry.isFile() && readNativeBinaryTarget(full)) {
+        out.push(full);
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function isElfFor(info, arch) {
+  return info?.platform === "linux" && info.architectures.includes(arch);
+}
+
+function describe(info) {
+  return info ? `${info.platform}/${info.architectures.join(",")}` : "unknown";
+}
+
 /**
- * @param {{standalone: string, targetModules: string, targetArch: string, dryRun?: boolean,
+ * @param {{standalone: string, targetRoot: string, targetArch: string, dryRun?: boolean,
  *          log?: (msg: string) => void}} options
- * @returns {{replacedPlatform: string[], replacedNative: string[], problems: string[]}}
+ * @returns {{replacedPlatform: string[], replacedNative: string[], replacedLoose: string[],
+ *            problems: string[]}}
  */
-export function retargetStandaloneNatives({ standalone, targetModules, targetArch, dryRun = false, log = console.log }) {
+export function retargetStandaloneNatives({
+  standalone,
+  targetRoot,
+  targetArch,
+  dryRun = false,
+  log = console.log,
+}) {
   const arch = normalizeArch(targetArch);
+  const targetModules = path.join(targetRoot ?? "", "node_modules");
   if (!isDir(standalone)) throw new Error(`standalone dir not found: ${standalone}`);
   if (!isDir(targetModules)) throw new Error(`target node_modules not found: ${targetModules}`);
 
@@ -226,6 +273,7 @@ export function retargetStandaloneNatives({ standalone, targetModules, targetArc
   const danglingBefore = new Set(danglingSymlinks(standalone));
   const replacedPlatform = [];
   const replacedNative = [];
+  const replacedLoose = [];
   const problems = [];
 
   // Rule 1 — platform packages for another CPU.
@@ -272,7 +320,22 @@ export function retargetStandaloneNatives({ standalone, targetModules, targetArc
     if (!dryRun) copyDir(target.dir, pkg.dir);
   }
 
-  // Rule 3 — verification of the final tree.
+  // Rule 3 — the app's own addons, outside any package.
+  for (const file of looseNativeFiles(standalone)) {
+    const info = readNativeBinaryTarget(file);
+    if (isElfFor(info, arch)) continue;
+    const rel = path.relative(standalone, file);
+    const twin = path.join(targetRoot, rel);
+    if (!isElfFor(readNativeBinaryTarget(twin), arch)) {
+      problems.push(`native binary ${rel} (${describe(info)}) has no ${arch} build at the same path under the target root`);
+      continue;
+    }
+    log(`[retarget] ${rel}: replaced with the ${arch} build`);
+    replacedLoose.push(rel);
+    if (!dryRun) fs.copyFileSync(twin, file);
+  }
+
+  // Rule 4 — verification of the final tree.
   if (!dryRun) {
     for (const pkg of listPackages(standalone)) {
       if (cpuExcludes(pkg.cpu, arch)) {
@@ -281,18 +344,21 @@ export function retargetStandaloneNatives({ standalone, targetModules, targetArc
       }
       const target = findTarget(pkg.name, pkg.version);
       const files = nativeFilesOf(pkg.dir).map((file) => ({ file, info: readNativeBinaryTarget(file) }));
-      const isTargetElf = (info) => info?.platform === "linux" && info.architectures.includes(arch);
       // A binary for another CPU is legitimate only in a package that ships every platform
       // itself (it also carries the target's ELF) and only as the target install's own copy.
-      const multiPlatform = files.some(({ info }) => isTargetElf(info));
+      const multiPlatform = files.some(({ info }) => isElfFor(info, arch));
       for (const { file, info } of files) {
-        if (isTargetElf(info)) continue;
+        if (isElfFor(info, arch)) continue;
         const twin = target ? path.join(target.dir, path.relative(pkg.dir, file)) : null;
         if (!(multiPlatform && twin && sameBytes(file, twin))) {
-          problems.push(
-            `native binary not built for ${arch}: ${path.relative(standalone, file)} (${info ? `${info.platform}/${info.architectures.join(",")}` : "unknown"})`
-          );
+          problems.push(`native binary not built for ${arch}: ${path.relative(standalone, file)} (${describe(info)})`);
         }
+      }
+    }
+    for (const file of looseNativeFiles(standalone)) {
+      const info = readNativeBinaryTarget(file);
+      if (!isElfFor(info, arch)) {
+        problems.push(`native binary not built for ${arch}: ${path.relative(standalone, file)} (${describe(info)})`);
       }
     }
     for (const link of danglingSymlinks(standalone)) {
@@ -300,7 +366,7 @@ export function retargetStandaloneNatives({ standalone, targetModules, targetArc
     }
   }
 
-  return { replacedPlatform, replacedNative, problems };
+  return { replacedPlatform, replacedNative, replacedLoose, problems };
 }
 
 function parseArgs(argv) {
@@ -309,11 +375,11 @@ function parseArgs(argv) {
     const key = argv[i];
     if (key === "--dry-run") args.dryRun = true;
     else if (key === "--standalone") args.standalone = argv[++i];
-    else if (key === "--target-modules") args.targetModules = argv[++i];
+    else if (key === "--target-root") args.targetRoot = argv[++i];
     else if (key === "--target-arch") args.targetArch = argv[++i];
     else throw new Error(`unknown argument: ${key}`);
   }
-  for (const required of ["standalone", "targetModules", "targetArch"]) {
+  for (const required of ["standalone", "targetRoot", "targetArch"]) {
     if (!args[required]) throw new Error(`missing --${required.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
   }
   return args;
@@ -325,7 +391,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     const result = retargetStandaloneNatives(args);
     for (const problem of result.problems) console.error(`[retarget] ERROR ${problem}`);
     console.log(
-      `[retarget] ${result.replacedPlatform.length} platform package(s) and ${result.replacedNative.length} native package(s) retargeted to ${normalizeArch(args.targetArch)}`
+      `[retarget] ${result.replacedPlatform.length} platform package(s), ${result.replacedNative.length} native package(s) and ${result.replacedLoose.length} app addon(s) retargeted to ${normalizeArch(args.targetArch)}`
     );
     process.exit(result.problems.length > 0 ? 1 : 0);
   } catch (err) {

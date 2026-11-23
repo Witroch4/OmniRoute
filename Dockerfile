@@ -153,6 +153,22 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
   && test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node \
   && test "$(od -An -tx1 -j18 -N1 node_modules/better-sqlite3/build/Release/better_sqlite3.node | tr -d ' ')" = "${ELF_MACHINE}" \
   && test -d "node_modules/@wreq-js/binding-linux-${NPM_CPU}-gnu"
+# The app's own addon: `npm run build` compiles the TPROXY transparent-socket
+# addon (scripts/build/build-tproxy-native.mjs) and copies it into the bundle at
+# src/mitm/tproxy/native/build/Release/, outside node_modules. Build the
+# target's copy at the same relative path; the retarget step swaps it in.
+# Separate layer so a source change does not invalidate the npm install above.
+COPY src/mitm/tproxy/native/binding.gyp src/mitm/tproxy/native/transparent.c ./src/mitm/tproxy/native/
+RUN if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then exit 0; fi \
+  && case "${TARGETARCH}" in \
+       amd64) NPM_CPU=x64; GNU=x86_64-linux-gnu; ELF_MACHINE=3e ;; \
+       arm64) NPM_CPU=arm64; GNU=aarch64-linux-gnu; ELF_MACHINE=b7 ;; \
+     esac \
+  && (cd src/mitm/tproxy/native \
+      && if [ -n "${NODE_DIST_URL}" ]; then export NODEJS_ORG_MIRROR="${NODE_DIST_URL}"; fi \
+      && CC="${GNU}-gcc" CXX="${GNU}-g++" LINK="${GNU}-g++" AR="${GNU}-ar" \
+         node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --arch="${NPM_CPU}") \
+  && test "$(od -An -tx1 -j18 -N1 src/mitm/tproxy/native/build/Release/transparent.node | tr -d ' ')" = "${ELF_MACHINE}"
 
 # ── Builder ────────────────────────────────────────────────────────────────
 FROM build-base AS builder
@@ -329,14 +345,14 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,targ
 # build step so TARGETARCH/BUILDARCH do not enter its cache key.
 ARG TARGETARCH
 ARG BUILDARCH
-RUN --mount=type=bind,from=target-natives,source=/app/node_modules,target=/opt/target-node-modules \
+RUN --mount=type=bind,from=target-natives,source=/app,target=/opt/target \
   if [ "${TARGETARCH}" = "${BUILDARCH}" ]; then exit 0; fi \
   && node scripts/build/retarget-standalone-natives.mjs \
     --standalone /app/.build/next/standalone \
-    --target-modules /opt/target-node-modules \
+    --target-root /opt/target \
     --target-arch "${TARGETARCH}" \
   && rm -rf node_modules/better-sqlite3 \
-  && cp -a /opt/target-node-modules/better-sqlite3 node_modules/better-sqlite3
+  && cp -a /opt/target/node_modules/better-sqlite3 node_modules/better-sqlite3
 
 # ── Runner base ────────────────────────────────────────────────────────────
 FROM base AS runner-base
