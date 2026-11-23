@@ -458,7 +458,88 @@ CMD ["node", "dev/run-standalone.mjs"]
 #    build:
 #      context: .
 #      target: runner-web
-FROM runner-base AS runner-web
+#
+# The Chromium install sits BELOW the app layers, not on top of them. Stacked on
+# runner-base it reran on every build (108 apt packages + the browser download,
+# ~2 min under QEMU for arm64, ~5 min on a 12-thread box), because any code change
+# changes the layers beneath it. Here `web-browsers` depends only on `base` and on
+# the CONTENT of the Playwright package, so a code-only rebuild reuses it. The cost
+# is that runner-web cannot derive from runner-base: it repeats runner-base's
+# instructions after its own FROM, kept identical by
+# tests/unit/dockerfile-runner-web-layering.test.ts.
+
+# Playwright CLI (pure JS) for the browser install. A scratch stage with a
+# content-addressed COPY: its digest follows the files, not the builder that
+# produced them, so it stays the same until the Playwright version changes.
+# It is bind-mounted below, never copied into the image (no extra layer).
+FROM scratch AS playwright-cli
+COPY --from=builder /app/node_modules/playwright-core /node_modules/playwright-core
+COPY --from=builder /app/node_modules/playwright /node_modules/playwright
+
+FROM base AS web-browsers
+
+# xvfb is installed explicitly (#15300): zai-web needs a headed Chromium and the browser pool
+# starts a private Xvfb when the container has no DISPLAY.
+# Install Playwright browser binaries + OS dependencies under root, then hand
+# ownership of the browsers cache to the node user.
+# PLAYWRIGHT_BROWSERS_PATH overrides the default ~/.cache/ms-playwright so the
+# browsers land under /home/node which persists across image layers and is
+# accessible to the non-root runtime user.
+# The CLI is mounted over /app (an empty directory here, nothing of it stays in the
+# layer) so Playwright records the install under /app/node_modules/playwright-core,
+# the path the runtime uses; from anywhere else its `.links` registry would point at
+# a directory that does not exist in the image.
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+  --mount=type=bind,from=playwright-cli,source=/,target=/app \
+  apt-get update \
+  && node node_modules/playwright/cli.js install chromium --with-deps \
+  && apt-get install -y --no-install-recommends xvfb \
+  && chown -R node:node /home/node/.cache \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM web-browsers AS runner-web
+
+# ---- Same instructions as runner-base (see tests/unit/dockerfile-runner-web-layering.test.ts) ----
+LABEL org.opencontainers.image.title="omniroute" \
+  org.opencontainers.image.description="Unified AI proxy — route any LLM through one endpoint" \
+  org.opencontainers.image.url="https://omniroute.online" \
+  org.opencontainers.image.source="https://github.com/cheaper-inference/OmniRoute" \
+  org.opencontainers.image.licenses="MIT"
+
+ENV NODE_ENV=production
+ENV PORT=20128
+ENV HOSTNAME=0.0.0.0
+ENV OMNIROUTE_MEMORY_MB=1024
+ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_MEMORY_MB}"
+
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data && chown node:node /app /app/data
+
+ENV REQUIRE_API_KEY=true
+
+COPY --chown=node:node --from=builder /app/.build/next/standalone ./
+COPY --chown=node:node --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+RUN --mount=type=bind,source=scripts/build/smoke-native-modules.mjs,target=/tmp/smoke-native-modules.mjs \
+  test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+  && node /tmp/smoke-native-modules.mjs /app
+ENV OMNIROUTE_MIGRATIONS_DIR=/app/migrations
+
+COPY --chown=node:node --from=builder /app/scripts/dev/healthcheck.mjs ./healthcheck.mjs
+
+EXPOSE 20128
+
+USER node
+
+COPY --chmod=755 scripts/check-permissions.sh /app/check-permissions.sh
+ENTRYPOINT ["/app/check-permissions.sh"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["node", "healthcheck.mjs"]
+
+CMD ["node", "dev/run-standalone.mjs"]
+# ---- runner-web additions ----
 
 USER root
 
@@ -469,22 +550,6 @@ USER root
 # ensures the same playwright version is available at runtime for web-session providers.
 COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
-
-# xvfb is installed explicitly (#15300): zai-web needs a headed Chromium and the browser pool
-# starts a private Xvfb when the container has no DISPLAY.
-# Install Playwright browser binaries + OS dependencies under root, then hand
-# ownership of the browsers cache to the node user.
-# PLAYWRIGHT_BROWSERS_PATH overrides the default ~/.cache/ms-playwright so the
-# browsers land under /home/node which persists across image layers and is
-# accessible to the non-root runtime user.
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-  apt-get update \
-  && node node_modules/playwright/cli.js install chromium --with-deps \
-  && apt-get install -y --no-install-recommends xvfb \
-  && chown -R node:node /home/node/.cache \
-  && rm -rf /var/lib/apt/lists/*
 
 USER node
 
