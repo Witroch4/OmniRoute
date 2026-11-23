@@ -70,6 +70,8 @@ function fixture() {
   pkg(path.join(target, "better-sqlite3"), { name: "better-sqlite3", version: "13.0.3" });
   write(path.join(target, "better-sqlite3/lib/index.js"), "module.exports = 1;");
   write(path.join(target, "better-sqlite3/build/Release/better_sqlite3.node"), elf("arm64", "sqlite"));
+  // Left out of the bundle by the trace; must stay out.
+  write(path.join(target, "better-sqlite3/deps/sqlite3/sqlite3.c"), "/* amalgamation */");
 
   // Multi-platform package: ships every CPU itself, identical in both installs.
   for (const base of [nm, target]) {
@@ -107,6 +109,11 @@ test("retargets platform packages and compiled addons, keeps multi-platform pack
       archOf(path.join(standalone, ".build/next/node_modules/better-sqlite3-90e2/build/Release/better_sqlite3.node")),
       ["arm64"],
       "the hashed Turbopack external copy is retargeted too"
+    );
+    assert.equal(
+      fs.existsSync(path.join(nm, "better-sqlite3/deps/sqlite3/sqlite3.c")),
+      false,
+      "only the binaries are swapped; files the trace left out do not come back"
     );
 
     assert.deepEqual(archOf(path.join(nm, "onnxruntime-node/bin/linux/x64/onnx.node")), ["x64"], "multi-platform kept");
@@ -150,6 +157,20 @@ test("fails when a native package is missing from the target install", () => {
     fs.rmSync(path.join(target, "better-sqlite3"), { recursive: true });
     const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
     assert.ok(result.problems.some((p: string) => p.includes("better-sqlite3@13.0.3") && p.includes("not in the target install")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("takes the target's whole package when its binaries live at other paths", () => {
+  const { root, standalone, target, targetRoot, nm } = fixture();
+  try {
+    fs.rmSync(path.join(target, "better-sqlite3/build"), { recursive: true });
+    write(path.join(target, "better-sqlite3/prebuilds/linux-arm64.node"), elf("arm64", "sqlite"));
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
+    assert.deepEqual(result.problems, []);
+    assert.equal(fs.existsSync(path.join(nm, "better-sqlite3/build")), false, "x64 build dir gone with the package");
+    assert.deepEqual(archOf(path.join(nm, "better-sqlite3/prebuilds/linux-arm64.node")), ["arm64"]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

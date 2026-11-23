@@ -315,9 +315,18 @@ export function retargetStandaloneNatives({
       problems.push(`${pkg.name}@${pkg.version} (${rel}) holds native binaries but is not in the target install`);
       continue;
     }
-    log(`[retarget] ${rel}: ${stale.length} native file(s) differ, replacing package with the ${arch} install`);
     replacedNative.push(pkg.name);
-    if (!dryRun) copyDir(target.dir, pkg.dir);
+    // The bundle holds the traced subset of the package: swap just the binaries when the
+    // target install has each at the same path, so no file the trace left out comes back.
+    // A different layout (another file name per CPU) takes the target's whole package.
+    const twins = stale.map((file) => path.join(target.dir, path.relative(pkg.dir, file)));
+    if (twins.every((twin) => fs.existsSync(twin))) {
+      log(`[retarget] ${rel}: ${stale.length} native file(s) replaced with the ${arch} build`);
+      if (!dryRun) stale.forEach((file, i) => fs.copyFileSync(twins[i], file));
+    } else {
+      log(`[retarget] ${rel}: native layout differs, replacing package with the ${arch} install`);
+      if (!dryRun) copyDir(target.dir, pkg.dir);
+    }
   }
 
   // Rule 3 — the app's own addons, outside any package.

@@ -407,7 +407,8 @@ COPY --chown=node:node --from=builder /app/.build/next/standalone ./
 COPY --chown=node:node --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
 # Load every native module on the image's own CPU (under QEMU for a cross-arch
 # build): a binary for the wrong architecture fails the build here, not the
-# first request in production. The script is bind-mounted, not copied.
+# first request in production. The script is bind-mounted from the build
+# context (no extra layer); the bundle's traced scripts/build/ ships it anyway.
 RUN --mount=type=bind,source=scripts/build/smoke-native-modules.mjs,target=/tmp/smoke-native-modules.mjs \
   test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
   && node /tmp/smoke-native-modules.mjs /app
