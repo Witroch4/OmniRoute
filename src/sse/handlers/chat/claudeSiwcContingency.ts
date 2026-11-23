@@ -8,8 +8,10 @@ import { isModelBlockedByPatterns } from "@/lib/db/apiKeys";
 import { checkKeyModelAccess } from "@/lib/db/apiKeyGroups";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "@/lib/quota/quotaKey";
 import {
-  CLAUDE_SIWC_UPSTREAM_MODEL,
+  CLAUDE_SIWC_SEGMENT_MODELS,
   claudeSiwcContingencySchema,
+  claudeSiwcSegmentTarget,
+  type ClaudeSiwcSegment,
 } from "@/shared/validation/claudeSiwcContingencySchema";
 import { resolveProviderId } from "@/shared/constants/providers";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
@@ -17,7 +19,7 @@ import { resolveConnectionRestrictions } from "../../services/connectionRestrict
 import { resolveModelOrError } from "../chatHelpers";
 import { createVisibleResolvedModelGate } from "./resolvedModelPolicy";
 import { withHiddenModelGate } from "./hiddenModelGate";
-import { isClaudeSiwcFamily } from "./claudeSiwcAvailability";
+import { claudeSiwcContingencyMode, claudeSiwcTargetSegment } from "./claudeSiwcAvailability";
 
 type SourcePolicy = {
   id?: string;
@@ -27,12 +29,13 @@ type SourcePolicy = {
   blockedModels?: string[] | null;
 };
 type ModelGate = (models: Iterable<string>) => Promise<Response | null>;
-type Contingency = {
+export type ClaudeSiwcContingencyRoute = {
   provider: string;
   model: string;
   connectionId: string;
   billedProvider: string;
   billedModel: string;
+  segment: ClaudeSiwcSegment;
   gate: ModelGate;
 };
 
@@ -59,11 +62,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Keep legacy bare Claude ids on the operator-selected provider while contingency is on. */
 export async function resolveClaudeSiwcSourceModel(modelStr: string): Promise<string> {
-  if (modelStr.includes("/") || !isClaudeSiwcFamily(modelStr)) return modelStr;
+  if (modelStr.includes("/")) return modelStr;
   const settings = await getCachedSettings();
-  const config = settings.claudeSiwcContingency;
-  return isRecord(config) &&
-    config.enabled === true &&
+  const mode = claudeSiwcContingencyMode(settings.claudeSiwcContingency);
+  return mode !== null &&
+    claudeSiwcTargetSegment(mode, modelStr) !== null &&
     settings.preferClaudeCodeForUnprefixedClaudeModels === true
     ? `claude/${modelStr}`
     : modelStr;
@@ -83,16 +86,26 @@ export async function resolveClaudeSiwcContingency(opts: {
   forcedConnectionId?: string | null;
   allowedConnectionIds?: string[] | null;
   isCombo: boolean;
-}): Promise<{ contingency?: Contingency; rejection?: Response }> {
-  if (resolveProviderId(opts.provider) !== "claude" || !isClaudeSiwcFamily(opts.model)) {
-    return {};
-  }
+  /** Set when model-budget routing already ran (segmented mode): the client's original ask. */
+  billed?: { provider: string; model: string } | null;
+}): Promise<{ contingency?: ClaudeSiwcContingencyRoute; rejection?: Response }> {
+  if (resolveProviderId(opts.provider) !== "claude") return {};
   const settings = await getCachedSettings();
   const raw = settings.claudeSiwcContingency;
   if (!raw || (isRecord(raw) && raw.enabled === false)) return {};
+  // The family decides before the schema does: a non-covered model keeps its route even when
+  // the stored configuration is broken (only covered models fail closed below).
+  const rawMode = isRecord(raw) && raw.mode === "segmented" ? "segmented" : "single";
+  const segment = claudeSiwcTargetSegment(rawMode, opts.model);
+  if (!segment) return {};
   const config = claudeSiwcContingencySchema.safeParse(raw);
   if (!config.success) return { rejection: unavailable() };
   if (!config.data.enabled) return {};
+  const targetModel =
+    (config.data.mode ?? "single") === "segmented"
+      ? claudeSiwcSegmentTarget(config.data.targetModel, segment)
+      : config.data.targetModel;
+  const upstreamModel = CLAUDE_SIWC_SEGMENT_MODELS[segment];
 
   if (
     (await isModelBlockedByPatterns(
@@ -162,10 +175,10 @@ export async function resolveClaudeSiwcContingency(opts: {
     }
   }
 
-  const resolved = await resolveModelOrError(config.data.targetModel, opts.body, opts.endpoint);
+  const resolved = await resolveModelOrError(targetModel, opts.body, opts.endpoint);
   if (
     resolved.error ||
-    resolved.model !== CLAUDE_SIWC_UPSTREAM_MODEL ||
+    resolved.model !== upstreamModel ||
     !resolved.provider?.startsWith("openai-compatible-")
   ) {
     return { rejection: unavailable() };
@@ -188,7 +201,7 @@ export async function resolveClaudeSiwcContingency(opts: {
     return { rejection: unavailable() };
   }
   const target = `${resolved.provider}/${resolved.model}`;
-  const targetAlias = config.data.targetModel.split("/")[0];
+  const targetAlias = targetModel.split("/")[0];
   const apiKeyId = opts.apiKeyInfo?.id;
   const targetHasGroupDeny = () =>
     apiKeyId &&
@@ -205,7 +218,7 @@ export async function resolveClaudeSiwcContingency(opts: {
         model !== target ||
         targetHasGroupDeny() ||
         (await isModelBlockedByPatterns(opts.apiKeyInfo?.blockedModels, model)) ||
-        (await isModelBlockedByPatterns(opts.apiKeyInfo?.blockedModels, config.data.targetModel))
+        (await isModelBlockedByPatterns(opts.apiKeyInfo?.blockedModels, targetModel))
       ) {
         return errorResponse(403, "Claude SIWC contingency target is not allowed");
       }
@@ -219,8 +232,9 @@ export async function resolveClaudeSiwcContingency(opts: {
       provider: resolved.provider,
       model: resolved.model,
       connectionId: config.data.connectionId,
-      billedProvider: opts.provider,
-      billedModel: opts.model,
+      billedProvider: opts.billed?.provider ?? opts.provider,
+      billedModel: opts.billed?.model ?? opts.model,
+      segment,
       gate,
     },
   };

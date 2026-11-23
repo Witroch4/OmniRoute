@@ -102,8 +102,12 @@ import { markEmergencyFallback } from "./emergencyFallbackHeader.ts";
 import { resolveEmergencyFallbackDecision } from "./emergencyFallbackHeader.ts";
 import { evaluateComboTargetPreflight } from "./chat/comboTargetKeyPolicy.ts";
 import * as resolvedPolicy from "./chat/resolvedModelPolicy.ts";
-import { shouldDeferClaudeSiwcAvailability } from "./chat/claudeSiwcAvailability";
 import {
+  getClaudeSiwcContingencyMode,
+  shouldDeferClaudeSiwcAvailability,
+} from "./chat/claudeSiwcAvailability";
+import {
+  type ClaudeSiwcContingencyRoute,
   resolveClaudeSiwcContingency,
   resolveClaudeSiwcSourceModel,
   withClaudeSiwcContingencyHeader,
@@ -1817,26 +1821,39 @@ async function handleSingleModelChat(
   let billedProvider: string | null = null;
   let billedModel: string | null = null;
   const clientApiKey = (await resolveClientApiKey(request)).apiKey;
-  const substitution = await resolveClaudeSiwcContingency({
-    provider: runtimeOptions.providerId || resolvedProvider,
-    model,
-    modelStr,
-    body,
-    endpoint: clientRawRequest?.endpoint,
-    apiKey: clientApiKey,
-    apiKeyInfo,
-    contextModel: runtimeOptions.authorizationContextModel,
-    comboGrantsTargets: runtimeOptions.comboGrantsTargets,
-    forcedConnectionId: runtimeOptions.forcedConnectionId,
-    allowedConnectionIds: runtimeOptions.allowedConnectionIds,
-    isCombo,
-  });
-  if (substitution.rejection) return substitution.rejection;
-  const contingency = substitution.contingency;
-  if (contingency) {
-    ({ billedProvider, billedModel } = contingency);
-    resolvedProvider = contingency.provider;
-    model = contingency.model;
+  // Claude SIWC contingency. `single` (default) substitutes BEFORE model-budget routing, which
+  // is then skipped. `segmented` lets model-budget routing pick the final Claude family FIRST
+  // (Fable → Opus → Sonnet ladders included) and substitutes that final model: Fable/Opus →
+  // Sol latest, Sonnet → Terra latest, Haiku → Luna latest. Billing keeps the client's ask.
+  const contingencyMode = await getClaudeSiwcContingencyMode();
+  let contingency: ClaudeSiwcContingencyRoute | undefined;
+  /** Applies the substitution to the request state; returns the route, a rejection, or null. */
+  const applyClaudeSiwcContingency = async (): Promise<
+    ClaudeSiwcContingencyRoute | Response | null
+  > => {
+    const substitution = await resolveClaudeSiwcContingency({
+      provider: runtimeOptions.providerId || resolvedProvider,
+      model,
+      modelStr,
+      body,
+      endpoint: clientRawRequest?.endpoint,
+      apiKey: clientApiKey,
+      apiKeyInfo,
+      contextModel: runtimeOptions.authorizationContextModel,
+      comboGrantsTargets: runtimeOptions.comboGrantsTargets,
+      forcedConnectionId: runtimeOptions.forcedConnectionId,
+      allowedConnectionIds: runtimeOptions.allowedConnectionIds,
+      isCombo,
+      billed:
+        billedProvider && billedModel ? { provider: billedProvider, model: billedModel } : null,
+    });
+    if (substitution.rejection) return substitution.rejection;
+    const route = substitution.contingency;
+    if (!route) return null;
+    const servedBefore = `${resolvedProvider}/${model}`;
+    ({ billedProvider, billedModel } = route);
+    resolvedProvider = route.provider;
+    model = route.model;
     body = { ...body, model };
     targetFormat = FORMATS.OPENAI;
     customModelTargetFormat = undefined;
@@ -1844,14 +1861,14 @@ async function handleSingleModelChat(
     runtimeOptions = {
       ...runtimeOptions,
       providerId: resolvedProvider,
-      forcedConnectionId: contingency.connectionId,
+      forcedConnectionId: route.connectionId,
       preselectedCredentials: undefined,
       emergencyFallbackTried: true,
       longContextSubstituteTried: true,
     };
     log.info(
       "CLAUDE_SIWC_CONTINGENCY",
-      `${billedProvider}/${billedModel} → ${resolvedProvider}/${model}`
+      `${billedProvider}/${billedModel} → ${resolvedProvider}/${model} (${contingencyMode ?? "single"}, ${route.segment})`
     );
     logAuditEvent({
       action: "routing.claude_siwc_contingency",
@@ -1859,10 +1876,19 @@ async function handleSingleModelChat(
       target: resolvedProvider,
       details: {
         original_model: `${billedProvider}/${billedModel}`,
+        contingency_source_model: servedBefore,
         served_model: `${resolvedProvider}/${model}`,
-        connection_id: contingency.connectionId,
+        connection_id: route.connectionId,
+        mode: contingencyMode ?? "single",
+        segment: route.segment,
       },
     });
+    return route;
+  };
+  if (contingencyMode !== "segmented") {
+    const applied = await applyClaudeSiwcContingency();
+    if (applied instanceof Response) return applied;
+    contingency = applied ?? undefined;
   }
   if (!contingency && apiKeyInfo?.id) {
     const budgetRedirect = await resolveModelBudgetRedirect({
@@ -1910,6 +1936,11 @@ async function handleSingleModelChat(
       // body.model/requestedModel/modelStr post-redirect.
       if (body && typeof body === "object") body.model = budgetRedirect.model;
     }
+  }
+  if (contingencyMode === "segmented") {
+    const applied = await applyClaudeSiwcContingency();
+    if (applied instanceof Response) return applied;
+    contingency = applied ?? undefined;
   }
 
   // Use explicit credential redirects, but preserve resolved node IDs for implicit prefixes.

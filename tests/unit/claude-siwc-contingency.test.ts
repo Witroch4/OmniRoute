@@ -7,6 +7,7 @@ const providersDb = await import("../../src/lib/db/providers.ts");
 const modelsDb = await import("../../src/lib/db/models.ts");
 const { updateSettingsSchema } = await import("../../src/shared/validation/settingsSchemas.ts");
 const budgetRules = await import("../../src/lib/db/apiKeyModelBudgetRules.ts");
+const budgetRouting = await import("../../src/lib/usage/modelBudgetRouting.ts");
 const costRules = await import("../../src/domain/costRules.ts");
 const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
 const keyGroups = await import("../../src/lib/db/apiKeyGroups.ts");
@@ -41,7 +42,7 @@ test.beforeEach(async () => {
 });
 test.after(async () => h.cleanup());
 
-async function setup(enabled = true) {
+async function setup(enabled = true, mode?: "single" | "segmented") {
   const source = await h.seedConnection("claude");
   await providersDb.createProviderNode({
     id: NODE,
@@ -56,9 +57,36 @@ async function setup(enabled = true) {
     providerSpecificData: { baseUrl: "https://api.witdev.com.br/internal/llm/v1", apiType: "chat" },
   });
   await h.settingsDb.updateSettings({
-    claudeSiwcContingency: { enabled, targetModel: TARGET, connectionId: target.id },
+    claudeSiwcContingency: {
+      enabled,
+      targetModel: TARGET,
+      connectionId: target.id,
+      ...(mode ? { mode } : {}),
+    },
   });
   return { source, target };
+}
+
+async function billedUsage(keyId: string) {
+  return (await h.waitFor(() =>
+    h.core
+      .getDbInstance()
+      .prepare(
+        "SELECT provider, model, billed_provider, billed_model FROM usage_history WHERE api_key_id = ? AND success = 1"
+      )
+      .get(keyId)
+  )) as { provider: string; model: string; billed_provider: string; billed_model: string } | null;
+}
+
+async function spend(keyId: string, model: string) {
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model,
+    apiKeyId: keyId,
+    tokens: { input: 1_000_000, output: 1_000_000 },
+    success: true,
+    timestamp: new Date().toISOString(),
+  });
 }
 
 async function chat(model: string, authKey?: string, extra: Record<string, unknown> = {}) {
@@ -745,4 +773,177 @@ test("strict settings schema accepts off defaults and configured target, rejecti
     { enabled: false, targetModel: "", connectionId: "", apiKey: "secret" },
   ])
     assert.equal(updateSettingsSchema.safeParse({ claudeSiwcContingency: value }).success, false);
+});
+
+// ---------------------------------------------------------------- segmented mode
+for (const [requested, upstream] of [
+  ["cc/claude-fable-5", "witdev_siwc/gpt-sol-latest"],
+  ["cc/claude-opus-4-8", "witdev_siwc/gpt-sol-latest"],
+  ["cc/claude-sonnet-5", "witdev_siwc/gpt-terra-latest"],
+  ["cc/claude-haiku-4-5-20251001", "witdev_siwc/gpt-luna-latest"],
+] as const) {
+  test(`segmented contingency sends ${requested} to ${upstream}`, async () => {
+    const { target } = await setup(true, "segmented");
+    const key = await h.seedApiKey({ allowedModels: ["cc/*"] });
+    const response = await chat(requested, key.key);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal((await response.json()).model, requested.slice(3));
+    assert.match(response.headers.get("x-omniroute-contingency") || "", /claude-siwc/);
+    assert.equal(response.headers.get("x-omniroute-selected-connection-id"), target.id);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /\/internal\/llm\//);
+    assert.equal(calls[0].body.model, upstream);
+    const usage = await billedUsage(key.id);
+    assert.ok(usage);
+    assert.equal(usage.model, upstream);
+    assert.equal(usage.billed_provider, "claude");
+    assert.equal(usage.billed_model, requested.slice(3));
+  });
+}
+
+test("segmented contingency runs family fallback first and substitutes the FINAL model", async () => {
+  await setup(true, "segmented");
+  const key = await h.seedApiKey({ allowedModels: ["cc/*"] });
+  budgetRules.replaceModelBudgetRules(key.id, [
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "claude",
+      sourceFamily: "claude-fable-*",
+      weeklyLimitUsd: 0.01,
+      targetProvider: "claude",
+      targetFamily: "claude-opus-*",
+    },
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "claude",
+      sourceFamily: "claude-opus-*",
+      weeklyLimitUsd: 0.01,
+      targetProvider: "claude",
+      targetFamily: "claude-sonnet-*",
+    },
+  ]);
+  // Fable exhausted only: Fable → Opus → (Opus still has budget) → Sol.
+  await spend(key.id, "claude-fable-5");
+  const toOpus = await chat("cc/claude-fable-5", key.key);
+  assert.equal(toOpus.status, 200, await toOpus.clone().text());
+  assert.equal((await toOpus.json()).model, "claude-fable-5");
+  assert.equal(calls.at(-1)?.body.model, "witdev_siwc/gpt-sol-latest");
+  // Opus exhausted too: Fable → Opus → Sonnet → Terra. Billing keeps the client's ask.
+  await spend(key.id, "claude-opus-4-8");
+  budgetRouting.clearModelBudgetRoutingCacheForTests(); // the ladder caches each rule for 60 s
+  const toSonnet = await chat("cc/claude-fable-5", key.key);
+  assert.equal(toSonnet.status, 200, await toSonnet.clone().text());
+  assert.equal(calls.at(-1)?.body.model, "witdev_siwc/gpt-terra-latest");
+  const rows = h.core
+    .getDbInstance()
+    .prepare(
+      "SELECT model, billed_model FROM usage_history WHERE api_key_id = ? AND success = 1 AND provider = ? ORDER BY id"
+    )
+    .all(key.id, NODE) as Array<{ model: string; billed_model: string }>;
+  assert.deepEqual(
+    rows.map((row) => [row.model, row.billed_model]),
+    [
+      ["witdev_siwc/gpt-sol-latest", "claude-fable-5"],
+      ["witdev_siwc/gpt-terra-latest", "claude-fable-5"],
+    ]
+  );
+});
+
+test("single mode keeps substituting before family fallback and leaves Fable on Claude", async () => {
+  await setup(true, "single");
+  const key = await h.seedApiKey({ allowedModels: ["cc/*"] });
+  budgetRules.replaceModelBudgetRules(key.id, [
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "claude",
+      sourceFamily: "claude-opus-*",
+      weeklyLimitUsd: 0.01,
+      targetProvider: "claude",
+      targetFamily: "claude-sonnet-*",
+    },
+  ]);
+  await spend(key.id, "claude-opus-4-8");
+  const opus = await chat("cc/claude-opus-4-8", key.key);
+  assert.equal(opus.status, 200, await opus.clone().text());
+  assert.equal(calls.at(-1)?.body.model, "witdev_siwc/gpt-terra-latest");
+  const fable = await chat("cc/claude-fable-5", key.key);
+  assert.equal(fable.status, 200, await fable.clone().text());
+  assert.equal(fable.headers.get("x-omniroute-contingency"), null);
+  assert.ok(!(calls.at(-1)?.url || "").includes("/internal/llm/"));
+});
+
+test("segmented contingency fails closed when the family alias is unavailable", async () => {
+  const { target } = await setup(true, "segmented");
+  await providersDb.updateProviderConnection(target.id, { isActive: false });
+  const response = await chat("cc/claude-haiku-4-5-20251001");
+  assert.equal(response.status, 503, await response.clone().text());
+  assert.equal(calls.length, 0);
+});
+
+test("segmented contingency keeps non-family and non-Claude models on their route", async () => {
+  await setup(true, "segmented");
+  await h.seedConnection("openai");
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(String(options?.body || "{}")) as Record<string, unknown>;
+    calls.push({ url: String(url), body });
+    return h.buildOpenAIResponse();
+  };
+  const response = await chat("openai/gpt-4o-mini");
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.headers.get("x-omniroute-contingency"), null);
+  assert.ok(calls.every((call) => !call.url.includes("/internal/llm/")));
+});
+
+test("settings schema accepts the segmented mode and rejects unknown modes", () => {
+  assert.equal(
+    updateSettingsSchema.safeParse({
+      claudeSiwcContingency: {
+        enabled: true,
+        targetModel: TARGET,
+        connectionId: "c",
+        mode: "segmented",
+      },
+    }).success,
+    true
+  );
+  assert.equal(
+    updateSettingsSchema.safeParse({
+      claudeSiwcContingency: {
+        enabled: true,
+        targetModel: TARGET,
+        connectionId: "c",
+        mode: "split",
+      },
+    }).success,
+    false
+  );
+});
+
+test("SIWC-served traffic does not advance the Claude family ladder (it is not Claude spend)", async () => {
+  await setup(true, "segmented");
+  const key = await h.seedApiKey({ allowedModels: ["cc/*"] });
+  budgetRules.replaceModelBudgetRules(key.id, [
+    {
+      enabled: true,
+      priority: 0,
+      sourceProvider: "claude",
+      sourceFamily: "claude-opus-*",
+      weeklyLimitUsd: 0.000001,
+      targetProvider: "claude",
+      targetFamily: "claude-sonnet-*",
+    },
+  ]);
+  for (let i = 0; i < 2; i += 1) {
+    const response = await chat("cc/claude-opus-4-8", key.key);
+    assert.equal(response.status, 200, await response.clone().text());
+    budgetRouting.clearModelBudgetRoutingCacheForTests();
+  }
+  // Real family spend counts what Claude actually served; both calls were served by SIWC Sol.
+  assert.deepEqual(
+    calls.map((call) => call.body.model),
+    ["witdev_siwc/gpt-sol-latest", "witdev_siwc/gpt-sol-latest"]
+  );
 });

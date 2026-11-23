@@ -5343,7 +5343,9 @@
       "saveError": "Não foi possível alterar a contingência. Recarregue e tente novamente.",
       "retry": "Recarregar",
       "enabled": "Contingência SIWC ativada: Opus, Sonnet e Haiku agora usam Terra latest.",
-      "disabled": "Contingência SIWC desligada: roteamento Claude Code restaurado."
+      "disabled": "Contingência SIWC desligada: roteamento Claude Code restaurado.",
+      "enabledSegmented": "Contingência SIWC segmentada ligada: Fable/Opus vão para Sol, Sonnet para Terra e Haiku para Luna (latest).",
+      "segmented": "Modo segmentado: o fallback de família roda primeiro; depois Fable/Opus → Sol, Sonnet → Terra, Haiku → Luna (sempre a versão mais nova)."
     },
     "tosAvoidNoticeTitle": "Este provedor é excluído do auto por padrão",
     "tosAvoidNoticeDescription": "O status de ToS está marcado como avoid. Conectar uma conta não altera esta política. Consulte os termos do provedor antes de ativar a opção global para todos os combos auto.",

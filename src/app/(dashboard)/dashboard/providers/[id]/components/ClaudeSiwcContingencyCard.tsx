@@ -6,7 +6,13 @@ import { Button, Card, Icon, Toggle } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
 import { providerText } from "../providerCredentialText";
 
-type Contingency = { enabled: boolean; targetModel: string; connectionId: string };
+type Contingency = {
+  enabled: boolean;
+  targetModel: string;
+  connectionId: string;
+  // Kept on every save: dropping it would silently turn a segmented contingency back into single.
+  mode?: "single" | "segmented";
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -22,6 +28,7 @@ function readContingency(payload: unknown): Contingency {
     enabled: value.enabled === true,
     targetModel: typeof value.targetModel === "string" ? value.targetModel : "",
     connectionId: typeof value.connectionId === "string" ? value.connectionId : "",
+    ...(value.mode === "segmented" || value.mode === "single" ? { mode: value.mode } : {}),
   };
 }
 
@@ -102,10 +109,15 @@ export default function ClaudeSiwcContingencyCard() {
       setError(false);
       notify.success(
         next.enabled
-          ? text(
-              "enabled",
-              "SIWC contingency enabled: Opus, Sonnet and Haiku now use Terra latest."
-            )
+          ? next.mode === "segmented"
+            ? text(
+                "enabledSegmented",
+                "Segmented SIWC contingency enabled: Fable/Opus use Sol, Sonnet Terra and Haiku Luna (latest)."
+              )
+            : text(
+                "enabled",
+                "SIWC contingency enabled: Opus, Sonnet and Haiku now use Terra latest."
+              )
           : text("disabled", "SIWC contingency disabled: Claude Code routing restored.")
       );
     } catch {
@@ -131,6 +143,14 @@ export default function ClaudeSiwcContingencyCard() {
               "Send Opus, Sonnet and Haiku requests to the latest available Terra using Witdev Platform's ChatGPT plan. Your applications keep executing their tools."
             )}
           </p>
+          {!error && config?.mode === "segmented" && (
+            <p className="mt-2 text-sm text-text-muted">
+              {text(
+                "segmented",
+                "Segmented mode: family fallback runs first, then Fable/Opus → Sol, Sonnet → Terra, Haiku → Luna (always the latest version)."
+              )}
+            </p>
+          )}
           {!error && config && !configured && (
             <p className="mt-2 text-sm text-text-muted">
               {text("notConfigured", "Configure the SIWC connection before enabling contingency.")}

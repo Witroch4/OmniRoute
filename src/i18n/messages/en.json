@@ -5343,7 +5343,9 @@
       "saveError": "Could not update the contingency. Reload and try again.",
       "retry": "Reload",
       "enabled": "SIWC contingency enabled: Opus, Sonnet and Haiku now use Terra latest.",
-      "disabled": "SIWC contingency disabled: Claude Code routing restored."
+      "disabled": "SIWC contingency disabled: Claude Code routing restored.",
+      "enabledSegmented": "Segmented SIWC contingency enabled: Fable/Opus use Sol, Sonnet Terra and Haiku Luna (latest).",
+      "segmented": "Segmented mode: family fallback runs first, then Fable/Opus → Sol, Sonnet → Terra, Haiku → Luna (always the latest version)."
     },
     "tosAvoidNoticeTitle": "This provider is excluded from auto by default",
     "tosAvoidNoticeDescription": "Its ToS status is marked avoid. Connecting an account does not change this policy. Review the provider terms before using the global opt-in for all auto combos.",
