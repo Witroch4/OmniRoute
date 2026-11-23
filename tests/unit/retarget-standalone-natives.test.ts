@@ -66,10 +66,15 @@ function fixture() {
     pkg(dir, { name: "better-sqlite3", version: "13.0.3" });
     write(path.join(dir, "lib/index.js"), "module.exports = 1;");
     write(path.join(dir, "build/Release/better_sqlite3.node"), elf("x64", "sqlite"));
+    // Non-ELF leftovers of the build machine's compile, next to the binary.
+    write(path.join(dir, "build/Release/obj.target/deps/sqlite3.a"), "!<arch>\nx64 objects");
+    write(path.join(dir, "build/config.gypi"), '{"target_arch":"x64"}');
   }
   pkg(path.join(target, "better-sqlite3"), { name: "better-sqlite3", version: "13.0.3" });
   write(path.join(target, "better-sqlite3/lib/index.js"), "module.exports = 1;");
   write(path.join(target, "better-sqlite3/build/Release/better_sqlite3.node"), elf("arm64", "sqlite"));
+  write(path.join(target, "better-sqlite3/build/Release/obj.target/deps/sqlite3.a"), "!<arch>\narm64 objects");
+  write(path.join(target, "better-sqlite3/build/config.gypi"), '{"target_arch":"arm64"}');
   // Left out of the bundle by the trace; must stay out.
   write(path.join(target, "better-sqlite3/deps/sqlite3/sqlite3.c"), "/* amalgamation */");
 
@@ -115,6 +120,15 @@ test("retargets platform packages and compiled addons, keeps multi-platform pack
       false,
       "only the binaries are swapped; files the trace left out do not come back"
     );
+    for (const dir of [path.join(nm, "better-sqlite3"), path.join(standalone, ".build/next/node_modules/better-sqlite3-90e2")]) {
+      assert.equal(
+        fs.readFileSync(path.join(dir, "build/Release/obj.target/deps/sqlite3.a"), "utf8"),
+        "!<arch>\narm64 objects",
+        "non-ELF build leftovers next to the binary are swapped too"
+      );
+      assert.equal(fs.readFileSync(path.join(dir, "build/config.gypi"), "utf8"), '{"target_arch":"arm64"}');
+    }
+    assert.equal(fs.readFileSync(path.join(nm, "better-sqlite3/lib/index.js"), "utf8"), "module.exports = 1;");
 
     assert.deepEqual(archOf(path.join(nm, "onnxruntime-node/bin/linux/x64/onnx.node")), ["x64"], "multi-platform kept");
     assert.deepEqual(archOf(path.join(standalone, addon)), ["arm64"], "the app's own addon is retargeted");

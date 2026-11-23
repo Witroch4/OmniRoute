@@ -316,13 +316,30 @@ export function retargetStandaloneNatives({
       continue;
     }
     replacedNative.push(pkg.name);
-    // The bundle holds the traced subset of the package: swap just the binaries when the
-    // target install has each at the same path, so no file the trace left out comes back.
+    // The bundle holds the traced subset of the package: swap files, not the package, when
+    // the target install has each stale binary at the same path, so no file the trace left
+    // out comes back. Every differing file under the top-level directory that held a stale
+    // binary is swapped too (better-sqlite3's build/: the static archive, makefiles and
+    // config.gypi of the build machine's compile are not ELF but are still its leftovers).
     // A different layout (another file name per CPU) takes the target's whole package.
-    const twins = stale.map((file) => path.join(target.dir, path.relative(pkg.dir, file)));
-    if (twins.every((twin) => fs.existsSync(twin))) {
-      log(`[retarget] ${rel}: ${stale.length} native file(s) replaced with the ${arch} build`);
-      if (!dryRun) stale.forEach((file, i) => fs.copyFileSync(twins[i], file));
+    const twinOf = (file) => path.join(target.dir, path.relative(pkg.dir, file));
+    if (stale.every((file) => fs.existsSync(twinOf(file)))) {
+      const roots = new Set(stale.map((file) => path.relative(pkg.dir, file).split(path.sep)[0]));
+      const swap = [];
+      for (const root of roots) {
+        const walk = (dir) => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.isFile() && fs.existsSync(twinOf(full)) && !sameBytes(full, twinOf(full))) swap.push(full);
+          }
+        };
+        const start = path.join(pkg.dir, root);
+        if (isDir(start)) walk(start);
+        else if (!sameBytes(start, twinOf(start))) swap.push(start);
+      }
+      log(`[retarget] ${rel}: ${stale.length} native file(s) (${swap.length} file(s) under ${[...roots].join(", ")}) replaced with the ${arch} build`);
+      if (!dryRun) for (const file of swap) fs.copyFileSync(twinOf(file), file);
     } else {
       log(`[retarget] ${rel}: native layout differs, replacing package with the ${arch} install`);
       if (!dryRun) copyDir(target.dir, pkg.dir);
