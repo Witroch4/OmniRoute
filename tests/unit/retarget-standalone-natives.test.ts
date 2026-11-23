@@ -90,6 +90,10 @@ function fixture() {
   write(path.join(standalone, addon), elf("x64", "tproxy"));
   write(path.join(targetRoot, addon), elf("arm64", "tproxy"));
 
+  // Compiled Next.js server output (the folded-CPU-check scan looks here).
+  write(path.join(standalone, ".build/next/BUILD_ID"), "test-build");
+  write(path.join(standalone, ".build/next/server/chunks/_clean._.js"), "const a=process.arch;");
+
   // Plain JS package: must not be touched.
   pkg(path.join(nm, "plain-js"), { name: "plain-js", version: "1.0.0" });
   write(path.join(nm, "plain-js/index.js"), "standalone copy");
@@ -212,6 +216,8 @@ test("fails on a CPU check Turbopack folded with the build machine's value", () 
       'function A(){return{platform:(h.default.platform(),"linux"),arch:(h.default.arch(),"amd64")}}'
     );
     write(path.join(standalone, ".build/next/server/chunks/_def._.js"), 'detectArch(){return(process.arch,"x86_64")}');
+    // Source that only documents the pattern is not compiled code.
+    write(path.join(standalone, "scripts/build/notes.mjs"), '// Turbopack leaves (os.arch(), "amd64") in the bundle');
     // Run-time reads and unrelated strings are fine.
     write(
       path.join(standalone, ".build/next/server/chunks/_ok._.js"),
@@ -222,6 +228,17 @@ test("fails on a CPU check Turbopack folded with the build machine's value", () 
     assert.equal(folded.length, 2, JSON.stringify(result.problems));
     assert.ok(folded.some((p: string) => p.includes("_abc._.js") && p.includes('arch(),\\"amd64\\"')));
     assert.ok(folded.some((p: string) => p.includes("_def._.js")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fails when there is no Next.js server output to check", () => {
+  const { root, standalone, targetRoot } = fixture();
+  try {
+    fs.rmSync(path.join(standalone, ".build/next/BUILD_ID"));
+    const result = retargetStandaloneNatives({ standalone, targetRoot, targetArch: "arm64", log: quiet });
+    assert.ok(result.problems.some((p: string) => p.includes("no Next.js server output")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

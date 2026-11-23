@@ -247,10 +247,34 @@ const FOLDED_CPU_CHECK = /(?:\.arch\(\)|\bprocess\.arch)\s*,\s*"([^"\\]{1,16})"/
 /**
  * CPU checks Turbopack folded at compile time: `(os.arch(), "amd64")` or
  * `(process.arch, "aarch64")`, i.e. the call kept for its side effects and the build
- * machine's answer as a literal. Scans the app's JavaScript outside node_modules.
+ * machine's answer as a literal. Scans the compiled server output of every Next.js build in
+ * `root` (the `server/` directory next to a BUILD_ID, outside node_modules); source files
+ * that only mention the pattern (this script's own docs) are not compiled code.
  * @returns {{file: string, snippet: string}[]}
  */
-export function foldedCpuChecks(root) {
+export function nextServerDirs(root) {
+  const dirs = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (entries.some((e) => e.isFile() && e.name === "BUILD_ID") && isDir(path.join(dir, "server"))) {
+      dirs.push(path.join(dir, "server"));
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== "server") {
+        walk(path.join(dir, entry.name));
+      }
+    }
+  };
+  walk(root);
+  return dirs;
+}
+
+export function foldedCpuChecks(serverDir) {
   const out = [];
   const walk = (dir) => {
     let entries;
@@ -272,7 +296,7 @@ export function foldedCpuChecks(root) {
       }
     }
   };
-  walk(root);
+  walk(serverDir);
   return out;
 }
 
@@ -426,7 +450,9 @@ export function retargetStandaloneNatives({
         problems.push(`native binary not built for ${arch}: ${path.relative(standalone, file)} (${describe(info)})`);
       }
     }
-    for (const { file, snippet } of foldedCpuChecks(standalone)) {
+    const serverDirs = nextServerDirs(standalone);
+    if (serverDirs.length === 0) problems.push("no Next.js server output (BUILD_ID + server/) found to check");
+    for (const { file, snippet } of serverDirs.flatMap((dir) => foldedCpuChecks(dir))) {
       problems.push(
         `compile-time CPU check folded with the build machine's value in ${path.relative(standalone, file)}: ${JSON.stringify(snippet)} — read the CPU at run time (process.arch is defined for cross builds; see scripts/build/bundleTargetArch.mjs)`
       );
