@@ -112,6 +112,7 @@ import {
   resolveClaudeSiwcSourceModel,
   withClaudeSiwcContingencyHeader,
 } from "./chat/claudeSiwcContingency";
+import { resolveCodexReserveAlias } from "./chat/codexReserveAlias";
 import { recordGateRejection, recordQuotaParkedSkip } from "./quotaParkedSkipUsage";
 import { getCombos } from "@/lib/db/combos";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
@@ -705,6 +706,15 @@ async function handleChatImplementation(
   if (ccAliasStrip.stripped) {
     log.debug("CC_DISCOVERY", `Resolved cc discovery alias: ${modelStr} → ${ccAliasStrip.model}`);
     modelStr = ccAliasStrip.model;
+  }
+
+  // Codex "Luna Reserve": `gpt-reserve` has no price, so one call locked the key's USD quota.
+  // It is served (and billed) as the newest Luna — see codexReserveAlias.ts.
+  const reserveAlias = resolveCodexReserveAlias(modelStr);
+  if (reserveAlias) {
+    log.debug("CODEX_RESERVE", `Resolved ${modelStr} → ${reserveAlias}`);
+    modelStr = reserveAlias;
+    body = { ...body, model: modelStr };
   }
 
   // Freeze the client-facing model and reasoning intent before automatic routers
